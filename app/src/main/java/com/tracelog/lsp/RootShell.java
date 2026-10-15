@@ -20,10 +20,39 @@ final class RootShell {
         return p != null && p.matches("[A-Za-z0-9_.]+");
     }
 
+    /** 依次尝试的 su 启动方式：普通 su 看到的可能是本 App 自己的挂载空间（看不到别的应用的数据目录），
+     *  后面几种会进入全局挂载空间。成功过的那种会被记住，下次直接用。 */
+    private static final String[][] ALTS = {
+            {"su"},
+            {"su", "--mount-master"},
+            {"su", "-mm"},
+            {"su", "-c", "nsenter -t 1 -m -- sh"}
+    };
+    private static volatile String[] best = ALTS[0];
+
+    /** pm 能查到包，但当前 su 看不到数据目录 = 挂载空间问题。 */
+    private static boolean needsNs(Result r) {
+        return r.out.contains("__NOPKG__") && r.out.contains("package:");
+    }
+
     static Result run(String script, long timeoutSec) {
+        Result r = exec(best, script, timeoutSec);
+        if (!needsNs(r)) return r;
+        for (String[] c : ALTS) {
+            if (c == best) continue;
+            Result r2 = exec(c, script, timeoutSec);
+            if (r2.code == 0 && !needsNs(r2)) {
+                best = c;
+                return r2;
+            }
+        }
+        return r;
+    }
+
+    private static Result exec(String[] cmd, String script, long timeoutSec) {
         Result r = new Result();
         try {
-            Process p = new ProcessBuilder("su").start();
+            Process p = new ProcessBuilder(cmd).start();
             final ByteArrayOutputStream so = new ByteArrayOutputStream();
             final ByteArrayOutputStream se = new ByteArrayOutputStream();
             Thread t1 = pump(p.getInputStream(), so);
@@ -74,7 +103,8 @@ final class RootShell {
 
     /** 根据 __NOPKG__ 后面 pm path 的输出，给出准确的失败原因。 */
     static String nopkgMsg(String out) {
-        if (out.contains("package:")) return "已安装，但 root 看不到它的数据目录（可能是特殊分身/隔离空间）";
+        if (out.contains("package:")) return "已安装，但 root 看不到它的数据目录（已自动尝试全局挂载空间仍失败）。"
+                + "请在 Magisk/KernelSU/APatch 的 root 设置里，把本 App 的「挂载命名空间」改成全局(Global)后重试";
         return "系统里没有这个包名，请核对包名（抖音可能是别的版本，比如极速版 com.ss.android.ugc.aweme.lite）";
     }
 
