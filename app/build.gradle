@@ -1,0 +1,53 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.tracelog.lsp'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId 'com.tracelog.lsp'
+        minSdk 27
+        targetSdk 34
+        versionCode 1
+        versionName '1.0'
+    }
+
+    signingConfigs {
+        release {
+            // 固定签名：每次构建签名一致，才能覆盖安装
+            storeFile rootProject.file('tracelog.jks')
+            storePassword 'tracelog123'
+            keyAlias 'tracelog'
+            keyPassword 'tracelog123'
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
+        }
+    }
+
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+
+    lint {
+        checkReleaseBuilds false
+        abortOnError false
+    }
+
+    dependenciesInfo {
+        includeInApk = false
+        includeInBundle = false
+    }
+}
+
+dependencies {
+    // 只参与编译，不打进 APK（运行时用 LSPosed 自带的真实类）
+    compileOnly project(':xposed-stub')
+}
