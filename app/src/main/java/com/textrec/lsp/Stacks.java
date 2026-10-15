@@ -79,6 +79,33 @@ final class Stacks {
         return out;
     }
 
+    /**
+     * TextView 的绘制栈里，TextView.onDraw 往后全是祖先控件的 dispatchDraw/drawChild，
+     * 那只反映控件在布局树里的位置，不是这段文字本身，还会让同一类文字被拆成多条。
+     * 这里只保留到“画这个 View 的 View.draw / updateDisplayListIfDirty”为止，
+     * 其中的 App 帧就是子类重写的 onDraw（如 AntiBurnDuxTextView.onDraw）。
+     * 传入的栈应当用 capture(false) 抓（含最前面的系统帧）。
+     */
+    static List<StackTraceElement> trimToViewDraw(List<StackTraceElement> full) {
+        int i0 = -1;
+        for (int i = 0; i < full.size(); i++) {
+            StackTraceElement e = full.get(i);
+            if (e.getClassName().equals("android.widget.TextView") && e.getMethodName().equals("onDraw")) {
+                i0 = i;
+                break;
+            }
+        }
+        if (i0 < 0) return full;
+        int j = i0 + 1;
+        while (j < full.size()) {
+            StackTraceElement e = full.get(j);
+            if (e.getClassName().equals("android.view.View")
+                    && (e.getMethodName().equals("draw") || e.getMethodName().equals("updateDisplayListIfDirty"))) break;
+            j++;
+        }
+        return new ArrayList<>(full.subList(0, j));
+    }
+
     private static final Pattern LAMBDA1 = Pattern.compile("\\$\\$ExternalSyntheticLambda\\d+");
     private static final Pattern LAMBDA2 = Pattern.compile("\\$\\$Lambda[$/][\\w$]+");
     private static final Pattern LAMBDA_M = Pattern.compile("(lambda\\$[\\w$]*?)(\\$\\d+)+$");
