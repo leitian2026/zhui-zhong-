@@ -1,21 +1,21 @@
 plugins { id 'com.android.application' }
 
 android {
-    namespace 'com.tracelog.lsp'
+    namespace 'com.textrec.lsp'
     compileSdk 34
 
     defaultConfig {
-        applicationId 'com.tracelog.lsp'
+        applicationId 'com.textrec.lsp'
         minSdk 27
         targetSdk 34
-        versionCode 2
-        versionName '1.1'
+        versionCode 1
+        versionName '1.0'
     }
 
     signingConfigs {
         release {
             // 固定签名：每次构建签名一致，才能覆盖安装
-            storeFile rootProject.file('tracelog.jks')
+            storeFile rootProject.file('textrec.jks')
             storePassword 'tracelog123'
             keyAlias 'tracelog'
             keyPassword 'tracelog123'
