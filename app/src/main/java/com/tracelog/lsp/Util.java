@@ -20,12 +20,28 @@ final class Util {
                 || cn.startsWith("LSPHooker_") || cn.startsWith("com.tracelog.lsp.");
     }
 
-    /** 抓当前调用栈：去掉 Hook 框架自身的帧；dropLeading=true 时再去掉最前面的系统帧，直接露出 App 代码。 */
+    /** 抓当前调用栈：去掉 Hook 框架自身的帧（含它生成的跳板类、intercept/proceed 调用链）；
+     *  dropLeading=true 时再去掉最前面的系统帧，直接露出 App 代码。 */
     static List<StackTraceElement> capture(boolean dropLeading) {
         StackTraceElement[] st = new Throwable().getStackTrace();
+        // 1) Hook 回调帧（类名可能被混淆，认方法名）：它及它之前的全是框架自身
+        int start = 0;
+        for (int i = 0; i < st.length && i < 16; i++) {
+            String m = st[i].getMethodName();
+            if (m.equals("callBeforeHookedMethod") || m.equals("callAfterHookedMethod")) start = i + 1;
+        }
+        // 2) 紧跟的 intercept/proceed 链，以及没有行号的"系统类"（Hook 框架生成的跳板，如 android.app.Xxx.drawText）
+        while (start < st.length) {
+            StackTraceElement e = st[start];
+            String m = e.getMethodName();
+            boolean trampoline = e.getLineNumber() < 0 && !e.isNativeMethod() && e.getClassName().startsWith("android.");
+            if (m.equals("intercept") || m.equals("proceed") || trampoline) start++;
+            else break;
+        }
         ArrayList<StackTraceElement> out = new ArrayList<>(st.length);
         boolean leading = dropLeading;
-        for (StackTraceElement e : st) {
+        for (int i = start; i < st.length; i++) {
+            StackTraceElement e = st[i];
             String cn = e.getClassName();
             if (isInfra(cn)) continue;
             if (leading && isFramework(cn)) continue;
@@ -34,6 +50,11 @@ final class Util {
         }
         if (out.isEmpty() && dropLeading) return capture(false);
         return out;
+    }
+
+    static boolean hasFrame(List<StackTraceElement> fr, String className) {
+        for (StackTraceElement e : fr) if (e.getClassName().equals(className)) return true;
+        return false;
     }
 
     static String format(List<StackTraceElement> fr, int depth) {
