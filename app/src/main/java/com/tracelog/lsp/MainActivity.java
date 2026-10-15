@@ -158,7 +158,7 @@ public class MainActivity extends Activity {
                 }
                 RootShell.Result r = RootShell.pushConfig(pkg, cfgText);
                 if (r.out.contains("__OK__")) sb.append("✓ ").append(pkg).append("：已推送\n");
-                else if (r.out.contains("__NOPKG__")) sb.append("✗ ").append(pkg).append("：没有安装这个应用\n");
+                else if (r.out.contains("__NOPKG__")) sb.append("✗ ").append(pkg).append("：").append(RootShell.nopkgMsg(r.out)).append("\n");
                 else sb.append("✗ ").append(pkg).append("：失败(").append(r.code).append(") ").append(r.err.trim()).append('\n');
             }
             sb.append("\n目标 App 回到前台后约 2 秒内生效，不用重启。\n"
