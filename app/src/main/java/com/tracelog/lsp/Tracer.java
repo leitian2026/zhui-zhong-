@@ -202,6 +202,9 @@ final class Tracer {
             }
             if (!hit) return;
         }
+        List<StackTraceElement> all = Util.capture(false);
+        // 输入框里你正在打的字（Editor.onDraw）也会命中关键字，不是目标，直接跳过
+        if (Util.hasFrame(all, "android.widget.Editor")) return;
         List<StackTraceElement> fr = Util.capture(true);
         int key = Util.signature(fr) * 31 + source.hashCode();
         if (!sampling) key = key * 31 + text.hashCode();
