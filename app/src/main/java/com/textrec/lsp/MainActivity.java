@@ -71,7 +71,7 @@ public class MainActivity extends Activity {
         root.addView(text("之后每隔多少次再抽样抓一次（默认 200）", 12));
         etSample = number();
         root.addView(etSample);
-        root.addView(text("全局每秒最多抓栈次数（默认 50）", 12));
+        root.addView(text("全局每秒最多抓栈次数（默认 1000；冷启动文字很多，太小会丢文字）", 12));
         etPerSec = number();
         root.addView(etPerSec);
         root.addView(text("最多保存多少条记录（默认 2000）", 12));
@@ -106,6 +106,11 @@ public class MainActivity extends Activity {
         SharedPreferences sp = getSharedPreferences(Actions.PREFS, MODE_PRIVATE);
         etPkgs.setText(sp.getString("pkgs", Actions.DEFAULT_PKG));
         RecConfig c = Actions.loadCfg(sp);
+        if (sp.getInt("ver", 0) < 2) {
+            // 1.0 的默认值 50 太小（冷启动会丢文字），升级时迁移成 1000
+            if (c.stacksPerSec == 50) c.stacksPerSec = 1000;
+            sp.edit().putInt("ver", 2).putString("cfg", c.toText()).apply();
+        }
         cbEnabled.setChecked(c.enabled);
         cbSet.setChecked(c.traceSet);
         cbDraw.setChecked(c.traceDraw);
@@ -130,7 +135,7 @@ public class MainActivity extends Activity {
         c.stackDepth = RecConfig.clamp(parse(etDepth, 30), 1, 60);
         c.perKeyStacks = RecConfig.clamp(parse(etPerKey, 3), 1, 50);
         c.sampleEvery = RecConfig.clamp(parse(etSample, 200), 10, 100000);
-        c.stacksPerSec = RecConfig.clamp(parse(etPerSec, 50), 1, 5000);
+        c.stacksPerSec = RecConfig.clamp(parse(etPerSec, 1000), 1, 5000);
         c.maxRecords = RecConfig.clamp(parse(etMax, 2000), 10, 20000);
         c.epoch = epoch;
         return c;
