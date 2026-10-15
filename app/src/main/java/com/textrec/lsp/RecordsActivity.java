@@ -15,6 +15,7 @@ import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ListView;
@@ -47,6 +48,7 @@ public class RecordsActivity extends Activity {
     private EditText etSearch;
     private TextView tvInfo;
     private Button btnSort, btnKind;
+    private CheckBox cbOnScreen;
     private final List<Snap.Item> all = new ArrayList<>();
     private final List<Snap.Item> shown = new ArrayList<>();
     private volatile String infoBase = "";
@@ -87,6 +89,14 @@ public class RecordsActivity extends Activity {
         bar2.addView(btn("导出JSON", v -> export(REQ_JSON)), w1());
         bar2.addView(btn("清空", v -> confirmClear()), w1());
         root.addView(bar2);
+
+        // 默认只看此刻在屏幕上的文字：预加载的、已离开页面的不显示；自绘/Compose 可见性未知，照常显示
+        cbOnScreen = new CheckBox(this);
+        cbOnScreen.setText("只看屏幕上的文字（● 在屏幕上   ○ 不在   ? 未知）");
+        cbOnScreen.setTextSize(13);
+        cbOnScreen.setChecked(true);
+        cbOnScreen.setOnClickListener(v -> applyFilter());
+        root.addView(cbOnScreen);
 
         etSearch = new EditText(this);
         etSearch.setHint("搜索：文字 / 类名 / 栈帧 / 页面（空格分隔多个词；re: 开头按正则）");
@@ -190,9 +200,15 @@ public class RecordsActivity extends Activity {
             terms = q.split("\\s+");
         }
         String kindKey = KIND_KEYS[kindMode];
+        boolean onlyOnScreen = cbOnScreen.isChecked();
+        int hiddenOff = 0;
         shown.clear();
         for (Snap.Item it : all) {
             if (!kindKey.isEmpty() && !kindKey.equals(it.o.optString("kind"))) continue;
+            if (onlyOnScreen && "no".equals(it.o.optString("vis"))) {
+                hiddenOff++;
+                continue;
+            }
             if (re != null && !re.matcher(it.hay).find()) continue;
             if (terms != null) {
                 boolean ok = true;
@@ -215,7 +231,8 @@ public class RecordsActivity extends Activity {
                 return Long.compare(b.o.optLong("last"), a.o.optLong("last"));
             }
         });
-        tvInfo.setText(infoBase + "显示 " + shown.size() + " / 共 " + all.size() + " 条" + bad);
+        tvInfo.setText(infoBase + "显示 " + shown.size() + " / 共 " + all.size() + " 条"
+                + (onlyOnScreen && hiddenOff > 0 ? "（已隐藏 " + hiddenOff + " 条不在屏幕上的）" : "") + bad);
         adapter.notifyDataSetChanged();
     }
 
@@ -248,9 +265,8 @@ public class RecordsActivity extends Activity {
             row.setTag("row");
         }
         JSONObject r = it.o;
-        String text = RecFormat.oneLine(r.optString("lastText"));
-        if (text.length() > 40) text = text.substring(0, 40) + "…";
-        t1.setText("#" + r.optInt("id") + " [" + RecFormat.kindLabel(r.optString("kind")) + "] 「" + text + "」 ×" + r.optInt("drawCount"));
+        t1.setText(RecFormat.visMark(r) + " #" + r.optInt("id") + " [" + RecFormat.kindLabel(r.optString("kind")) + "] "
+                + RecFormat.samplesLine(r, 10, 4) + " ×" + r.optInt("drawCount"));
         String id = r.optString("viewId");
         t2.setText(RecFormat.simple(r.optString("view")) + (id.isEmpty() ? "" : " id=" + id)
                 + "   页面 " + RecFormat.simple(r.optString("activity")));
@@ -277,7 +293,9 @@ public class RecordsActivity extends Activity {
         if (req == REQ_TXT) {
             StringBuilder sb = new StringBuilder();
             sb.append("TextRec 导出  ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
-                    .append("  共 ").append(shown.size()).append(" 条\n\n");
+                    .append("  共 ").append(shown.size()).append(" 条\n");
+            if (!infoBase.isEmpty()) sb.append(infoBase);
+            sb.append('\n');
             for (Snap.Item it : shown) sb.append(RecFormat.full(it)).append("\n==========================================\n\n");
             content = sb.toString();
         } else {
@@ -285,6 +303,9 @@ public class RecordsActivity extends Activity {
                 JSONObject o = new JSONObject();
                 o.put("schema", 1);
                 o.put("exportTime", System.currentTimeMillis());
+                JSONArray inf = new JSONArray();
+                for (String s : infoBase.split("\n")) if (!s.trim().isEmpty()) inf.put(s);
+                o.put("info", inf);
                 JSONArray arr = new JSONArray();
                 for (Snap.Item it : shown) arr.put(it.o);
                 o.put("records", arr);
