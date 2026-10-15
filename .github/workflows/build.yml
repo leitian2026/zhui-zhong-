@@ -1,0 +1,28 @@
+name: Build Release APK (manual)
+
+# 只能手动触发：仓库页面 → Actions → Build Release APK (manual) → Run workflow
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Build release (R8 minify + shrink resources)
+        run: gradle :app:assembleRelease --no-daemon --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TraceLog-release
+          path: app/build/outputs/apk/release/*.apk
