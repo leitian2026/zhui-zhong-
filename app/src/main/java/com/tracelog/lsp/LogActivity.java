@@ -108,7 +108,7 @@ public class LogActivity extends Activity {
                     continue;
                 }
                 if (r.out.startsWith("__NOPKG__")) {
-                    info.append(pkg).append(": 未安装  ");
+                    info.append(pkg).append(": ").append(RootShell.nopkgMsg(r.out)).append("  ");
                     continue;
                 }
                 all.append("=== ").append(pkg).append("  (读取于 ").append(stamp).append(") ===\n");
