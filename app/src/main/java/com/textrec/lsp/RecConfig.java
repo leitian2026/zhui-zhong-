@@ -25,7 +25,7 @@ public final class RecConfig {
     /** 之后每隔多少次再抽样抓一次（发现同一控件的其他调用路径） */
     public int sampleEvery = 200;
     /** 全局每秒最多抓多少次栈（兜底） */
-    public int stacksPerSec = 50;
+    public int stacksPerSec = 1000;
     public int maxRecords = 2000;
     /** 落盘节流（秒） */
     public int flushSec = 3;
