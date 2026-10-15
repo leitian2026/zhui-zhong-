@@ -174,7 +174,7 @@ final class Store {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.0");
+        root.put("module", "TextRec 1.2");
         root.put("pkg", pkg);
         root.put("process", proc);
         root.put("appVersion", appVersion);
@@ -209,8 +209,9 @@ final class Store {
         st.put("droppedByRecordCap", droppedCap.get());
         root.put("stats", st);
 
+        final long now = System.currentTimeMillis();
         JSONArray arr = new JSONArray();
-        for (Rec r : list) arr.put(recJson(r));
+        for (Rec r : list) arr.put(recJson(r, now));
         root.put("records", arr);
         return root.toString();
     }
@@ -224,7 +225,7 @@ final class Store {
         return o;
     }
 
-    private static JSONObject recJson(Rec r) throws Exception {
+    private static JSONObject recJson(Rec r, long now) throws Exception {
         JSONObject j = new JSONObject();
         j.put("id", r.id);
         j.put("kind", r.kind);
@@ -238,6 +239,26 @@ final class Store {
         j.put("last", r.last);
         j.put("firstText", r.firstText);
         j.put("lastText", r.lastText);
+        j.put("texts", new JSONArray(r.sampleList()));
+        j.put("textsMore", r.sampleOverflow());
+
+        // 此刻是否在屏幕上：TextView 记录直接问被跟踪的 View；自绘/Compose 没有 View 可问，
+        // 3 秒内画过就算在屏幕上，否则标“未知”（不会因此被“只看屏幕上”过滤掉）
+        JSONArray screen = new JSONArray();
+        String vis;
+        if (r.hasViews()) {
+            for (Rec.ScreenText s : r.screenNow()) {
+                JSONObject so = new JSONObject();
+                so.put("text", s.text);
+                so.put("rect", new JSONArray(Arrays.asList(s.l, s.t, s.r, s.b)));
+                screen.put(so);
+            }
+            vis = screen.length() > 0 ? "yes" : "no";
+        } else {
+            vis = (now - r.last <= 3000) ? "yes" : "unknown";
+        }
+        j.put("vis", vis);
+        j.put("screen", screen);
         if (r.set != null) {
             j.put("setStack", stackJson(r.set.stk, r.set.sigs, r.set.thread));
         } else {
