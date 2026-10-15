@@ -64,13 +64,26 @@ final class RootShell {
         return t;
     }
 
+    /** 找出该包在所有用户空间下的数据目录（主空间 / 应用分身 / 多用户都能覆盖），结果放进 $DIRS。 */
+    private static String findDirs(String pkg) {
+        return "DIRS=\"\"\n"
+                + "for d in /data/user/*/" + pkg + "; do [ -d \"$d\" ] && DIRS=\"$DIRS $d\"; done\n"
+                + "if [ -z \"$DIRS\" ] && [ -d /data/data/" + pkg + " ]; then DIRS=/data/data/" + pkg + "; fi\n"
+                + "if [ -z \"$DIRS\" ]; then echo __NOPKG__; pm path " + pkg + " 2>&1 | head -1; exit 0; fi\n";
+    }
+
+    /** 根据 __NOPKG__ 后面 pm path 的输出，给出准确的失败原因。 */
+    static String nopkgMsg(String out) {
+        if (out.contains("package:")) return "已安装，但 root 看不到它的数据目录（可能是特殊分身/隔离空间）";
+        return "系统里没有这个包名，请核对包名（抖音可能是别的版本，比如极速版 com.ss.android.ugc.aweme.lite）";
+    }
+
     /** 把配置写进目标 App 自己的数据目录，并把属主/SELinux 标签改成该 App 的，这样目标进程才读得到。 */
     static Result pushConfig(String pkg, String configText) {
-        String d = "/data/data/" + pkg;
-        String script =
-                "if [ ! -d " + d + " ]; then echo __NOPKG__; exit 0; fi\n"
-                + "U=$(stat -c %u " + d + ")\n"
-                + "F=" + d + "/files\n"
+        String script = findDirs(pkg)
+                + "for D in $DIRS; do\n"
+                + "U=$(stat -c %u $D)\n"
+                + "F=$D/files\n"
                 + "T=$F/tracelog\n"
                 + "if [ ! -d $F ]; then mkdir -p $F; chown $U:$U $F; chmod 771 $F; restorecon $F 2>/dev/null; fi\n"
                 + "mkdir -p $T\n"
@@ -81,23 +94,25 @@ final class RootShell {
                 + "chmod 700 $T\n"
                 + "chmod 600 $T/config.properties\n"
                 + "restorecon -R $T 2>/dev/null\n"
+                + "done\n"
                 + "echo __OK__\n";
         return run(script, 30);
     }
 
     static Result pullLog(String pkg) {
-        String d = "/data/data/" + pkg;
-        String script =
-                "if [ ! -d " + d + " ]; then echo __NOPKG__; exit 0; fi\n"
-                + "T=" + d + "/files/tracelog\n"
-                + "cat $T/trace.log.1 2>/dev/null\n"
-                + "cat $T/trace.log 2>/dev/null\n"
+        String script = findDirs(pkg)
+                + "for D in $DIRS; do\n"
+                + "cat $D/files/tracelog/trace.log.1 2>/dev/null\n"
+                + "cat $D/files/tracelog/trace.log 2>/dev/null\n"
+                + "done\n"
                 + "true\n";
         return run(script, 40);
     }
 
     static Result clearLog(String pkg) {
-        String t = "/data/data/" + pkg + "/files/tracelog";
-        return run("rm -f " + t + "/trace.log " + t + "/trace.log.1\necho __OK__\n", 20);
+        String script = findDirs(pkg)
+                + "for D in $DIRS; do rm -f $D/files/tracelog/trace.log $D/files/tracelog/trace.log.1; done\n"
+                + "echo __OK__\n";
+        return run(script, 20);
     }
 }
