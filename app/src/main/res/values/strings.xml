@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TraceLog</string>
+    <string name="xposed_desc">记录目标 App 调用了哪些代码（弹幕/文本绘制/颜色/指定类），日志可在模块内查看和导出</string>
+    <string-array name="xposedscope">
+        <item>com.ss.android.ugc.aweme</item>
+    </string-array>
+</resources>
