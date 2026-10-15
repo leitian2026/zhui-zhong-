@@ -286,25 +286,31 @@ final class Recorder {
     private static void drawTextView(RecConfig c, TextView v, String text) {
         SetStack ss = VIEW_SET.get(v);
         String cls = v.getClass().getName();
+        long shape = shapeHash(text);
         long key = mix(mix(mix(mix(mix(SEED, cls.hashCode()), v.getId()), ss == null ? 0 : ss.stk.sig),
-                shapeHash(text)), 2);
+                shape), 2);
         Store.DrawProxy dp = store.drawProxy(key);
         int n = dp.n.incrementAndGet();
         Rec r = dp.rec;
         boolean want = r == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
         if (want && store.allowStack(c.stacksPerSec)) {
-            Stacks.Stk d = Stacks.build(Stacks.capture(true), c.stackDepth, true);
-            Rec nr = obtain(Rec.TEXTVIEW, cls, idName(v), ss, d, v, text, c);
+            // 抓完整栈再裁成“这个 View 自己的绘制”，去掉祖先 dispatchDraw 带来的布局位置噪声
+            Stacks.Stk d = Stacks.build(Stacks.trimToViewDraw(Stacks.capture(false)), c.stackDepth, true);
+            Rec nr = obtain(Rec.TEXTVIEW, cls, idName(v), ss, d, v, text, shape, c);
             if (nr != null) {
                 dp.rec = nr;
                 r = nr;
             }
         }
-        if (r != null) r.touch(text);
+        if (r != null) {
+            r.touch(text, shape);
+            r.trackView(v);
+        }
     }
 
     private static void drawCanvas(RecConfig c, String text) {
-        long key = mix(mix(mix(SEED, Thread.currentThread().getName().hashCode()), shapeHash(text)), 3);
+        long shape = shapeHash(text);
+        long key = mix(mix(mix(SEED, Thread.currentThread().getName().hashCode()), shape), 3);
         Store.DrawProxy dp = store.drawProxy(key);
         int n = dp.n.incrementAndGet();
         Rec r = dp.rec;
@@ -313,18 +319,18 @@ final class Recorder {
             Stacks.Stk d = Stacks.build(Stacks.capture(true), c.stackDepth, true);
             String kind = d.compose ? Rec.COMPOSE : Rec.CANVAS;
             String cls = d.top.length > 0 ? d.top[0][0] : "(系统绘制)";
-            Rec nr = obtain(kind, cls, "", null, d, null, text, c);
+            Rec nr = obtain(kind, cls, "", null, d, null, text, shape, c);
             if (nr != null) {
                 dp.rec = nr;
                 r = nr;
             }
         }
-        if (r != null) r.touch(text);
+        if (r != null) r.touch(text, shape);
     }
 
     /** 按归并 key 找记录，没有就新建。文字内容不进 key。 */
     private static Rec obtain(String kind, String viewCls, String viewId, SetStack ss, Stacks.Stk d,
-                              View v, String text, RecConfig c) {
+                              View v, String text, long shape, RecConfig c) {
         String key = kind + '|' + viewCls + '|' + viewId + '|' + (ss == null ? 0 : ss.stk.sig) + '|' + d.sig;
         Rec r = store.recs.get(key);
         if (r != null) return r;
@@ -333,7 +339,7 @@ final class Recorder {
             return null;
         }
         Rec nr = new Rec(store.nextId.getAndIncrement(), key, kind, viewCls, viewId, activityName,
-                v == null ? new String[0] : parentsOf(v), ss, d, Thread.currentThread().getName(), text);
+                v == null ? new String[0] : parentsOf(v), ss, d, Thread.currentThread().getName(), text, shape);
         Rec old = store.recs.putIfAbsent(key, nr);
         if (old != null) return old;
         SigResolver.resolveRec(nr, v == null ? null : v.getClass().getClassLoader());
