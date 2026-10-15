@@ -21,6 +21,7 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-        <activity android:name=".LogActivity" android:exported="false" />
+        <activity android:name=".RecordsActivity" android:exported="false" />
+        <activity android:name=".DetailActivity" android:exported="false" />
     </application>
 </manifest>
