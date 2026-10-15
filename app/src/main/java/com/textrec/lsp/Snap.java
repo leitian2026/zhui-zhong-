@@ -43,6 +43,7 @@ final class Snap {
                         + "  设置事件 " + (st == null ? 0 : st.optLong("setEvents"))
                         + "  绘制事件 " + (st == null ? 0 : st.optLong("drawEvents"))
                         + (st != null && st.optLong("droppedByRecordCap") > 0 ? "  ⚠超出记录上限，丢弃 " + st.optLong("droppedByRecordCap") : "")
+                        + (st != null && st.optLong("droppedByRateLimit") > 0 ? "  ⚠限流丢弃 " + st.optLong("droppedByRateLimit") + " 次抓栈（可调大“每秒抓栈上限”）" : "")
                         + "  快照 " + RecFormat.time(root.optLong("snapshotTime"))
                         + (warn.isEmpty() ? "" : "\n⚠ " + warn.trim()));
                 if (rs == null) continue;
@@ -68,6 +69,13 @@ final class Snap {
                 .append(r.optString("lastText")).append('\n');
         JSONArray ps = r.optJSONArray("parents");
         if (ps != null) for (int i = 0; i < ps.length(); i++) sb.append(ps.optString(i)).append('\n');
+        JSONArray ts = r.optJSONArray("texts");
+        if (ts != null) for (int i = 0; i < ts.length(); i++) sb.append(ts.optString(i)).append('\n');
+        JSONArray sc = r.optJSONArray("screen");
+        if (sc != null) for (int i = 0; i < sc.length(); i++) {
+            JSONObject so = sc.optJSONObject(i);
+            if (so != null) sb.append(so.optString("text")).append('\n');
+        }
         appendStack(sb, r.optJSONObject("setStack"));
         appendStack(sb, r.optJSONObject("drawStack"));
         return sb.toString().toLowerCase(Locale.ROOT);
