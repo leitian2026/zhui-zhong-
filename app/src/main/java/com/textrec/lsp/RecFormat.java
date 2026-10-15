@@ -23,6 +23,14 @@ final class RecFormat {
         return kind;
     }
 
+    /** ● 在屏幕上  ○ 不在屏幕上  ? 未知（自绘/Compose 没有 View 可查） */
+    static String visMark(JSONObject r) {
+        String v = r.optString("vis");
+        if ("yes".equals(v)) return "●";
+        if ("no".equals(v)) return "○";
+        return "?";
+    }
+
     static String simple(String cls) {
         if (cls == null) return "";
         int i = cls.lastIndexOf('.');
@@ -39,8 +47,8 @@ final class RecFormat {
         StringBuilder sb = new StringBuilder();
         sb.append('#').append(r.optInt("id")).append("  ").append(kindLabel(r.optString("kind")))
                 .append("  进程 ").append(it.proc).append('\n');
-        sb.append("绘制 ").append(r.optInt("drawCount")).append(" 次 / 设置 ").append(r.optInt("setCount"))
-                .append(" 次   首次 ").append(time(r.optLong("first")))
+        sb.append("绘制 ").append(r.optInt("drawCount")).append(" 次 / 该设置位置共调用 ").append(r.optInt("setCount"))
+                .append(" 次(可能含同一代码设置的其他控件)   首次 ").append(time(r.optLong("first")))
                 .append("  末次 ").append(time(r.optLong("last"))).append('\n');
         String id = r.optString("viewId");
         sb.append("View: ").append(r.optString("view")).append(id.isEmpty() ? "" : "   id=" + id).append('\n');
@@ -55,9 +63,72 @@ final class RecFormat {
             }
             sb.append('\n');
         }
-        sb.append("文字: 首次「").append(oneLine(r.optString("firstText"))).append("」 最近「")
-                .append(oneLine(r.optString("lastText"))).append("」\n");
+        String vis = r.optString("vis");
+        JSONArray sc = r.optJSONArray("screen");
+        if ("yes".equals(vis) && sc != null && sc.length() > 0) {
+            sb.append("● 此刻在屏幕上的文字（").append(sc.length()).append(" 处）：\n");
+            for (int i = 0; i < sc.length(); i++) {
+                JSONObject so = sc.optJSONObject(i);
+                if (so == null) continue;
+                JSONArray rc = so.optJSONArray("rect");
+                sb.append("  · ").append(oneLine(so.optString("text")));
+                if (rc != null && rc.length() == 4) {
+                    sb.append("   [").append(rc.optInt(0)).append(',').append(rc.optInt(1)).append(" - ")
+                            .append(rc.optInt(2)).append(',').append(rc.optInt(3)).append(']');
+                }
+                sb.append('\n');
+            }
+        } else if ("yes".equals(vis)) {
+            sb.append("● 最近 3 秒内画过（自绘/Compose，无法查屏幕坐标）\n");
+        } else if ("no".equals(vis)) {
+            sb.append("○ 此刻不在屏幕上（可能是预加载的、或已离开的页面）\n");
+        } else {
+            sb.append("? 屏幕可见性未知（自绘/Compose，3 秒内没再画过）\n");
+        }
+        JSONArray ts = r.optJSONArray("texts");
+        int n = ts == null ? 0 : ts.length();
+        int more = r.optInt("textsMore");
+        if (n <= 1) {
+            sb.append("文字: 「").append(oneLine(r.optString("lastText"))).append("」\n");
+        } else {
+            sb.append("这个位置出现过 ").append(n + more).append(" 种文字：\n");
+            for (int i = 0; i < n; i++) sb.append("  · ").append(oneLine(ts.optString(i))).append('\n');
+            if (more > 0) sb.append("  … 另有 ").append(more).append(" 种未列出\n");
+            sb.append("最近一次: 「").append(oneLine(r.optString("lastText"))).append("」\n");
+        }
         return sb.toString();
+    }
+
+    /** 列表里的一行文字摘要：这个位置下的前几种文字 */
+    static String samplesLine(JSONObject r, int perItem, int maxItems) {
+        JSONArray sc = r.optJSONArray("screen");
+        if (sc != null && sc.length() > 0) {
+            StringBuilder sb = new StringBuilder("「");
+            for (int i = 0; i < sc.length() && i < maxItems; i++) {
+                JSONObject so = sc.optJSONObject(i);
+                if (i > 0) sb.append(" / ");
+                sb.append(clipTo(oneLine(so == null ? "" : so.optString("text")), perItem));
+            }
+            sb.append("」");
+            if (sc.length() > maxItems) sb.append(" 等").append(sc.length()).append("处");
+            return sb.toString();
+        }
+        JSONArray ts = r.optJSONArray("texts");
+        int n = ts == null ? 0 : ts.length();
+        int total = n + r.optInt("textsMore");
+        if (n == 0) return "「" + clipTo(oneLine(r.optString("lastText")), perItem * 2) + "」";
+        StringBuilder sb = new StringBuilder("「");
+        for (int i = 0; i < n && i < maxItems; i++) {
+            if (i > 0) sb.append(" / ");
+            sb.append(clipTo(oneLine(ts.optString(i)), perItem));
+        }
+        sb.append("」");
+        if (total > maxItems) sb.append(" 等").append(total).append("种");
+        return sb.toString();
+    }
+
+    private static String clipTo(String s, int n) {
+        return s.length() > n ? s.substring(0, n) + "…" : s;
     }
 
     /** 一栏：设置栈或绘制栈。stack 为 null 时显示 note。 */
