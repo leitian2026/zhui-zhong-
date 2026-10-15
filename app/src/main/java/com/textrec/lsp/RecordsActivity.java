@@ -1,0 +1,362 @@
+package com.textrec.lsp;
+
+import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.Intent;
+import android.content.SharedPreferences;
+import android.graphics.Color;
+import android.graphics.Typeface;
+import android.net.Uri;
+import android.os.Bundle;
+import android.text.Editable;
+import android.text.InputType;
+import android.text.TextWatcher;
+import android.view.View;
+import android.view.ViewGroup;
+import android.widget.BaseAdapter;
+import android.widget.Button;
+import android.widget.EditText;
+import android.widget.LinearLayout;
+import android.widget.ListView;
+import android.widget.TextView;
+import android.widget.Toast;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
+
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.Date;
+import java.util.List;
+import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
+
+/** 记录列表：一个位置一行，可搜索（文字 / 类名 / 栈帧 / 页面），可排序，可导出 txt 和 JSON。 */
+public class RecordsActivity extends Activity {
+    private static final int REQ_TXT = 2001, REQ_JSON = 2002;
+    private static final String[] SORTS = {"最近", "次数", "首次"};
+    private static final String[] KINDS = {"全部", "TextView", "自绘", "Compose"};
+    private static final String[] KIND_KEYS = {"", "TEXTVIEW", "CANVAS", "COMPOSE"};
+
+    private ListView lv;
+    private EditText etSearch;
+    private TextView tvInfo;
+    private Button btnSort, btnKind;
+    private final List<Snap.Item> all = new ArrayList<>();
+    private final List<Snap.Item> shown = new ArrayList<>();
+    private volatile String infoBase = "";
+    private int sortMode = 0, kindMode = 0;
+    private final AtomicBoolean loading = new AtomicBoolean();
+    private String pendingExport;
+    private BaseAdapter adapter;
+
+    @Override
+    protected void onCreate(Bundle b) {
+        super.onCreate(b);
+        setTitle("记录");
+        LinearLayout root = new LinearLayout(this);
+        root.setOrientation(LinearLayout.VERTICAL);
+        int pad = dp(8);
+        root.setPadding(pad, pad, pad, pad);
+
+        LinearLayout bar = new LinearLayout(this);
+        bar.setOrientation(LinearLayout.HORIZONTAL);
+        bar.addView(btn("刷新", v -> refresh()), w1());
+        btnSort = btn("排序:" + SORTS[0], v -> {
+            sortMode = (sortMode + 1) % SORTS.length;
+            btnSort.setText("排序:" + SORTS[sortMode]);
+            applyFilter();
+        });
+        bar.addView(btnSort, w1());
+        btnKind = btn("类型:" + KINDS[0], v -> {
+            kindMode = (kindMode + 1) % KINDS.length;
+            btnKind.setText("类型:" + KINDS[kindMode]);
+            applyFilter();
+        });
+        bar.addView(btnKind, w1());
+        root.addView(bar);
+
+        LinearLayout bar2 = new LinearLayout(this);
+        bar2.setOrientation(LinearLayout.HORIZONTAL);
+        bar2.addView(btn("导出txt", v -> export(REQ_TXT)), w1());
+        bar2.addView(btn("导出JSON", v -> export(REQ_JSON)), w1());
+        bar2.addView(btn("清空", v -> confirmClear()), w1());
+        root.addView(bar2);
+
+        etSearch = new EditText(this);
+        etSearch.setHint("搜索：文字 / 类名 / 栈帧 / 页面（空格分隔多个词；re: 开头按正则）");
+        etSearch.setTextSize(13);
+        etSearch.setSingleLine(true);
+        etSearch.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        etSearch.addTextChangedListener(new TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int c, int d) {}
+            public void onTextChanged(CharSequence s, int a, int c, int d) {}
+            public void afterTextChanged(Editable s) { applyFilter(); }
+        });
+        root.addView(etSearch);
+
+        tvInfo = new TextView(this);
+        tvInfo.setTextSize(11);
+        root.addView(tvInfo);
+
+        lv = new ListView(this);
+        adapter = new BaseAdapter() {
+            @Override public int getCount() { return shown.size(); }
+            @Override public Object getItem(int i) { return shown.get(i); }
+            @Override public long getItemId(int i) { return i; }
+            @Override public View getView(int i, View cv, ViewGroup parent) { return row(shown.get(i), cv); }
+        };
+        lv.setAdapter(adapter);
+        lv.setOnItemClickListener((p, v, pos, id) -> {
+            if (pos < 0 || pos >= shown.size()) return;
+            Snap.current = shown.get(pos);
+            startActivity(new Intent(this, DetailActivity.class));
+        });
+        root.addView(lv, new LinearLayout.LayoutParams(-1, 0, 1f));
+        setContentView(root);
+    }
+
+    /** 每次回到本页自动读取一次；没有后台轮询。 */
+    @Override
+    protected void onResume() {
+        super.onResume();
+        refresh();
+    }
+
+    // ------------------------------------------------------------ 加载
+
+    private void refresh() {
+        if (!loading.compareAndSet(false, true)) return;
+        tvInfo.setText("正在读取…（首次会弹出 root 授权）");
+        final SharedPreferences sp = getSharedPreferences(Actions.PREFS, MODE_PRIVATE);
+        final List<String> pkgs = Actions.pkgs(sp);
+        new Thread(() -> {
+            final List<Snap.Item> items = new ArrayList<>();
+            final List<String> infos = new ArrayList<>();
+            for (String pkg : pkgs) {
+                if (!RootShell.validPkg(pkg)) {
+                    infos.add(pkg + "：包名格式不对");
+                    continue;
+                }
+                RootShell.Result r = RootShell.pullSnapshots(pkg);
+                if (r.code != 0 && r.out.isEmpty()) {
+                    infos.add(pkg + "：读取失败(" + r.code + ") " + r.err.trim());
+                    continue;
+                }
+                if (r.out.startsWith("__NOPKG__")) {
+                    infos.add(pkg + "：" + RootShell.nopkgMsg(r.out));
+                    continue;
+                }
+                List<String> sub = new ArrayList<>();
+                List<Snap.Item> got = Snap.parse(r.out, sub);
+                if (got.isEmpty() && sub.isEmpty()) {
+                    infos.add(pkg + "：还没有记录（确认已在 LSPosed 启用并勾选作用域、已推送配置、强杀后冷启动过目标 App）");
+                }
+                for (String s : sub) infos.add(pkg + "  " + s);
+                items.addAll(got);
+            }
+            final StringBuilder ib = new StringBuilder();
+            for (String s : infos) ib.append(s).append('\n');
+            runOnUiThread(() -> {
+                loading.set(false);
+                if (isFinishing() || isDestroyed()) return;
+                all.clear();
+                all.addAll(items);
+                infoBase = ib.toString();
+                applyFilter();
+            });
+        }).start();
+    }
+
+    // ------------------------------------------------------------ 过滤 / 排序
+
+    private void applyFilter() {
+        String q = etSearch.getText().toString().trim().toLowerCase(Locale.ROOT);
+        Pattern re = null;
+        String[] terms = null;
+        String bad = "";
+        if (q.startsWith("re:")) {
+            try {
+                re = Pattern.compile(q.substring(3));
+            } catch (Throwable t) {
+                bad = "（正则无效）";
+            }
+        } else if (!q.isEmpty()) {
+            terms = q.split("\\s+");
+        }
+        String kindKey = KIND_KEYS[kindMode];
+        shown.clear();
+        for (Snap.Item it : all) {
+            if (!kindKey.isEmpty() && !kindKey.equals(it.o.optString("kind"))) continue;
+            if (re != null && !re.matcher(it.hay).find()) continue;
+            if (terms != null) {
+                boolean ok = true;
+                for (String t : terms) {
+                    if (!it.hay.contains(t)) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (!ok) continue;
+            }
+            shown.add(it);
+        }
+        final int mode = sortMode;
+        Collections.sort(shown, new Comparator<Snap.Item>() {
+            @Override
+            public int compare(Snap.Item a, Snap.Item b) {
+                if (mode == 1) return Integer.compare(b.o.optInt("drawCount"), a.o.optInt("drawCount"));
+                if (mode == 2) return Long.compare(a.o.optLong("first"), b.o.optLong("first"));
+                return Long.compare(b.o.optLong("last"), a.o.optLong("last"));
+            }
+        });
+        tvInfo.setText(infoBase + "显示 " + shown.size() + " / 共 " + all.size() + " 条" + bad);
+        adapter.notifyDataSetChanged();
+    }
+
+    // ------------------------------------------------------------ 列表行
+
+    private View row(Snap.Item it, View cv) {
+        LinearLayout row;
+        TextView t1, t2, t3;
+        if (cv instanceof LinearLayout && cv.getTag() != null) {
+            row = (LinearLayout) cv;
+            t1 = (TextView) row.getChildAt(0);
+            t2 = (TextView) row.getChildAt(1);
+            t3 = (TextView) row.getChildAt(2);
+        } else {
+            row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.VERTICAL);
+            row.setPadding(dp(6), dp(8), dp(6), dp(8));
+            t1 = new TextView(this);
+            t1.setTextSize(14);
+            t1.setTypeface(Typeface.DEFAULT_BOLD);
+            t2 = new TextView(this);
+            t2.setTextSize(12);
+            t3 = new TextView(this);
+            t3.setTextSize(11);
+            t3.setTypeface(Typeface.MONOSPACE);
+            t3.setTextColor(Color.GRAY);
+            row.addView(t1);
+            row.addView(t2);
+            row.addView(t3);
+            row.setTag("row");
+        }
+        JSONObject r = it.o;
+        String text = RecFormat.oneLine(r.optString("lastText"));
+        if (text.length() > 40) text = text.substring(0, 40) + "…";
+        t1.setText("#" + r.optInt("id") + " [" + RecFormat.kindLabel(r.optString("kind")) + "] 「" + text + "」 ×" + r.optInt("drawCount"));
+        String id = r.optString("viewId");
+        t2.setText(RecFormat.simple(r.optString("view")) + (id.isEmpty() ? "" : " id=" + id)
+                + "   页面 " + RecFormat.simple(r.optString("activity")));
+        t3.setText("设: " + topFrame(r.optJSONObject("setStack")) + "\n画: " + topFrame(r.optJSONObject("drawStack")));
+        return row;
+    }
+
+    private static String topFrame(JSONObject s) {
+        if (s == null) return "(无)";
+        JSONArray f = s.optJSONArray("frames");
+        if (f == null || f.length() == 0) return "(无)";
+        String t = f.optString(0);
+        return t.length() > 90 ? "…" + t.substring(t.length() - 90) : t;
+    }
+
+    // ------------------------------------------------------------ 导出 / 清空
+
+    private void export(int req) {
+        if (shown.isEmpty()) {
+            Toast.makeText(this, "没有可导出的内容", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        String content;
+        if (req == REQ_TXT) {
+            StringBuilder sb = new StringBuilder();
+            sb.append("TextRec 导出  ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
+                    .append("  共 ").append(shown.size()).append(" 条\n\n");
+            for (Snap.Item it : shown) sb.append(RecFormat.full(it)).append("\n==========================================\n\n");
+            content = sb.toString();
+        } else {
+            try {
+                JSONObject o = new JSONObject();
+                o.put("schema", 1);
+                o.put("exportTime", System.currentTimeMillis());
+                JSONArray arr = new JSONArray();
+                for (Snap.Item it : shown) arr.put(it.o);
+                o.put("records", arr);
+                content = o.toString(2);
+            } catch (Throwable t) {
+                Toast.makeText(this, "生成 JSON 失败：" + t.getMessage(), Toast.LENGTH_LONG).show();
+                return;
+            }
+        }
+        pendingExport = content;
+        Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType(req == REQ_TXT ? "text/plain" : "application/json");
+        i.putExtra(Intent.EXTRA_TITLE, "textrec-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date())
+                + (req == REQ_TXT ? ".txt" : ".json"));
+        startActivityForResult(i, req);
+    }
+
+    @Override
+    protected void onActivityResult(int req, int res, Intent data) {
+        super.onActivityResult(req, res, data);
+        if ((req != REQ_TXT && req != REQ_JSON) || res != RESULT_OK || data == null || data.getData() == null) return;
+        final Uri uri = data.getData();
+        final String content = pendingExport;
+        if (content == null) return;
+        new Thread(() -> {
+            String msg;
+            try (OutputStream os = getContentResolver().openOutputStream(uri)) {
+                os.write(content.getBytes(StandardCharsets.UTF_8));
+                os.flush();
+                msg = "已导出 " + content.length() + " 个字符";
+            } catch (Throwable t) {
+                msg = "导出失败：" + t.getMessage();
+            }
+            final String m = msg;
+            runOnUiThread(() -> Toast.makeText(this, m, Toast.LENGTH_LONG).show());
+        }).start();
+    }
+
+    private void confirmClear() {
+        new AlertDialog.Builder(this)
+                .setMessage("清空目标 App 里的所有记录（包括内存里的），并重新开始记录？")
+                .setNegativeButton("取消", null)
+                .setPositiveButton("清空", (d, w) -> {
+                    final SharedPreferences sp = getSharedPreferences(Actions.PREFS, MODE_PRIVATE);
+                    final RecConfig c = Actions.loadCfg(sp);
+                    c.epoch = System.currentTimeMillis(); // epoch 变了，目标进程会清空内存里的记录
+                    sp.edit().putString("cfg", c.toText()).apply();
+                    final List<String> pkgs = Actions.pkgs(sp);
+                    new Thread(() -> {
+                        Actions.push(pkgs, c, true);
+                        runOnUiThread(this::refresh);
+                    }).start();
+                })
+                .show();
+    }
+
+    // ------------------------------------------------------------ 小工具
+
+    private Button btn(String t, View.OnClickListener l) {
+        Button b = new Button(this);
+        b.setText(t);
+        b.setTextSize(13);
+        b.setOnClickListener(l);
+        return b;
+    }
+
+    private LinearLayout.LayoutParams w1() {
+        return new LinearLayout.LayoutParams(0, -2, 1f);
+    }
+
+    private int dp(int v) {
+        return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
+    }
+}
