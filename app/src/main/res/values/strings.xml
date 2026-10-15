@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">TraceLog</string>
-    <string name="xposed_desc">记录目标 App 调用了哪些代码（弹幕/文本绘制/颜色/指定类），日志可在模块内查看和导出</string>
+    <string name="app_name">TextRec</string>
+    <string name="xposed_desc">只读记录：屏幕上每段文字的“设置位置”和“绘制位置”（调用栈、View、可 hook 的方法签名），不修改任何内容</string>
     <string-array name="xposedscope">
         <item>com.ss.android.ugc.aweme</item>
     </string-array>
