@@ -1,7 +1,9 @@
 package com.textrec.lsp;
 
 import android.graphics.Rect;
+import android.graphics.drawable.Drawable;
 import android.view.View;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import java.lang.ref.WeakReference;
@@ -24,11 +26,26 @@ final class SetStack {
     }
 }
 
+/** TextView 文字颜色最近一次被设置的位置和颜色值。 */
+final class ColorSet {
+    final SetStack ss; // 可能为 null（被限流没抓到栈）
+    final int color;
+
+    ColorSet(SetStack ss, int color) {
+        this.ss = ss;
+        this.color = color;
+    }
+}
+
 /** 一条记录 = 一个“位置”：(设置栈, 绘制栈, View) 的组合。文字内容不进归并 key，所以时长每秒变也只有一条。 */
 final class Rec {
     static final String TEXTVIEW = "TEXTVIEW";
     static final String CANVAS = "CANVAS";
     static final String COMPOSE = "COMPOSE";
+    /** ImageView 图标 / 设了 contentDescription 的非文字控件 */
+    static final String ICON = "ICON";
+    /** 用户指定的“方法追踪”：draw 栈 = 调用栈，texts = 参数→返回值变体 */
+    static final String TRACE = "TRACE";
 
     final int id;
     final String key;
@@ -47,15 +64,35 @@ final class Rec {
     volatile String lastText;
     volatile String[] drawSigs = new String[0];
 
+    /** TextView 文字颜色的设置位置（只记最近一次） */
+    volatile ColorSet colorSet;
+    /** 自绘 / Compose 最近一次 drawText 的画布内坐标（不是屏幕坐标） */
+    volatile float posX = Float.NaN;
+    volatile float posY = Float.NaN;
+
     /** 这个位置上出现过的不同文字（按“文字形状”去重，数字折叠，所以时长只占一项），最多 40 种。 */
     private static final int MAX_SAMPLES = 40;
     private final LinkedHashMap<Long, String> samples = new LinkedHashMap<>();
     private volatile long lastShape;
     private volatile int sampleOverflow;
 
-    /** 该位置最近画过的 TextView（弱引用，最多 16 个），用来在写快照时判断“此刻哪些在屏幕上” */
-    private static final int MAX_VIEWS = 16;
-    private final ArrayList<WeakReference<TextView>> views = new ArrayList<>();
+    static final class PaintVar {
+        final String desc;
+        volatile int n;
+
+        PaintVar(String desc) {
+            this.desc = desc;
+        }
+    }
+
+    /** 画笔 / 绘制参数变体（颜色、字号、描边或填充、Compose paint 的参数），最多 16 种。 */
+    private static final int MAX_PAINTS = 16;
+    private final LinkedHashMap<Long, PaintVar> paints = new LinkedHashMap<>();
+    private volatile int paintOverflow;
+
+    /** 该位置最近画过的 View（弱引用，最多 40 个），用来在写快照时判断“此刻哪些在屏幕上” */
+    private static final int MAX_VIEWS = 40;
+    private final ArrayList<WeakReference<View>> views = new ArrayList<>();
     private int viewNext;
 
     static final class ScreenText {
@@ -102,6 +139,12 @@ final class Rec {
         }
     }
 
+    /** 只计数不取样（高频方法追踪时的降级）。 */
+    void tick() {
+        drawCount.incrementAndGet();
+        last = System.currentTimeMillis();
+    }
+
     private void addSample(long shape, String text) {
         synchronized (samples) {
             if (samples.containsKey(shape)) return;
@@ -110,11 +153,56 @@ final class Rec {
                 return;
             }
             String t = text == null ? "" : text;
-            samples.put(shape, t.length() > 60 ? t.substring(0, 60) + "…" : t);
+            samples.put(shape, t.length() > 200 ? t.substring(0, 200) + "…" : t);
         }
     }
 
-    void trackView(TextView v) {
+    // ------------------------------------------------------------ 画笔 / 参数变体
+
+    /** 已有这个变体就计数并返回 true；没有返回 false（调用方再构造描述串调用 addPaint，避免每帧拼字符串）。 */
+    boolean knowsPaint(long key) {
+        synchronized (paints) {
+            PaintVar p = paints.get(key);
+            if (p == null) return false;
+            p.n++;
+            return true;
+        }
+    }
+
+    void addPaint(long key, String desc) {
+        synchronized (paints) {
+            PaintVar p = paints.get(key);
+            if (p != null) {
+                p.n++;
+                return;
+            }
+            if (paints.size() >= MAX_PAINTS) {
+                paintOverflow++;
+                return;
+            }
+            PaintVar np = new PaintVar(desc);
+            np.n = 1;
+            paints.put(key, np);
+        }
+    }
+
+    List<PaintVar> paintList() {
+        synchronized (paints) {
+            return new ArrayList<>(paints.values());
+        }
+    }
+
+    int paintOverflow() {
+        return paintOverflow;
+    }
+
+    boolean hasPos() {
+        return !Float.isNaN(posX) && !Float.isNaN(posY);
+    }
+
+    // ------------------------------------------------------------ 屏幕可见性
+
+    void trackView(View v) {
         synchronized (views) {
             for (int i = 0; i < views.size(); i++) {
                 if (views.get(i).get() == v) return;
@@ -140,32 +228,45 @@ final class Rec {
     }
 
     /**
-     * 此刻在屏幕上的文字：被跟踪的 View 里，已挂在窗口上、可见、alpha 不为 0、
+     * 此刻在屏幕上的文字/图标：被跟踪的 View 里，已挂在窗口上、可见、alpha 不为 0、
      * 且可见区域与窗口有交集的那些，取它们【当前】的文字和屏幕坐标。
+     * TextView 取文字；图标取“[类名:Drawable类名] 内容描述”。
      * 只读 View 的字段，在写快照的后台线程调用；个别竞态异常直接忽略该 View。
      */
     List<ScreenText> screenNow() {
-        ArrayList<TextView> vs = new ArrayList<>();
+        ArrayList<View> vs = new ArrayList<>();
         synchronized (views) {
-            for (WeakReference<TextView> w : views) {
-                TextView v = w.get();
+            for (WeakReference<View> w : views) {
+                View v = w.get();
                 if (v != null) vs.add(v);
             }
         }
         ArrayList<ScreenText> out = new ArrayList<>();
         Rect rc = new Rect();
-        for (TextView v : vs) {
+        for (View v : vs) {
             try {
                 if (!v.isAttachedToWindow() || !v.isShown() || v.getAlpha() < 0.05f) continue;
                 if (!v.getGlobalVisibleRect(rc)) continue;
                 View root = v.getRootView();
                 if (root != null && (rc.right <= 0 || rc.bottom <= 0
                         || rc.left >= root.getWidth() || rc.top >= root.getHeight())) continue;
-                CharSequence ct = v.getText();
-                if (ct == null || ct.length() == 0) continue;
-                String t = ct.length() > 60 ? ct.subSequence(0, 60) + "…" : ct.toString();
+                String t;
+                if (v instanceof TextView) {
+                    CharSequence ct = ((TextView) v).getText();
+                    if (ct == null || ct.length() == 0) continue;
+                    t = ct.length() > 200 ? ct.subSequence(0, 200) + "…" : ct.toString();
+                } else {
+                    String dn = "";
+                    if (v instanceof ImageView) {
+                        Drawable d = ((ImageView) v).getDrawable();
+                        if (d != null) dn = ":" + d.getClass().getSimpleName();
+                    }
+                    CharSequence cd = v.getContentDescription();
+                    t = "[" + v.getClass().getSimpleName() + dn + "]"
+                            + (cd == null || cd.length() == 0 ? "" : " " + cd);
+                }
                 out.add(new ScreenText(t, rc.left, rc.top, rc.right, rc.bottom));
-                if (out.size() >= 20) break;
+                if (out.size() >= 50) break;
             } catch (Throwable ignored) {
             }
         }
@@ -184,6 +285,6 @@ final class Rec {
 
     static String clip(String s) {
         if (s == null) return "";
-        return s.length() > 160 ? s.substring(0, 160) + "…(" + s.length() + ")" : s;
+        return s.length() > 300 ? s.substring(0, 300) + "…(" + s.length() + ")" : s;
     }
 }
