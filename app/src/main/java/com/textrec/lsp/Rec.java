@@ -47,6 +47,8 @@ final class Rec {
      * 这类文字没有“绘制”事件，只能从设置那一侧发现；是否仍“从未绘制”在写快照时动态判断。
      */
     static final String TEXTSET = "TEXTSET";
+    /** 被跟踪 View 的 alpha / visibility / selected 变化（看“选中态”到底怎么实现的） */
+    static final String STATE = "STATE";
     /** ImageView 图标 / 设了 contentDescription 的非文字控件 */
     static final String ICON = "ICON";
     /** 用户指定的“方法追踪”：draw 栈 = 调用栈，texts = 参数→返回值变体 */
@@ -93,6 +95,10 @@ final class Rec {
     /** 画笔 / 绘制参数变体（颜色、字号、描边或填充、Compose paint 的参数），最多 16 种。 */
     private static final int MAX_PAINTS = 16;
     private final LinkedHashMap<Long, PaintVar> paints = new LinkedHashMap<>();
+
+    /** 同一个位置（栈相同）上出现过的不同 View id，最多 60 个。 */
+    private static final int MAX_IDS = 60;
+    private final java.util.LinkedHashSet<String> ids = new java.util.LinkedHashSet<>();
     private volatile int paintOverflow;
 
     /** 该位置最近画过的 View（弱引用，最多 40 个），用来在写快照时判断“此刻哪些在屏幕上” */
@@ -131,6 +137,33 @@ final class Rec {
         this.lastText = firstText;
         this.lastShape = shape;
         addSample(shape, text);
+        addId(viewId);
+    }
+
+    void addId(String id) {
+        if (id == null || id.isEmpty()) return;
+        synchronized (ids) {
+            if (ids.size() < MAX_IDS) ids.add(id);
+        }
+    }
+
+    List<String> idList() {
+        synchronized (ids) {
+            return new ArrayList<>(ids);
+        }
+    }
+
+    boolean idsFull() {
+        synchronized (ids) {
+            return ids.size() >= MAX_IDS;
+        }
+    }
+
+    /** 这个文字/参数变体是否已经记过（不增加计数）。 */
+    boolean hasSample(long shape) {
+        synchronized (samples) {
+            return samples.containsKey(shape);
+        }
     }
 
     /** 每次绘制命中这条记录时调用（obtain 之后总会调用一次，所以初始计数为 0）。 */
