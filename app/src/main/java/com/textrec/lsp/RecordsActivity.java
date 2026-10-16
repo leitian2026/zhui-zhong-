@@ -41,8 +41,8 @@ import java.util.regex.Pattern;
 public class RecordsActivity extends Activity {
     private static final int REQ_TXT = 2001, REQ_JSON = 2002;
     private static final String[] SORTS = {"最近", "次数", "首次"};
-    private static final String[] KINDS = {"全部", "TextView", "自绘", "Compose", "图标", "方法追踪", "仅设置"};
-    private static final String[] KIND_KEYS = {"", "TEXTVIEW", "CANVAS", "COMPOSE", "ICON", "TRACE", "TEXTSET"};
+    private static final String[] KINDS = {"全部", "TextView", "自绘", "Compose", "图标", "方法追踪", "仅设置", "状态变化"};
+    private static final String[] KIND_KEYS = {"", "TEXTVIEW", "CANVAS", "COMPOSE", "ICON", "TRACE", "TEXTSET", "STATE"};
 
     private ListView lv;
     private EditText etSearch;
@@ -313,7 +313,8 @@ public class RecordsActivity extends Activity {
             sb.append("  （全部记录 ").append(all.size()).append(" 条）\n");
             if (!infoBase.isEmpty()) sb.append(infoBase);
             sb.append('\n');
-            for (Snap.Item it : shown) sb.append(RecFormat.full(it)).append("\n==========================================\n\n");
+            RecFormat.Dedup dd = new RecFormat.Dedup(); // 同一份栈 / 签名只完整写一次
+            for (Snap.Item it : shown) sb.append(RecFormat.full(it, dd)).append("\n==========================================\n\n");
             content = sb.toString();
         } else {
             try {
