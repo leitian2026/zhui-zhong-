@@ -56,6 +56,20 @@
   `setImageDrawable drawable=BitmapDrawable 50x50`；现在单独 hook 它，记录里有 `res=资源名(0x资源id)`。
 - 栈顶签名去重（构造方法链、重载链不再把同一个方法列两遍）。
 
+## 1.6 精简与补充（根据 1.5 的真机导出）
+17:58 那份 406 条的导出里 59% 的记录是“同一位置只是 View id 不同”的重复，14% 是 XML 布局加载栈，签名块重复拷贝占 23%。这版处理：
+- **按位置合并**：归并 key 不再带 View id。同一段代码设置/绘制的一批控件合成一条，记录里列出全部 id（最多 60 个）。
+  方法追踪的方法名、状态变化的方法名仍然进 key。
+- **折叠 XML 布局加载栈**：连续的 `LayoutInflater` / `Constructor.newInstance` 帧折成一行；布局加载之前只有控件构造方法的，
+  标为“XML 布局里写死的设置”，不再解析、列出可 hook 签名（没有业务代码可 hook）。
+- **栈尾裁剪**：尾部的 Handler / QmiHandler / bytex 异步包装这类通用基础设施帧从第一个这类帧开始截掉。
+- **导出去重**：整份导出里，同一份调用栈、同一份签名块只完整写一次，后面的记录写“与 #N 完全相同，不重复列出”。
+  记录详情页仍然显示完整内容。
+- **状态变化记录（kind=STATE）**：hook `View.setAlpha / setVisibility / setSelected`，只记被跟踪的 View（画过/设置过文字，
+  或设置过图标）。记谁改的（设置栈）和取值；变体里带上 View 当前的文字，所以四个标签“首页/朋友/消息/我”能分开看。
+  alpha 按 0.1 一档去重，动画不会刷出几十个变体。
+- **方法追踪带 `this`**：变体里加上调用对象，View 显示为 `类#id「文字」`，追 `View#setAlpha` 这类系统方法时能看出是哪个 View。
+
 ## 导出
 - txt：给人看。
 - JSON：字段固定（`schema:1`，每条记录含 kind/view/viewId/activity/parents/drawCount/setCount/setStack/drawStack/sigs；1.3 新增字段 paints/pos/textColor/colorStack/drawNote 均为追加，不影响旧字段），
