@@ -24,6 +24,10 @@ public final class RecConfig {
     public boolean traceIcons = true;
     /** 自动观察 Compose 文字绘制（MultiParagraph.paint）的参数：颜色、描边/填充等 */
     public boolean autoParams = true;
+    /** 记录“只被 setText、从未被绘制”的文字（控件 INVISIBLE/GONE/尺寸为 0/未挂窗口，如拖动才出现的时长） */
+    public boolean traceSetOnly = true;
+    /** 这类记录的上限（单独计，不占用 maxRecords 的大头） */
+    public int maxSetOnly = 500;
     /** 方法追踪：每行 类#方法，记录每次调用的参数/返回值和调用栈（只读）。// 开头为注释 */
     public String traceMethods = "";
     /** 每条记录里保存的调用栈最大帧数 */
@@ -79,6 +83,7 @@ public final class RecConfig {
         return "enabled=" + enabled + " mode=" + (keywordMode ? "keyword" : "all")
                 + " regex=" + regex + " set=" + traceSet + " draw=" + traceDraw
                 + " color=" + traceColor + " icons=" + traceIcons + " auto=" + autoParams
+                + " setOnly=" + traceSetOnly + "/" + maxSetOnly
                 + " traces=" + splitTargets(traceMethods).size()
                 + " depth=" + stackDepth + " perKey=" + perKeyStacks + " sample=" + sampleEvery
                 + " perSec=" + stacksPerSec + " max=" + maxRecords + " flush=" + flushSec;
@@ -96,6 +101,8 @@ public final class RecConfig {
             p.setProperty("traceColor", String.valueOf(traceColor));
             p.setProperty("traceIcons", String.valueOf(traceIcons));
             p.setProperty("autoParams", String.valueOf(autoParams));
+            p.setProperty("traceSetOnly", String.valueOf(traceSetOnly));
+            p.setProperty("maxSetOnly", String.valueOf(maxSetOnly));
             p.setProperty("traceMethods", traceMethods);
             p.setProperty("stackDepth", String.valueOf(stackDepth));
             p.setProperty("perKeyStacks", String.valueOf(perKeyStacks));
@@ -146,6 +153,8 @@ public final class RecConfig {
         c.traceColor = bool(p, "traceColor", c.traceColor);
         c.traceIcons = bool(p, "traceIcons", c.traceIcons);
         c.autoParams = bool(p, "autoParams", c.autoParams);
+        c.traceSetOnly = bool(p, "traceSetOnly", c.traceSetOnly);
+        c.maxSetOnly = clamp(num(p, "maxSetOnly", c.maxSetOnly), 10, 5000);
         c.traceMethods = p.getProperty("traceMethods", c.traceMethods);
         c.stackDepth = clamp(num(p, "stackDepth", c.stackDepth), 1, 60);
         c.perKeyStacks = clamp(num(p, "perKeyStacks", c.perKeyStacks), 1, 50);
