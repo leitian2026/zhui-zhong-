@@ -46,6 +46,16 @@
 - 落盘：事件触发 + 单次延迟（默认 3 秒），写 `files/textrec/snapshot-<进程名>.json`；没有轮询、没有常驻定时器。
   配置热更新同样只在事件里顺带检查文件时间（≤2 秒一次）。
 
+## 1.4 修正（根据 1.3 的真机导出）
+- **推荐 hook 点不再乱推**：签名分四类——`[稳定]`（业务代码里没混淆的）、`[稳定·通用控件]`（`AppCompatImageView` / `DmtTextView` 这类，
+  hook 后必须按 View 类/id 过滤）、`[稳定·通用基础设施]`（消息分发、LiveData、异步包装，永远不推荐）、`[混淆]`。
+  每条签名带 `@栈第N层`（只数 App 帧），推荐只取离设置/绘制点 8 层以内的业务稳定帧；设置侧如果更近的只有混淆帧会加 ⚠ 提醒。
+  设置侧、绘制/调用侧分别推荐；只有混淆名时再给一条**系统方法兜底**（`TextView#setText` / `View#setContentDescription` / `ImageView#setImageDrawable`，
+  永远不会被混淆，但要按 View 类/id 过滤）。
+- **图标资源名**：`AppCompatImageView.setImageResource` 是覆盖实现，不走 `ImageView.setImageResource`，1.3 里只看到
+  `setImageDrawable drawable=BitmapDrawable 50x50`；现在单独 hook 它，记录里有 `res=资源名(0x资源id)`。
+- 栈顶签名去重（构造方法链、重载链不再把同一个方法列两遍）。
+
 ## 导出
 - txt：给人看。
 - JSON：字段固定（`schema:1`，每条记录含 kind/view/viewId/activity/parents/drawCount/setCount/setStack/drawStack/sigs；1.3 新增字段 paints/pos/textColor/colorStack/drawNote 均为追加，不影响旧字段），
