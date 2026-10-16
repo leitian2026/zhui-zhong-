@@ -46,6 +46,9 @@ final class Store {
     final AtomicLong drawEvents = new AtomicLong();
     final AtomicLong droppedRate = new AtomicLong();
     final AtomicLong droppedCap = new AtomicLong();
+    /** TEXTSET 记录数（单独限额）及因限额丢弃的数量 */
+    final AtomicInteger setOnlyCount = new AtomicInteger();
+    final AtomicLong droppedSetOnly = new AtomicLong();
 
     volatile String appVersion = "";
     private volatile String warn = "";
@@ -95,6 +98,8 @@ final class Store {
         drawEvents.set(0);
         droppedRate.set(0);
         droppedCap.set(0);
+        setOnlyCount.set(0);
+        droppedSetOnly.set(0);
         markDirty();
     }
 
@@ -180,7 +185,7 @@ final class Store {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.4");
+        root.put("module", "TextRec 1.5");
         root.put("pkg", pkg);
         root.put("process", proc);
         root.put("appVersion", appVersion);
@@ -200,6 +205,8 @@ final class Store {
         cj.put("traceColor", c.traceColor);
         cj.put("traceIcons", c.traceIcons);
         cj.put("autoParams", c.autoParams);
+        cj.put("traceSetOnly", c.traceSetOnly);
+        cj.put("maxSetOnly", c.maxSetOnly);
         cj.put("traceMethods", c.traceMethods);
         root.put("config", cj);
 
@@ -211,17 +218,25 @@ final class Store {
             }
         });
 
+        final long now = System.currentTimeMillis();
+        JSONArray arr = new JSONArray();
+        int setOnlyShown = 0;
+        for (Rec r : list) {
+            JSONObject j = recJson(r, now);
+            if (j == null) continue; // TEXTSET 且其控件都已经画过了：已有对应的 TEXTVIEW 记录，不重复
+            if (Rec.TEXTSET.equals(r.kind)) setOnlyShown++;
+            arr.put(j);
+        }
+
         JSONObject st = new JSONObject();
-        st.put("records", list.size());
+        st.put("records", arr.length());
+        st.put("setOnly", setOnlyShown);
         st.put("setEvents", setEvents.get());
         st.put("drawEvents", drawEvents.get());
         st.put("droppedByRateLimit", droppedRate.get());
         st.put("droppedByRecordCap", droppedCap.get());
+        st.put("droppedBySetOnlyCap", droppedSetOnly.get());
         root.put("stats", st);
-
-        final long now = System.currentTimeMillis();
-        JSONArray arr = new JSONArray();
-        for (Rec r : list) arr.put(recJson(r, now));
         root.put("records", arr);
         return root.toString();
     }
@@ -236,6 +251,12 @@ final class Store {
     }
 
     private static JSONObject recJson(Rec r, long now) throws Exception {
+        final boolean setOnly = Rec.TEXTSET.equals(r.kind);
+        java.util.List<android.view.View> und = null;
+        if (setOnly) {
+            und = Recorder.undrawn(r);
+            if (und.isEmpty()) return null;
+        }
         JSONObject j = new JSONObject();
         j.put("id", r.id);
         j.put("kind", r.kind);
@@ -249,8 +270,41 @@ final class Store {
         j.put("last", r.last);
         j.put("firstText", r.firstText);
         j.put("lastText", r.lastText);
-        j.put("texts", new JSONArray(r.sampleList()));
-        j.put("textsMore", r.sampleOverflow());
+        if (setOnly) {
+            // 仅设置：给出这些“从未绘制”的控件【当前】的文字，以及它们为什么没被画
+            java.util.LinkedHashSet<String> cur = new java.util.LinkedHashSet<>();
+            JSONArray ud = new JSONArray();
+            JSONArray scr = new JSONArray();
+            android.graphics.Rect rc = new android.graphics.Rect();
+            for (android.view.View v : und) {
+                if (ud.length() >= 30) break;
+                String t = "";
+                if (v instanceof android.widget.TextView) {
+                    CharSequence ct = ((android.widget.TextView) v).getText();
+                    t = ct == null ? "" : (ct.length() > 200 ? ct.subSequence(0, 200) + "…" : ct.toString());
+                }
+                if (!t.isEmpty() && cur.size() < 40) cur.add(t);
+                JSONObject uo = new JSONObject();
+                uo.put("text", t);
+                uo.put("reason", Recorder.notDrawnReason(v));
+                uo.put("w", v.getWidth());
+                uo.put("h", v.getHeight());
+                ud.put(uo);
+                if (Rec.onScreen(v, rc) && !t.isEmpty()) {
+                    JSONObject so = new JSONObject();
+                    so.put("text", t);
+                    so.put("rect", new JSONArray(Arrays.asList(rc.left, rc.top, rc.right, rc.bottom)));
+                    scr.put(so);
+                }
+            }
+            j.put("texts", new JSONArray(new ArrayList<>(cur)));
+            j.put("textsMore", 0);
+            j.put("unDrawn", ud);
+            j.put("screenSetOnly", scr);
+        } else {
+            j.put("texts", new JSONArray(r.sampleList()));
+            j.put("textsMore", r.sampleOverflow());
+        }
 
         // 画笔 / 绘制参数变体（颜色、字号、描边或填充；Compose 文字还有 paint 的参数）
         JSONArray pj = new JSONArray();
@@ -273,7 +327,10 @@ final class Store {
         // 3 秒内画过就算在屏幕上，否则标“未知”（不会因此被“只看屏幕上”过滤掉）
         JSONArray screen = new JSONArray();
         String vis;
-        if (r.hasViews()) {
+        if (setOnly) {
+            // 从未绘制过：一般就是不在屏幕上；若控件“可见、已挂窗口”却没画，标 ?（可能刚设置还没来得及画）
+            vis = j.optJSONArray("screenSetOnly") != null && j.optJSONArray("screenSetOnly").length() > 0 ? "unknown" : "no";
+        } else if (r.hasViews()) {
             for (Rec.ScreenText s : r.screenNow()) {
                 JSONObject so = new JSONObject();
                 so.put("text", s.text);
@@ -301,6 +358,10 @@ final class Store {
             // 图标没有“绘制栈”，只有“谁设置了它”（左侧设置栈）
             j.put("drawStack", JSONObject.NULL);
             j.put("drawNote", "图标：没有绘制栈，只记录“谁设置了图标”（setImage* / setContentDescription），见左侧设置栈");
+        } else if (setOnly) {
+            j.put("drawStack", JSONObject.NULL);
+            j.put("drawNote", "仅设置·从未绘制：这段文字被 setText 设置过，但控件一直没被绘制，所以没有绘制栈。"
+                    + "原因见“未绘制的控件”一栏（INVISIBLE/GONE、尺寸为 0、未挂窗口、祖先不可见）。想改这段文字，hook 左侧设置侧即可");
         } else {
             j.put("drawStack", stackJson(r.draw, r.drawSigs, r.drawThread));
         }
