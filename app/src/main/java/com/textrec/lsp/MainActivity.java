@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
     private EditText etPkgs, etKeywords, etDepth, etPerKey, etSample, etPerSec, etMax, etMaxSetOnly, etTrace;
-    private CheckBox cbEnabled, cbKeywordMode, cbRegex, cbSet, cbDraw, cbColor, cbIcons, cbAuto, cbSetOnly;
+    private CheckBox cbEnabled, cbKeywordMode, cbRegex, cbSet, cbDraw, cbColor, cbIcons, cbAuto, cbSetOnly, cbState;
     private Button btnPush, btnReset;
     private TextView tvStatus;
 
@@ -60,6 +60,8 @@ public class MainActivity extends Activity {
         root.addView(cbAuto);
         cbSetOnly = check("记录“只被设置、从未被绘制”的文字（隐藏的控件，如拖动进度条才出现的时长）");
         root.addView(cbSetOnly);
+        cbState = check("记录 alpha / visibility / selected 的变化（谁改的、改成什么；看标签“选中态”怎么实现）");
+        root.addView(cbState);
 
         root.addView(label("记录范围"));
         cbKeywordMode = check("只记录命中关键字的文字（默认关闭 = 全量记录屏幕上所有文字）");
@@ -136,6 +138,7 @@ public class MainActivity extends Activity {
         cbIcons.setChecked(c.traceIcons);
         cbAuto.setChecked(c.autoParams);
         cbSetOnly.setChecked(c.traceSetOnly);
+        cbState.setChecked(c.traceState);
         etTrace.setText(c.traceMethods);
         cbKeywordMode.setChecked(c.keywordMode);
         etKeywords.setText(c.keywords);
@@ -157,6 +160,7 @@ public class MainActivity extends Activity {
         c.traceIcons = cbIcons.isChecked();
         c.autoParams = cbAuto.isChecked();
         c.traceSetOnly = cbSetOnly.isChecked();
+        c.traceState = cbState.isChecked();
         c.traceMethods = etTrace.getText().toString();
         c.keywordMode = cbKeywordMode.isChecked();
         c.keywords = etKeywords.getText().toString();
