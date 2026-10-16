@@ -22,6 +22,7 @@ final class RecFormat {
         if ("CANVAS".equals(kind)) return "自绘";
         if ("ICON".equals(kind)) return "图标";
         if ("TRACE".equals(kind)) return "方法追踪";
+        if ("TEXTSET".equals(kind)) return "仅设置";
         return kind;
     }
 
@@ -55,6 +56,9 @@ final class RecFormat {
         } else if ("ICON".equals(kind)) {
             sb.append("设置 ").append(r.optInt("drawCount")).append(" 次 / 该设置位置共调用 ").append(r.optInt("setCount"))
                     .append(" 次(可能含同一代码设置的其他控件)");
+        } else if ("TEXTSET".equals(kind)) {
+            sb.append("绘制 0 次（从未绘制）/ 该设置位置共调用 ").append(r.optInt("setCount"))
+                    .append(" 次(可能含同一代码设置的其他控件)");
         } else {
             sb.append("绘制 ").append(r.optInt("drawCount")).append(" 次 / 该设置位置共调用 ").append(r.optInt("setCount"))
                     .append(" 次(可能含同一代码设置的其他控件)");
@@ -77,7 +81,21 @@ final class RecFormat {
         }
         String vis = r.optString("vis");
         JSONArray sc = r.optJSONArray("screen");
-        if ("yes".equals(vis) && sc != null && sc.length() > 0) {
+        if ("TEXTSET".equals(kind)) {
+            JSONArray ud = r.optJSONArray("unDrawn");
+            sb.append("◌ 仅设置·从未绘制：这些文字被 setText 设置过，但所在控件一直没被画出来，")
+                    .append("所以不会出现在“绘制”记录里。\n");
+            if (ud != null && ud.length() > 0) {
+                sb.append("未绘制的控件（").append(ud.length()).append(" 个；文字是它们【当前】的，原因是它们没被画的原因）：\n");
+                for (int i = 0; i < ud.length(); i++) {
+                    JSONObject uo = ud.optJSONObject(i);
+                    if (uo == null) continue;
+                    sb.append("  · 「").append(oneLine(uo.optString("text"))).append("」  尺寸 ")
+                            .append(uo.optInt("w")).append('×').append(uo.optInt("h"))
+                            .append("  原因: ").append(uo.optString("reason")).append('\n');
+                }
+            }
+        } else if ("yes".equals(vis) && sc != null && sc.length() > 0) {
             sb.append("● 此刻在屏幕上的文字（").append(sc.length()).append(" 处）：\n");
             for (int i = 0; i < sc.length(); i++) {
                 JSONObject so = sc.optJSONObject(i);
@@ -212,7 +230,7 @@ final class RecFormat {
         String view = r.optString("view");
         String vid = r.optString("viewId");
         String flt = "按 View 类 " + simple(view) + (vid.isEmpty() ? "" : "、id " + vid) + " 过滤";
-        if ("TEXTVIEW".equals(kind)) {
+        if ("TEXTVIEW".equals(kind) || "TEXTSET".equals(kind)) {
             sb.append("备选[设置侧·系统方法，不会被混淆] android.widget.TextView#setText(java.lang.CharSequence,")
                     .append("android.widget.TextView$BufferType,boolean,int)   ").append(flt).append('\n');
         } else if ("ICON".equals(kind)) {
