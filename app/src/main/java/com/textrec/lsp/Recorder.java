@@ -71,6 +71,9 @@ final class Recorder {
             Collections.synchronizedMap(new WeakHashMap<TextView, Boolean>());
     private static final Map<TextView, ColorSet> VIEW_COLOR =
             Collections.synchronizedMap(new WeakHashMap<TextView, ColorSet>());
+    /** 设置过图标 / contentDescription 的 View（弱引用），用来判断 alpha/visibility/selected 的变化是否值得记。 */
+    private static final Map<View, Boolean> ICON_VIEWS =
+            Collections.synchronizedMap(new WeakHashMap<View, Boolean>());
     private static final ThreadLocal<TextView> CUR = new ThreadLocal<>();
     private static final ThreadLocal<PaintCtx> PAINT = new ThreadLocal<>();
     private static final ThreadLocal<int[]> DEPTH = new ThreadLocal<int[]>() {
@@ -132,6 +135,7 @@ final class Recorder {
         hookTextColor();
         hookCanvas();
         hookIcons();
+        hookState();
         ensureAppCompatHook(lp.classLoader);
         ensureComposeHook(lp.classLoader);
         retryTraceInstall();
@@ -409,6 +413,100 @@ final class Recorder {
         }
     }
 
+    // ------------------------------------------------------------ View 状态变化（alpha / visibility / selected）
+
+    private static final XC_MethodHook STATE_HOOK = new XC_MethodHook() {
+        @Override
+        protected void afterHookedMethod(MethodHookParam p) {
+            try {
+                onState(p);
+            } catch (Throwable ignored) {
+            }
+        }
+    };
+
+    /** 底部标签“选中态”这类效果常常靠 alpha / selected / visibility 实现，颜色本身没变。 */
+    private static void hookState() {
+        String[][] ms = {{"setAlpha"}, {"setVisibility"}, {"setSelected"}};
+        for (String[] m : ms) {
+            try {
+                XposedBridge.hookAllMethods(View.class, m[0], STATE_HOOK);
+            } catch (Throwable t) {
+                XposedBridge.log("[TextRec] hook View." + m[0] + " failed: " + t);
+            }
+        }
+    }
+
+    private static boolean isTracked(View v) {
+        if (v instanceof TextView) return VIEW_DRAWN.containsKey(v) || VIEW_SET.containsKey(v);
+        return ICON_VIEWS.containsKey(v);
+    }
+
+    private static String whoDesc(View v) {
+        if (v instanceof TextView) {
+            CharSequence ct = ((TextView) v).getText();
+            String t = ct == null ? "" : ct.toString();
+            return "[" + (t.length() > 20 ? t.substring(0, 20) + "…" : t) + "]";
+        }
+        CharSequence cd = v.getContentDescription();
+        return "[" + simpleName(v.getClass().getName()) + (cd == null || cd.length() == 0 ? "" : " " + cd) + "]";
+    }
+
+    private static void onState(XC_MethodHook.MethodHookParam p) {
+        RecConfig c = cfg;
+        if (!c.enabled || !c.traceState) return;
+        if (!(p.thisObject instanceof View) || p.args == null || p.args.length < 1) return;
+        View v = (View) p.thisObject;
+        if (!isTracked(v)) return;
+        String m = p.method.getName();
+        Object a0 = p.args[0];
+        long vb;
+        if (a0 instanceof Float) vb = Math.round(((Float) a0) * 10f); // alpha 动画只按 0.1 一档区分，避免每帧一个变体
+        else if (a0 instanceof Integer) vb = (Integer) a0;
+        else vb = a0 == null ? 0 : a0.hashCode();
+        long wh;
+        if (v instanceof TextView) {
+            CharSequence ct = ((TextView) v).getText();
+            wh = ct == null ? 0 : ct.toString().hashCode();
+        } else {
+            CharSequence cd = v.getContentDescription();
+            wh = cd == null ? 0 : cd.toString().hashCode();
+        }
+        String cls = v.getClass().getName();
+        long pkey = mix(mix(mix(mix(SEED, cls.hashCode()), v.getId()), m.hashCode()), 17);
+        Store.DrawProxy dp = store.drawProxy(pkey);
+        int n = dp.n.incrementAndGet();
+        Rec r = dp.rec;
+        long shape = mix(mix(mix(SEED, wh), m.hashCode()), vb);
+        if (r != null && r.hasSample(shape)) { // 已经记过的变体只计数（动画里 setAlpha 每帧都来）
+            r.tick();
+            return;
+        }
+        String val;
+        if (a0 instanceof Float) val = String.format(Locale.US, "%.2f", (Float) a0);
+        else if (a0 instanceof Integer && m.equals("setVisibility")) {
+            int iv = (Integer) a0;
+            val = iv == View.VISIBLE ? "VISIBLE" : iv == View.INVISIBLE ? "INVISIBLE" : iv == View.GONE ? "GONE" : String.valueOf(iv);
+        } else val = String.valueOf(a0);
+        String desc = whoDesc(v) + " " + m + "(" + val + ")";
+        boolean want = r == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
+        if (want && store.allowStack(c.stacksPerSec)) {
+            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.stackDepth, false);
+            SetStack ss = store.internSet(new SetStack(stk, Thread.currentThread().getName()), v.getClass().getClassLoader());
+            ss.count.incrementAndGet();
+            Rec nr = obtain(Rec.STATE, cls, idName(v), m, ss, EMPTY, v, desc, shape, c);
+            if (nr != null) {
+                dp.rec = nr;
+                r = nr;
+            }
+        }
+        if (r != null) {
+            r.touch(desc, shape);
+            r.trackView(v);
+        }
+        store.markDirty();
+    }
+
     // ------------------------------------------------------------ Compose 文字绘制参数（自动观察）
 
     private static final XC_MethodHook PAINT_HOOK = new XC_MethodHook() {
@@ -602,9 +700,33 @@ final class Recorder {
         }
     }
 
+    /** 追踪方法的调用对象：View 给“类#id「文字」”，其他对象给类名。 */
+    private static String thisDesc(Object o) {
+        if (o == null) return "";
+        StringBuilder sb = new StringBuilder(48);
+        sb.append(simpleName(o.getClass().getName()));
+        if (o instanceof View) {
+            View v = (View) o;
+            String id = idName(v);
+            if (!id.isEmpty()) sb.append('#').append(id);
+            if (o instanceof TextView) {
+                CharSequence ct = ((TextView) o).getText();
+                if (ct != null && ct.length() > 0) {
+                    String t = ct.toString();
+                    sb.append('「').append(t.length() > 16 ? t.substring(0, 16) + "…" : t).append('」');
+                }
+            } else {
+                CharSequence cd = v.getContentDescription();
+                if (cd != null && cd.length() > 0) sb.append('「').append(cd.length() > 16 ? cd.subSequence(0, 16) + "…" : cd).append('」');
+            }
+        }
+        return sb.toString();
+    }
+
     private static String summarizeCall(XC_MethodHook.MethodHookParam p) {
         StringBuilder sb = new StringBuilder(96);
         Object[] a = p.args;
+        if (p.thisObject != null) sb.append("this=").append(thisDesc(p.thisObject)).append("  ");
         sb.append('(');
         if (a != null) {
             for (int i = 0; i < a.length; i++) {
@@ -766,6 +888,7 @@ final class Recorder {
         int n = dp.n.incrementAndGet();
         Rec r = dp.rec;
         boolean want = r == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
+        ICON_VIEWS.put(v, Boolean.TRUE);
         if (!want) { // 列表滚动时图标会被反复设置：已知位置只计数
             r.tick();
             r.trackView(v);
@@ -1019,9 +1142,22 @@ final class Recorder {
     /** 按归并 key 找记录，没有就新建。文字内容不进 key。 */
     private static Rec obtain(String kind, String viewCls, String viewId, SetStack ss, Stacks.Stk d,
                               View v, String text, long shape, RecConfig c) {
-        String key = kind + '|' + viewCls + '|' + viewId + '|' + (ss == null ? 0 : ss.stk.sig) + '|' + d.sig;
+        // 方法追踪的“id”其实是方法名，必须进 key；其他类型 View id 不进 key（同一段代码设置 13 个控件只留 1 条）
+        return obtain(kind, viewCls, viewId, Rec.TRACE.equals(kind) ? viewId : "", ss, d, v, text, shape, c);
+    }
+
+    /**
+     * 按“位置”归并：key = 类型 + View 类 + keyExtra + 设置栈 + 绘制栈。View id 不进 key（同一段代码
+     * 设置/绘制的一批控件合成一条，id 列表挂在记录上）。keyExtra 用于必须区分的东西（追踪的方法名、状态变化的方法名）。
+     */
+    private static Rec obtain(String kind, String viewCls, String viewId, String keyExtra, SetStack ss,
+                              Stacks.Stk d, View v, String text, long shape, RecConfig c) {
+        String key = kind + '|' + viewCls + '|' + keyExtra + '|' + (ss == null ? 0 : ss.stk.sig) + '|' + d.sig;
         Rec r = store.recs.get(key);
-        if (r != null) return r;
+        if (r != null) {
+            r.addId(viewId);
+            return r;
+        }
         final boolean setOnly = Rec.TEXTSET.equals(kind);
         if (store.recs.size() >= c.maxRecords) {
             store.droppedCap.incrementAndGet();
@@ -1034,7 +1170,10 @@ final class Recorder {
         Rec nr = new Rec(store.nextId.getAndIncrement(), key, kind, viewCls, viewId, activityName,
                 v == null ? new String[0] : parentsOf(v), ss, d, Thread.currentThread().getName(), text, shape);
         Rec old = store.recs.putIfAbsent(key, nr);
-        if (old != null) return old;
+        if (old != null) {
+            old.addId(viewId);
+            return old;
+        }
         if (setOnly) store.setOnlyCount.incrementAndGet();
         SigResolver.resolveRec(nr, v == null ? null : v.getClass().getClassLoader());
         return nr;
