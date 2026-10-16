@@ -129,6 +129,7 @@ final class Recorder {
         hookTextColor();
         hookCanvas();
         hookIcons();
+        ensureAppCompatHook(lp.classLoader);
         ensureComposeHook(lp.classLoader);
         retryTraceInstall();
         XposedBridge.log("[TextRec] init pkg=" + lp.packageName + " proc=" + lp.processName + " " + cfg.summary());
@@ -185,6 +186,7 @@ final class Recorder {
                         SigResolver.addLoader(acl);
                         maybeReload();
                         ensureComposeHook(acl);
+                        ensureAppCompatHook(acl);
                         retryTraceInstall();
                         if (store.appVersion.isEmpty()) {
                             Context ctx = a.getApplicationContext();
@@ -349,39 +351,55 @@ final class Recorder {
      * 图标：按钮上的图片不是文字，drawText 看不到。ImageView 的所有 setImage* 最终落到
      * setImageDrawable / setImageResource / ...，再加 View.setContentDescription（自绘按钮常有无障碍描述）。
      * 嵌套调用（setImageBitmap → setImageDrawable）只在最外层记一次。
+     * AppCompatImageView.setImageResource 是覆盖实现，不会走到 ImageView.setImageResource，
+     * 所以另外单独 hook 它，否则看不到资源名（见 ensureAppCompatHook）。
      */
-    private static void hookIcons() {
-        XC_MethodHook h = new XC_MethodHook() {
-            @Override
-            protected void beforeHookedMethod(MethodHookParam p) {
-                try {
-                    ICON_DEPTH.get()[0]++;
-                } catch (Throwable ignored) {
-                }
+    private static final XC_MethodHook ICON_HOOK = new XC_MethodHook() {
+        @Override
+        protected void beforeHookedMethod(MethodHookParam p) {
+            try {
+                ICON_DEPTH.get()[0]++;
+            } catch (Throwable ignored) {
             }
+        }
 
-            @Override
-            protected void afterHookedMethod(MethodHookParam p) {
-                try {
-                    int[] d = ICON_DEPTH.get();
-                    if (d[0] > 0) d[0]--;
-                    if (d[0] == 0) onIconSet(p);
-                } catch (Throwable ignored) {
-                }
+        @Override
+        protected void afterHookedMethod(MethodHookParam p) {
+            try {
+                int[] d = ICON_DEPTH.get();
+                if (d[0] > 0) d[0]--;
+                if (d[0] == 0) onIconSet(p);
+            } catch (Throwable ignored) {
             }
-        };
+        }
+    };
+    private static final AtomicBoolean APPCOMPAT_HOOKED = new AtomicBoolean();
+
+    private static void hookIcons() {
         String[] names = {"setImageDrawable", "setImageResource", "setImageBitmap", "setImageIcon", "setImageURI"};
         for (String n : names) {
             try {
-                XposedBridge.hookAllMethods(ImageView.class, n, h);
+                XposedBridge.hookAllMethods(ImageView.class, n, ICON_HOOK);
             } catch (Throwable t) {
                 XposedBridge.log("[TextRec] hook ImageView." + n + " failed: " + t);
             }
         }
         try {
-            XposedBridge.hookAllMethods(View.class, "setContentDescription", h);
+            XposedBridge.hookAllMethods(View.class, "setContentDescription", ICON_HOOK);
         } catch (Throwable t) {
             XposedBridge.log("[TextRec] hook View.setContentDescription failed: " + t);
+        }
+    }
+
+    private static void ensureAppCompatHook(ClassLoader cl) {
+        if (cl == null || APPCOMPAT_HOOKED.get()) return;
+        try {
+            Class<?> k = Class.forName("androidx.appcompat.widget.AppCompatImageView", false, cl);
+            if (!APPCOMPAT_HOOKED.compareAndSet(false, true)) return;
+            XposedBridge.hookAllMethods(k, "setImageResource", ICON_HOOK);
+            XposedBridge.log("[TextRec] AppCompatImageView.setImageResource hooked");
+        } catch (Throwable ignored) {
+            // 目标 App 没有 AppCompat，或类还没法加载：下次 Activity.onResume 再试
         }
     }
 
@@ -741,10 +759,11 @@ final class Recorder {
     }
 
     private static String resName(View v, int id) {
+        String hex = "0x" + Integer.toHexString(id);
         try {
-            return v.getResources().getResourceEntryName(id);
+            return v.getResources().getResourceEntryName(id) + "(" + hex + ")";
         } catch (Throwable t) {
-            return "0x" + Integer.toHexString(id);
+            return hex;
         }
     }
 
