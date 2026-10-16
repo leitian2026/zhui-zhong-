@@ -3,18 +3,33 @@ package com.textrec.lsp;
 import android.app.Activity;
 import android.content.Context;
 import android.content.pm.PackageInfo;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
+import android.graphics.Paint;
+import android.graphics.drawable.BitmapDrawable;
+import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.SystemClock;
 import android.view.View;
+import android.widget.ImageView;
 import android.widget.TextView;
 
 import java.io.File;
+import java.lang.reflect.Constructor;
+import java.lang.reflect.Member;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.WeakHashMap;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import de.robv.android.xposed.XC_MethodHook;
 import de.robv.android.xposed.XposedBridge;
@@ -24,12 +39,15 @@ import de.robv.android.xposed.callbacks.XC_LoadPackage;
  * 目标 App 进程里的总控。只读：所有 Hook 都不改参数、不改返回值、不拦截调用，回调外层全部 try/catch。
  *
  * 采集逻辑：
- *  - setText（最底层汇聚方法）：记“设置栈”，并把它挂到该 TextView 上（WeakHashMap，只留最近一次）。
+ *  - setText（最底层汇聚方法）/ append / setHint：记“设置栈”，并把它挂到该 TextView 上（WeakHashMap，只留最近一次）。
+ *  - TextView.updateTextColors：记“文字颜色设置栈”和颜色值。
  *  - TextView.onDraw：用 ThreadLocal 标记“当前正在画哪个 TextView”。
- *  - Canvas.drawText/drawTextRun：画文字时取出该 TextView 的设置栈，和画栈合成一条记录。
- *    没有 TextView 上下文的（自绘 / Compose）只有画栈。
- *  - 限流：用便宜的“代理 key”（控件类 + id + 文字形状[数字折叠]）判断是不是同一个位置，
- *    同一位置只抓前几次栈，之后只计数；再加全局每秒抓栈上限兜底。
+ *  - Canvas.drawText/drawTextRun/drawTextOnPath：画文字时取出该 TextView 的设置栈，和画栈合成一条记录；
+ *    同时记画笔（颜色/字号/描边或填充）。没有 TextView 上下文的（自绘 / Compose）只有画栈 + 画布内坐标。
+ *  - Compose 文字：自动观察 MultiParagraph.paint*（颜色、DrawStyle 等参数），和随后的 drawText 配对。
+ *  - ImageView.setImage* / View.setContentDescription：记图标是谁设置的（按钮图标不是文字，drawText 看不到）。
+ *  - 方法追踪（用户在界面里填 类#方法）：记每次调用的参数/返回值变体和调用栈。
+ *  - 限流：用便宜的“代理 key”判断是不是同一个位置，同一位置只抓前几次栈，之后只计数；再加全局每秒抓栈上限兜底。
  */
 final class Recorder {
     private Recorder() {}
@@ -45,15 +63,57 @@ final class Recorder {
     private static volatile File dir;
 
     private static final long SEED = 0xcbf29ce484222325L;
+    private static final Stacks.Stk EMPTY = new Stacks.Stk(new String[0], 0, 0, new String[0][], false);
     private static final Map<TextView, SetStack> VIEW_SET =
             Collections.synchronizedMap(new WeakHashMap<TextView, SetStack>());
+    private static final Map<TextView, ColorSet> VIEW_COLOR =
+            Collections.synchronizedMap(new WeakHashMap<TextView, ColorSet>());
     private static final ThreadLocal<TextView> CUR = new ThreadLocal<>();
+    private static final ThreadLocal<PaintCtx> PAINT = new ThreadLocal<>();
     private static final ThreadLocal<int[]> DEPTH = new ThreadLocal<int[]>() {
         @Override
         protected int[] initialValue() {
             return new int[1];
         }
     };
+    private static final ThreadLocal<int[]> ICON_DEPTH = new ThreadLocal<int[]>() {
+        @Override
+        protected int[] initialValue() {
+            return new int[1];
+        }
+    };
+    private static final ThreadLocal<boolean[]> BUSY = new ThreadLocal<boolean[]>() {
+        @Override
+        protected boolean[] initialValue() {
+            return new boolean[1];
+        }
+    };
+
+    /** Compose 文字绘制时当前 MultiParagraph.paint 的参数（和随后发生的 drawText 配对）。 */
+    static final class PaintCtx {
+        final String name;
+        final Object[] args;
+        final long key;
+
+        PaintCtx(String name, Object[] args, long key) {
+            this.name = name;
+            this.args = args;
+            this.key = key;
+        }
+    }
+
+    // 方法追踪
+    private static final Object TRACE_LOCK = new Object();
+    private static volatile Set<String> traceActive = Collections.emptySet();
+    private static final Set<String> traceHooked = new HashSet<>();
+    private static final Map<String, String> traceMsg = new ConcurrentHashMap<>();
+    private static final Map<String, Integer> traceTries = new ConcurrentHashMap<>();
+    private static final ExecutorService HOOKER = Executors.newSingleThreadExecutor(r -> {
+        Thread t = new Thread(r, "textrec-hook");
+        t.setDaemon(true);
+        return t;
+    });
+    private static final AtomicBoolean COMPOSE_HOOKED = new AtomicBoolean();
 
     static void init(XC_LoadPackage.LoadPackageParam lp) {
         File d = new File(lp.appInfo.dataDir, "files/textrec");
@@ -65,7 +125,12 @@ final class Recorder {
         hookActivity();
         hookTextViewDraw();
         hookSetText();
+        hookTextExtras();
+        hookTextColor();
         hookCanvas();
+        hookIcons();
+        ensureComposeHook(lp.classLoader);
+        retryTraceInstall();
         XposedBridge.log("[TextRec] init pkg=" + lp.packageName + " proc=" + lp.processName + " " + cfg.summary());
     }
 
@@ -96,9 +161,11 @@ final class Recorder {
                 if (appliedEpoch != Long.MIN_VALUE) {
                     store.reset();
                     VIEW_SET.clear();
+                    VIEW_COLOR.clear();
                 }
                 appliedEpoch = c.epoch;
             }
+            applyTraceTargets(c);
             store.markDirty();
         }
     }
@@ -114,8 +181,11 @@ final class Recorder {
                     try {
                         Activity a = (Activity) p.thisObject;
                         activityName = a.getClass().getName();
-                        SigResolver.addLoader(a.getClass().getClassLoader());
+                        ClassLoader acl = a.getClass().getClassLoader();
+                        SigResolver.addLoader(acl);
                         maybeReload();
+                        ensureComposeHook(acl);
+                        retryTraceInstall();
                         if (store.appVersion.isEmpty()) {
                             Context ctx = a.getApplicationContext();
                             PackageInfo pi = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0);
@@ -189,6 +259,57 @@ final class Recorder {
         }
     }
 
+    /** append（不经过 setText）和 setHint（提示文字）也算“设置文字”。 */
+    private static void hookTextExtras() {
+        XC_MethodHook h = new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam p) {
+                try {
+                    if (p.thisObject instanceof TextView && p.args != null && p.args.length > 0) {
+                        recordSet((TextView) p.thisObject, textOf(p.args[0]));
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
+        };
+        try {
+            XposedBridge.hookMethod(TextView.class.getDeclaredMethod("append", CharSequence.class, int.class, int.class), h);
+        } catch (Throwable t) {
+            XposedBridge.log("[TextRec] hook TextView.append failed: " + t);
+        }
+        try {
+            XposedBridge.hookMethod(TextView.class.getDeclaredMethod("setHint", CharSequence.class), h);
+        } catch (Throwable t) {
+            XposedBridge.log("[TextRec] hook TextView.setHint failed: " + t);
+        }
+    }
+
+    /** 文字颜色：updateTextColors 是 setTextColor / setTextAppearance / XML 属性共同的汇聚点。 */
+    private static void hookTextColor() {
+        XC_MethodHook h = new XC_MethodHook() {
+            @Override
+            protected void afterHookedMethod(MethodHookParam p) {
+                try {
+                    onTextColor(p);
+                } catch (Throwable ignored) {
+                }
+            }
+        };
+        boolean ok = false;
+        try {
+            XposedBridge.hookMethod(TextView.class.getDeclaredMethod("updateTextColors"), h);
+            ok = true;
+        } catch (Throwable ignored) {
+        }
+        if (!ok) {
+            try {
+                XposedBridge.hookAllMethods(TextView.class, "setTextColor", h);
+            } catch (Throwable t) {
+                XposedBridge.log("[TextRec] hook TextView text color failed: " + t);
+            }
+        }
+    }
+
     private static void hookCanvas() {
         XC_MethodHook draw = new XC_MethodHook() {
             @Override
@@ -218,20 +339,276 @@ final class Recorder {
                 Class<?> c = Class.forName(cn);
                 XposedBridge.hookAllMethods(c, "drawText", draw);
                 XposedBridge.hookAllMethods(c, "drawTextRun", draw);
+                XposedBridge.hookAllMethods(c, "drawTextOnPath", draw);
             } catch (Throwable ignored) {
             }
         }
     }
 
+    /**
+     * 图标：按钮上的图片不是文字，drawText 看不到。ImageView 的所有 setImage* 最终落到
+     * setImageDrawable / setImageResource / ...，再加 View.setContentDescription（自绘按钮常有无障碍描述）。
+     * 嵌套调用（setImageBitmap → setImageDrawable）只在最外层记一次。
+     */
+    private static void hookIcons() {
+        XC_MethodHook h = new XC_MethodHook() {
+            @Override
+            protected void beforeHookedMethod(MethodHookParam p) {
+                try {
+                    ICON_DEPTH.get()[0]++;
+                } catch (Throwable ignored) {
+                }
+            }
+
+            @Override
+            protected void afterHookedMethod(MethodHookParam p) {
+                try {
+                    int[] d = ICON_DEPTH.get();
+                    if (d[0] > 0) d[0]--;
+                    if (d[0] == 0) onIconSet(p);
+                } catch (Throwable ignored) {
+                }
+            }
+        };
+        String[] names = {"setImageDrawable", "setImageResource", "setImageBitmap", "setImageIcon", "setImageURI"};
+        for (String n : names) {
+            try {
+                XposedBridge.hookAllMethods(ImageView.class, n, h);
+            } catch (Throwable t) {
+                XposedBridge.log("[TextRec] hook ImageView." + n + " failed: " + t);
+            }
+        }
+        try {
+            XposedBridge.hookAllMethods(View.class, "setContentDescription", h);
+        } catch (Throwable t) {
+            XposedBridge.log("[TextRec] hook View.setContentDescription failed: " + t);
+        }
+    }
+
+    // ------------------------------------------------------------ Compose 文字绘制参数（自动观察）
+
+    private static final XC_MethodHook PAINT_HOOK = new XC_MethodHook() {
+        @Override
+        protected void beforeHookedMethod(MethodHookParam p) {
+            try {
+                RecConfig c = cfg;
+                if (!c.enabled || !c.autoParams || !c.traceDraw) {
+                    PAINT.remove();
+                    return;
+                }
+                Object[] a = p.args;
+                String name = p.method.getName();
+                long k = mix(SEED, name.hashCode());
+                if (a != null) {
+                    for (int i = 1; i < a.length; i++) { // 0 是 Canvas
+                        Object o = a[i];
+                        if (o == null) k = mix(k, 7);
+                        else if (o instanceof Number || o instanceof Boolean || o instanceof Character) k = mix(k, o.hashCode());
+                        else k = mix(k, o.getClass().hashCode());
+                    }
+                }
+                PAINT.set(new PaintCtx(name, a, k));
+            } catch (Throwable ignored) {
+            }
+        }
+
+        @Override
+        protected void afterHookedMethod(MethodHookParam p) {
+            try {
+                PAINT.remove();
+            } catch (Throwable ignored) {
+            }
+        }
+    };
+
+    /** androidx.compose.ui.text.MultiParagraph 没被混淆，paint* 的参数里有文字颜色和 DrawStyle（描边/填充）。 */
+    private static void ensureComposeHook(ClassLoader cl) {
+        if (cl == null || COMPOSE_HOOKED.get()) return;
+        try {
+            Class<?> mp = Class.forName("androidx.compose.ui.text.MultiParagraph", false, cl);
+            if (!COMPOSE_HOOKED.compareAndSet(false, true)) return;
+            int n = 0;
+            for (Method m : mp.getDeclaredMethods()) {
+                String nm = m.getName();
+                if (!nm.startsWith("paint") || nm.indexOf('$') >= 0) continue;
+                XposedBridge.hookMethod(m, PAINT_HOOK);
+                n++;
+            }
+            XposedBridge.log("[TextRec] compose MultiParagraph.paint* hooked: " + n);
+        } catch (Throwable ignored) {
+            // 目标 App 没有 Compose，或类还没法加载：下次 Activity.onResume 再试
+        }
+    }
+
+    // ------------------------------------------------------------ 方法追踪（用户指定 类#方法，只读）
+
+    private static final XC_MethodHook TRACE_HOOK = new XC_MethodHook() {
+        @Override
+        protected void afterHookedMethod(MethodHookParam p) {
+            try {
+                onTraced(p);
+            } catch (Throwable ignored) {
+            }
+        }
+    };
+
+    private static void applyTraceTargets(RecConfig c) {
+        HashSet<String> want = new HashSet<>(RecConfig.splitTargets(c.traceMethods));
+        traceActive = want;
+        if (want.isEmpty()) {
+            traceMsg.clear();
+            publishTraceWarn();
+            return;
+        }
+        retryTraceInstall();
+    }
+
+    private static void retryTraceInstall() {
+        final Set<String> want = traceActive;
+        if (want.isEmpty()) return;
+        boolean need = false;
+        synchronized (TRACE_LOCK) {
+            for (String t : want) {
+                if (!traceHooked.contains(t)) {
+                    need = true;
+                    break;
+                }
+            }
+        }
+        if (!need) return;
+        try {
+            HOOKER.execute(() -> installTraces(want));
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void markHooked(String t) {
+        synchronized (TRACE_LOCK) {
+            traceHooked.add(t);
+        }
+    }
+
+    private static void installTraces(Set<String> want) {
+        for (String t : want) {
+            synchronized (TRACE_LOCK) {
+                if (traceHooked.contains(t)) continue;
+            }
+            int hash = t.indexOf('#');
+            if (hash <= 0 || hash == t.length() - 1) {
+                traceMsg.put(t, "格式应为 类#方法");
+                markHooked(t);
+                continue;
+            }
+            String cn = t.substring(0, hash);
+            String mn = t.substring(hash + 1);
+            Integer prev = traceTries.get(t);
+            int tn = prev == null ? 1 : prev + 1;
+            traceTries.put(t, tn);
+            Class<?> k = SigResolver.findClass(cn, null);
+            if (k == null) {
+                if (tn >= 40) {
+                    traceMsg.put(t, "类未找到，已放弃重试（检查类名；App 更新后混淆名会变）");
+                    markHooked(t);
+                } else {
+                    traceMsg.put(t, "类暂未找到（可能还没加载，进入相关页面后会自动重试）");
+                }
+                continue;
+            }
+            try {
+                Set<?> hooked = mn.equals("<init>")
+                        ? XposedBridge.hookAllConstructors(k, TRACE_HOOK)
+                        : XposedBridge.hookAllMethods(k, mn, TRACE_HOOK);
+                markHooked(t);
+                if (hooked == null || hooked.isEmpty()) {
+                    traceMsg.put(t, "这个类里没有声明该方法（可能在父类，或方法名写错）");
+                } else {
+                    traceMsg.remove(t);
+                }
+            } catch (Throwable e) {
+                traceMsg.put(t, "hook 失败: " + e);
+                markHooked(t);
+            }
+        }
+        publishTraceWarn();
+    }
+
+    private static void publishTraceWarn() {
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<String, String> e : traceMsg.entrySet()) {
+            sb.append("追踪 ").append(e.getKey()).append("：").append(e.getValue()).append('\n');
+        }
+        store.setTraceWarn(sb.toString());
+        store.markDirty();
+    }
+
+    private static void onTraced(XC_MethodHook.MethodHookParam p) {
+        RecConfig c = cfg;
+        if (!c.enabled) return;
+        Member m = p.method;
+        String cn = m.getDeclaringClass().getName();
+        String mn = m instanceof Constructor ? "<init>" : m.getName();
+        String tkey = cn + "#" + mn;
+        if (!traceActive.contains(tkey)) return;
+        boolean[] busy = BUSY.get();
+        if (busy[0]) return; // 摘要里调 toString 可能又触发被追踪的方法
+        busy[0] = true;
+        try {
+            Store.DrawProxy dp = store.drawProxy(mix(mix(SEED, tkey.hashCode()), 9));
+            int n = dp.n.incrementAndGet();
+            Rec r = dp.rec;
+            if (n > 3000 && n % 10 != 0) { // 高频方法：只计数，每 10 次取一次样
+                if (r != null) r.tick();
+                return;
+            }
+            String text = summarizeCall(p);
+            long shape = text.hashCode();
+            boolean want = r == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
+            if (want && store.allowStack(c.stacksPerSec)) {
+                Stacks.Stk d = Stacks.build(Stacks.capture(true), c.stackDepth, false);
+                Rec nr = obtain(Rec.TRACE, cn, mn, null, d, null, text, shape, c);
+                if (nr != null) {
+                    dp.rec = nr;
+                    r = nr;
+                }
+            }
+            if (r != null) r.touch(text, shape);
+            store.markDirty();
+        } finally {
+            busy[0] = false;
+        }
+    }
+
+    private static String summarizeCall(XC_MethodHook.MethodHookParam p) {
+        StringBuilder sb = new StringBuilder(96);
+        Object[] a = p.args;
+        sb.append('(');
+        if (a != null) {
+            for (int i = 0; i < a.length; i++) {
+                if (i > 0) sb.append(", ");
+                sb.append(argStr(a[i]));
+            }
+        }
+        sb.append(')');
+        Member m = p.method;
+        if (p.hasThrowable()) {
+            sb.append(" ✗ ").append(p.getThrowable().getClass().getSimpleName());
+        } else if (m instanceof Method && ((Method) m).getReturnType() != void.class) {
+            sb.append("  →  ").append(argStr(p.getResult()));
+        }
+        return sb.toString();
+    }
+
     // ------------------------------------------------------------ 设置文字
 
     private static void onSetText(XC_MethodHook.MethodHookParam p) {
+        if (!(p.thisObject instanceof TextView)) return;
+        recordSet((TextView) p.thisObject, textOf(p.args[0]));
+    }
+
+    private static void recordSet(TextView v, String text) {
         maybeReload();
         RecConfig c = cfg;
         if (!c.enabled || !c.traceSet) return;
-        if (!(p.thisObject instanceof TextView)) return;
-        TextView v = (TextView) p.thisObject;
-        String text = textOf(p.args[0]);
         if (text == null || text.isEmpty() || !filter.accept(text)) {
             VIEW_SET.remove(v); // 不让它和更早的设置栈错误配对
             return;
@@ -258,6 +635,119 @@ final class Recorder {
         store.markDirty();
     }
 
+    /** 文字颜色被设置：记设置栈和颜色值（TextView 的颜色最终由 Paint 带到 drawText，Paint 颜色另记）。 */
+    private static void onTextColor(XC_MethodHook.MethodHookParam p) {
+        if (!(p.thisObject instanceof TextView)) return;
+        maybeReload();
+        RecConfig c = cfg;
+        if (!c.enabled || !c.traceColor) return;
+        TextView v = (TextView) p.thisObject;
+        int color = v.getCurrentTextColor();
+        String cls = v.getClass().getName();
+        long key = mix(mix(mix(SEED, cls.hashCode()), v.getId()), 11);
+        Store.SetProxy sp = store.setProxy(key);
+        int n = sp.n.incrementAndGet();
+        SetStack ss = sp.last;
+        boolean want = ss == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
+        if (want && store.allowStack(c.stacksPerSec)) {
+            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.stackDepth, false);
+            ss = store.internSet(new SetStack(stk, Thread.currentThread().getName()), v.getClass().getClassLoader());
+            sp.last = ss;
+        }
+        ColorSet old = VIEW_COLOR.get(v);
+        if (old == null || old.ss != ss || old.color != color) VIEW_COLOR.put(v, new ColorSet(ss, color));
+        store.markDirty();
+    }
+
+    // ------------------------------------------------------------ 图标
+
+    private static void onIconSet(XC_MethodHook.MethodHookParam p) {
+        if (!(p.thisObject instanceof View)) return;
+        View v = (View) p.thisObject;
+        if (v instanceof TextView) return; // 文字控件已经由 setText 那条线记录
+        maybeReload();
+        RecConfig c = cfg;
+        if (!c.enabled || !c.traceIcons) return;
+
+        Object[] a = p.args;
+        String m = p.method.getName();
+        String cls = v.getClass().getName();
+        long key = mix(mix(mix(SEED, cls.hashCode()), v.getId()), m.hashCode());
+        if (v instanceof ImageView) {
+            Drawable d = ((ImageView) v).getDrawable();
+            key = mix(key, d == null ? 0 : d.getClass().hashCode());
+        }
+        if (a != null && a.length > 0 && a[0] instanceof Integer) key = mix(key, (Integer) a[0]);
+        CharSequence cd = v.getContentDescription();
+        if (cd != null) key = mix(key, cd.toString().hashCode());
+        key = mix(key, 5);
+
+        Store.DrawProxy dp = store.drawProxy(key);
+        int n = dp.n.incrementAndGet();
+        Rec r = dp.rec;
+        boolean want = r == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
+        if (!want) { // 列表滚动时图标会被反复设置：已知位置只计数
+            r.tick();
+            r.trackView(v);
+            store.markDirty();
+            return;
+        }
+        String desc = iconDesc(v, p);
+        if (!filter.accept(desc)) return;
+        long shape = shapeHash(desc);
+        store.setEvents.incrementAndGet();
+        if (store.allowStack(c.stacksPerSec)) {
+            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.stackDepth, false);
+            SetStack ss = store.internSet(new SetStack(stk, Thread.currentThread().getName()), v.getClass().getClassLoader());
+            ss.count.incrementAndGet();
+            Rec nr = obtain(Rec.ICON, cls, idName(v), ss, EMPTY, v, desc, shape, c);
+            if (nr != null) {
+                dp.rec = nr;
+                r = nr;
+            }
+        }
+        if (r != null) {
+            r.touch(desc, shape);
+            r.trackView(v);
+        }
+        store.markDirty();
+    }
+
+    private static String iconDesc(View v, XC_MethodHook.MethodHookParam p) {
+        String m = p.method.getName();
+        Object[] a = p.args;
+        StringBuilder sb = new StringBuilder(64);
+        sb.append(m);
+        if (m.equals("setImageResource") && a != null && a.length > 0 && a[0] instanceof Integer) {
+            sb.append(" res=").append(resName(v, (Integer) a[0]));
+        }
+        if (v instanceof ImageView) {
+            Drawable d = ((ImageView) v).getDrawable();
+            if (d == null) {
+                sb.append(" drawable=null");
+            } else {
+                sb.append(" drawable=").append(d.getClass().getSimpleName());
+                if (d instanceof BitmapDrawable) {
+                    Bitmap b = ((BitmapDrawable) d).getBitmap();
+                    if (b != null) sb.append(' ').append(b.getWidth()).append('x').append(b.getHeight());
+                }
+            }
+        }
+        CharSequence cd = v.getContentDescription();
+        if (cd != null && cd.length() > 0) {
+            sb.append(" desc=\"").append(cd.length() > 40 ? cd.subSequence(0, 40) + "…" : cd).append('"');
+        }
+        return sb.toString();
+    }
+
+    private static String resName(View v, int id) {
+        try {
+            return v.getResources().getResourceEntryName(id);
+        } catch (Throwable t) {
+            return "0x" + Integer.toHexString(id);
+        }
+    }
+
     // ------------------------------------------------------------ 画文字
 
     private static void onDrawText(XC_MethodHook.MethodHookParam p) {
@@ -278,12 +768,13 @@ final class Recorder {
         if (text == null || text.isEmpty() || !filter.accept(text)) return;
 
         store.drawEvents.incrementAndGet();
-        if (v != null) drawTextView(c, v, text);
-        else drawCanvas(c, text);
+        Paint pt = paintOf(a);
+        if (v != null) drawTextView(c, v, text, pt);
+        else drawCanvas(c, text, pt, a);
         store.markDirty();
     }
 
-    private static void drawTextView(RecConfig c, TextView v, String text) {
+    private static void drawTextView(RecConfig c, TextView v, String text, Paint pt) {
         SetStack ss = VIEW_SET.get(v);
         String cls = v.getClass().getName();
         long shape = shapeHash(text);
@@ -305,12 +796,19 @@ final class Recorder {
         if (r != null) {
             r.touch(text, shape);
             r.trackView(v);
+            if (c.traceColor) {
+                notePaint(r, pt);
+                ColorSet cs = VIEW_COLOR.get(v);
+                if (cs != null) r.colorSet = cs;
+            }
         }
     }
 
-    private static void drawCanvas(RecConfig c, String text) {
+    private static void drawCanvas(RecConfig c, String text, Paint pt, Object[] a) {
         long shape = shapeHash(text);
-        long key = mix(mix(mix(SEED, Thread.currentThread().getName().hashCode()), shape), 3);
+        PaintCtx ctx = PAINT.get();
+        long key = mix(mix(mix(mix(SEED, Thread.currentThread().getName().hashCode()), shape),
+                ctx == null ? 0 : ctx.key), 3);
         Store.DrawProxy dp = store.drawProxy(key);
         int n = dp.n.incrementAndGet();
         Rec r = dp.rec;
@@ -325,7 +823,116 @@ final class Recorder {
                 r = nr;
             }
         }
-        if (r != null) r.touch(text, shape);
+        if (r != null) {
+            r.touch(text, shape);
+            setPos(r, a);
+            if (c.traceColor) notePaint(r, pt);
+        }
+    }
+
+    /** 记一次画笔：颜色、字号、描边/填充；Compose 文字再带上 paint 调用的参数。新变体才拼字符串。 */
+    private static void notePaint(Rec r, Paint pt) {
+        PaintCtx ctx = PAINT.get();
+        if (pt == null && ctx == null) return;
+        long key = SEED;
+        if (pt != null) {
+            key = mix(key, pt.getColor());
+            key = mix(key, Float.floatToIntBits(pt.getTextSize()));
+            Paint.Style st = pt.getStyle();
+            key = mix(key, st == null ? 0 : st.ordinal());
+        }
+        if (ctx != null) key = mix(key, ctx.key);
+        if (r.knowsPaint(key)) return;
+        boolean[] busy = BUSY.get();
+        if (busy[0]) return;
+        busy[0] = true;
+        try {
+            StringBuilder sb = new StringBuilder(128);
+            if (ctx != null) sb.append(callDesc(ctx.name, ctx.args, 1)).append("  →  ");
+            if (pt != null) sb.append(paintDesc(pt));
+            r.addPaint(key, sb.toString());
+        } finally {
+            busy[0] = false;
+        }
+    }
+
+    private static String callDesc(String name, Object[] a, int from) {
+        StringBuilder sb = new StringBuilder(96);
+        sb.append(name).append('(');
+        if (a != null) {
+            for (int i = from; i < a.length; i++) {
+                if (i > from) sb.append(", ");
+                sb.append(argStr(a[i]));
+            }
+        }
+        return sb.append(')').toString();
+    }
+
+    private static String paintDesc(Paint pt) {
+        StringBuilder sb = new StringBuilder(64);
+        sb.append("Paint(color=0x").append(String.format(Locale.US, "%08X", pt.getColor()));
+        sb.append(" size=").append(pt.getTextSize());
+        Paint.Style st = pt.getStyle();
+        sb.append(" style=").append(st == null ? "?" : st.name());
+        if (pt.getShader() != null) sb.append(" shader=").append(pt.getShader().getClass().getSimpleName());
+        return sb.append(')').toString();
+    }
+
+    private static Paint paintOf(Object[] a) {
+        Object o = a[a.length - 1];
+        return o instanceof Paint ? (Paint) o : null;
+    }
+
+    /** 画布内坐标：参数里第一对相邻的 float（drawText 的 x,y / drawTextRun 的 x,y / drawTextOnPath 的偏移）。 */
+    private static void setPos(Rec r, Object[] a) {
+        for (int i = 0; i + 1 < a.length; i++) {
+            if (a[i] instanceof Float && a[i + 1] instanceof Float) {
+                r.posX = (Float) a[i];
+                r.posY = (Float) a[i + 1];
+                return;
+            }
+        }
+    }
+
+    /** 参数的可读摘要。long 同时给十六进制；像 Compose Color 打包值（低 32 位为 0）的会标出 ARGB。 */
+    private static String argStr(Object o) {
+        if (o == null) return "null";
+        if (o instanceof Long) {
+            long v = (Long) o;
+            String h = "0x" + Long.toHexString(v);
+            if ((v & 0xFFFFFFFFL) == 0 && v != 0) {
+                return h + "(≈Compose Color ARGB 0x" + String.format(Locale.US, "%08X", (int) (v >>> 32)) + ")";
+            }
+            return v + "(" + h + ")";
+        }
+        if (o instanceof Integer || o instanceof Short || o instanceof Byte || o instanceof Float
+                || o instanceof Double || o instanceof Boolean || o instanceof Character) {
+            return String.valueOf(o);
+        }
+        if (o instanceof CharSequence) {
+            String s = o.toString();
+            return "\"" + (s.length() > 60 ? s.substring(0, 60) + "…" : s) + "\"";
+        }
+        if (o instanceof Paint) return paintDesc((Paint) o);
+        Class<?> k = o.getClass();
+        if (o instanceof View || o instanceof Context || o instanceof Canvas) return simpleName(k.getName());
+        if (k.isArray()) return k.getComponentType().getSimpleName() + "[" + java.lang.reflect.Array.getLength(o) + "]";
+        if (o instanceof Collection) return simpleName(k.getName()) + "(size=" + ((Collection<?>) o).size() + ")";
+        if (o instanceof Map) return simpleName(k.getName()) + "(size=" + ((Map<?, ?>) o).size() + ")";
+        String s;
+        try {
+            s = String.valueOf(o);
+        } catch (Throwable t) {
+            s = null;
+        }
+        String cn = k.getName();
+        if (s == null || s.startsWith(cn + "@")) return simpleName(cn); // 默认 toString（Kotlin object 如 Fill）只显示类名
+        return s.length() > 80 ? s.substring(0, 80) + "…" : s;
+    }
+
+    private static String simpleName(String cn) {
+        int i = cn.lastIndexOf('.');
+        return i >= 0 ? cn.substring(i + 1) : cn;
     }
 
     /** 按归并 key 找记录，没有就新建。文字内容不进 key。 */
@@ -385,7 +992,7 @@ final class Recorder {
         return null;
     }
 
-    /** 从 drawText / drawTextRun 的参数里取出真正画的那一段文字。 */
+    /** 从 drawText / drawTextRun / drawTextOnPath 的参数里取出真正画的那一段文字。 */
     private static String drawnText(Object[] a) {
         Object t = a[0];
         try {
@@ -406,6 +1013,23 @@ final class Recorder {
                     return cs.subSequence(s, e).toString();
                 }
                 return cs.length() <= 4000 ? cs.toString() : null;
+            }
+            if (t != null && "android.graphics.text.MeasuredText".equals(t.getClass().getName())) {
+                // drawTextRun(MeasuredText, ...)：文字在 MeasuredText 里，读不到也要留一条记录，不能悄悄丢掉
+                try {
+                    Method gm = t.getClass().getDeclaredMethod("getChars");
+                    gm.setAccessible(true);
+                    char[] cs = (char[]) gm.invoke(t);
+                    if (cs != null) {
+                        if (a.length > 2 && a[1] instanceof Integer && a[2] instanceof Integer) {
+                            int s = (Integer) a[1], e = (Integer) a[2];
+                            if (s >= 0 && e >= s && e <= cs.length && e - s <= 4000) return new String(cs, s, e - s);
+                        }
+                        if (cs.length <= 4000) return new String(cs);
+                    }
+                } catch (Throwable ignored) {
+                }
+                return "[MeasuredText：读不到文字]";
             }
         } catch (Throwable ignored) {
         }
