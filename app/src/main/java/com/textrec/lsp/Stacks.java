@@ -46,7 +46,31 @@ final class Stacks {
     }
 
     static final String TAG_STABLE = "   [稳定]";
+    static final String TAG_WIDGET = "   [稳定·通用控件，hook 后要按 View id/类过滤]";
+    static final String TAG_INFRA = "   [稳定·通用基础设施，不建议当 hook 点]";
     static final String TAG_OBF = "   [混淆·换版本会变]";
+
+    /** 通用基础设施：消息分发、LiveData、Fragment 生命周期、异步包装……几乎所有功能都会经过，当 hook 点没有意义。 */
+    static boolean isGenericInfra(String cn) {
+        return cn.startsWith("com.ss.android.ugc.bytex.") || cn.startsWith("com.bytedance.qmi.")
+                || cn.startsWith("androidx.lifecycle.") || cn.startsWith("androidx.fragment.app.")
+                || cn.startsWith("androidx.core.") || cn.startsWith("androidx.recyclerview.")
+                || cn.startsWith("androidx.appcompat.app.") || cn.startsWith("androidx.arch.")
+                || cn.startsWith("androidx.activity.") || cn.startsWith("androidx.collection.");
+    }
+
+    /** 通用控件：hook 它会影响同类的所有控件，必须再按 View id / 类 / 父级过滤。 */
+    static boolean isGenericWidget(String cn) {
+        return cn.startsWith("androidx.appcompat.widget.") || cn.startsWith("androidx.constraintlayout.")
+                || cn.startsWith("com.bytedance.dux.") || cn.startsWith("com.bytedance.ies.dmt.ui.");
+    }
+
+    static String tagFor(String cn, String mn) {
+        if (isObfuscated(cn, mn)) return TAG_OBF;
+        if (isGenericInfra(cn)) return TAG_INFRA;
+        if (isGenericWidget(cn)) return TAG_WIDGET;
+        return TAG_STABLE;
+    }
     /** 字节的构建把方法名改成 LJ / LIZ / LJIIIIZZ 这类；R8 会把名字缩成 a、b、aa… */
     private static final Pattern OBF_METHOD = Pattern.compile("L[A-Z]{1,12}|[A-Za-z]");
 
@@ -172,7 +196,7 @@ final class Stacks {
         int h = 17, used = 0, idx = 0;
         boolean compose = false;
         ArrayList<String[]> top = new ArrayList<>(6);
-        int extras = 0, scanned = 0;
+        int extras = 0, scanned = 0, appLayer = 0; // appLayer：只数 App 帧（不含系统和 kotlin 库帧）
         for (StackTraceElement e : fr) {
             boolean inSig = idx++ < sigEnd;
             String cn = e.getClassName();
@@ -185,11 +209,14 @@ final class Stacks {
                 used++;
             }
             if (!fw && !isLangLib(cn)) {
+                appLayer++;
                 if (top.size() < 3) {
-                    top.add(new String[]{cn, mn});
-                } else if (extras < 3 && scanned < 16 && !noise(mn) && isStable(cn, mn) && !hasFrame(top, cn, mn)) {
-                    // 前 3 个常常是混淆帧；再多带最多 3 个“没混淆”的帧，换版本后还能用
-                    top.add(new String[]{cn, mn});
+                    // 连续的构造方法链 / 重载链会出现同一个“类#方法”好几次，只留一个
+                    if (!hasFrame(top, cn, mn)) top.add(new String[]{cn, mn, String.valueOf(appLayer)});
+                } else if (extras < 3 && appLayer <= 14 && !noise(mn) && isStable(cn, mn) && !isGenericInfra(cn)
+                        && !hasFrame(top, cn, mn)) {
+                    // 前 3 个常常是混淆帧；再多带最多 3 个“没混淆”的帧，换版本后还能用（通用基础设施帧不要）
+                    top.add(new String[]{cn, mn, String.valueOf(appLayer)});
                     extras++;
                 }
             }
