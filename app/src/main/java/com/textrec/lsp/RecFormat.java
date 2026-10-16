@@ -20,6 +20,8 @@ final class RecFormat {
         if ("TEXTVIEW".equals(kind)) return "TextView";
         if ("COMPOSE".equals(kind)) return "Compose";
         if ("CANVAS".equals(kind)) return "自绘";
+        if ("ICON".equals(kind)) return "图标";
+        if ("TRACE".equals(kind)) return "方法追踪";
         return kind;
     }
 
@@ -47,9 +49,20 @@ final class RecFormat {
         StringBuilder sb = new StringBuilder();
         sb.append('#').append(r.optInt("id")).append("  ").append(kindLabel(r.optString("kind")))
                 .append("  进程 ").append(it.proc).append('\n');
-        sb.append("绘制 ").append(r.optInt("drawCount")).append(" 次 / 该设置位置共调用 ").append(r.optInt("setCount"))
-                .append(" 次(可能含同一代码设置的其他控件)   首次 ").append(time(r.optLong("first")))
+        String kind = r.optString("kind");
+        if ("TRACE".equals(kind)) {
+            sb.append("调用 ").append(r.optInt("drawCount")).append(" 次（同一个调用位置）");
+        } else if ("ICON".equals(kind)) {
+            sb.append("设置 ").append(r.optInt("drawCount")).append(" 次 / 该设置位置共调用 ").append(r.optInt("setCount"))
+                    .append(" 次(可能含同一代码设置的其他控件)");
+        } else {
+            sb.append("绘制 ").append(r.optInt("drawCount")).append(" 次 / 该设置位置共调用 ").append(r.optInt("setCount"))
+                    .append(" 次(可能含同一代码设置的其他控件)");
+        }
+        sb.append("   首次 ").append(time(r.optLong("first")))
                 .append("  末次 ").append(time(r.optLong("last"))).append('\n');
+        String rec = recommend(r);
+        if (rec != null) sb.append("推荐 hook 点: ").append(rec).append('\n');
         String id = r.optString("viewId");
         sb.append("View: ").append(r.optString("view")).append(id.isEmpty() ? "" : "   id=" + id).append('\n');
         String act = r.optString("activity");
@@ -88,15 +101,52 @@ final class RecFormat {
         JSONArray ts = r.optJSONArray("texts");
         int n = ts == null ? 0 : ts.length();
         int more = r.optInt("textsMore");
+        String what = "TRACE".equals(kind) ? "调用" : "ICON".equals(kind) ? "图标" : "文字";
+        String varLabel = "TRACE".equals(kind) ? "种调用参数（参数 → 返回值）" : "ICON".equals(kind) ? "种图标设置" : "种文字";
         if (n <= 1) {
-            sb.append("文字: 「").append(oneLine(r.optString("lastText"))).append("」\n");
+            sb.append(what).append(": 「").append(oneLine(r.optString("lastText"))).append("」\n");
         } else {
-            sb.append("这个位置出现过 ").append(n + more).append(" 种文字：\n");
+            sb.append("这个位置出现过 ").append(n + more).append(varLabel).append("：\n");
             for (int i = 0; i < n; i++) sb.append("  · ").append(oneLine(ts.optString(i))).append('\n');
             if (more > 0) sb.append("  … 另有 ").append(more).append(" 种未列出\n");
             sb.append("最近一次: 「").append(oneLine(r.optString("lastText"))).append("」\n");
         }
+        JSONArray pa = r.optJSONArray("paints");
+        if (pa != null && pa.length() > 0) {
+            sb.append("画笔/参数（颜色、字号、描边或填充；Compose 文字带 paint 调用的参数）：\n");
+            for (int i = 0; i < pa.length(); i++) {
+                JSONObject po = pa.optJSONObject(i);
+                if (po == null) continue;
+                sb.append("  · ").append(oneLine(po.optString("desc"))).append("  ×").append(po.optInt("n")).append('\n');
+            }
+            int pm = r.optInt("paintsMore");
+            if (pm > 0) sb.append("  … 另有 ").append(pm).append(" 种未列出\n");
+        }
+        JSONArray pos = r.optJSONArray("pos");
+        if (pos != null && pos.length() == 2) {
+            sb.append("画布内坐标(最近一次，不是屏幕坐标): (").append(pos.optDouble(0)).append(", ").append(pos.optDouble(1)).append(")\n");
+        }
+        String tc = r.optString("textColor");
+        if (!tc.isEmpty()) sb.append("文字颜色(最近一次被设置): ").append(tc).append("   设置位置见左栏末尾\n");
         return sb.toString();
+    }
+
+    /** 推荐的 hook 点：优先“没混淆”的（换版本还能用），没有再退而求其次用混淆的。 */
+    static String recommend(JSONObject r) {
+        String any = null;
+        String[] keys = {"drawStack", "setStack", "colorStack"};
+        for (String k : keys) {
+            JSONObject s = r.optJSONObject(k);
+            JSONArray g = s == null ? null : s.optJSONArray("sigs");
+            if (g == null) continue;
+            for (int i = 0; i < g.length(); i++) {
+                String sig = g.optString(i);
+                if (sig.contains("类未能加载") || sig.contains("反射失败") || sig.contains("没找到")) continue;
+                if (sig.endsWith(Stacks.TAG_STABLE)) return sig.trim();
+                if (any == null) any = sig.trim();
+            }
+        }
+        return any == null ? null : any + "   （只有混淆名，App 更新后要重新找）";
     }
 
     /** 列表里的一行文字摘要：这个位置下的前几种文字 */
@@ -155,11 +205,22 @@ final class RecFormat {
 
     static String setColumn(Snap.Item it) {
         JSONObject r = it.o;
-        return column("设置栈 setText", r.optJSONObject("setStack"), r.optString("setNote"));
+        String kind = r.optString("kind");
+        String title = "ICON".equals(kind) ? "设置栈 setImage*/setContentDescription" : "设置栈 setText";
+        String s = column(title, r.optJSONObject("setStack"), r.optString("setNote"));
+        JSONObject cs = r.optJSONObject("colorStack");
+        if (cs != null) {
+            s += "\n" + column("文字颜色设置栈 setTextColor（颜色 " + r.optString("textColor") + "）", cs, "");
+        } else if (!r.optString("textColor").isEmpty()) {
+            s += "\n【文字颜色】" + r.optString("textColor") + "（设置栈被限流，没抓到）\n";
+        }
+        return s;
     }
 
     static String drawColumn(Snap.Item it) {
-        return column("绘制栈 draw", it.o.optJSONObject("drawStack"), "");
+        JSONObject r = it.o;
+        String title = "TRACE".equals(r.optString("kind")) ? "调用栈（谁调用了它）" : "绘制栈 draw";
+        return column(title, r.optJSONObject("drawStack"), r.optString("drawNote"));
     }
 
     static String full(Snap.Item it) {
@@ -170,8 +231,11 @@ final class RecFormat {
     static String sigsOnly(Snap.Item it) {
         StringBuilder sb = new StringBuilder();
         sb.append("# ").append(it.o.optString("view")).append("  文字「").append(oneLine(it.o.optString("lastText"))).append("」\n");
+        String rec = recommend(it.o);
+        if (rec != null) sb.append("推荐: ").append(rec).append('\n');
         appendSigs(sb, "设置侧", it.o.optJSONObject("setStack"));
-        appendSigs(sb, "绘制侧", it.o.optJSONObject("drawStack"));
+        appendSigs(sb, "绘制/调用侧", it.o.optJSONObject("drawStack"));
+        appendSigs(sb, "颜色设置侧", it.o.optJSONObject("colorStack"));
         return sb.toString();
     }
 
@@ -182,6 +246,12 @@ final class RecFormat {
             sb.append("  (无)\n");
             return;
         }
-        for (int i = 0; i < g.length(); i++) sb.append("  ").append(g.optString(i)).append('\n');
+        for (int pass = 0; pass < 2; pass++) { // 先列稳定的，再列混淆的
+            for (int i = 0; i < g.length(); i++) {
+                String sig = g.optString(i);
+                boolean stable = sig.endsWith(Stacks.TAG_STABLE);
+                if ((pass == 0) == stable) sb.append("  ").append(sig).append('\n');
+            }
+        }
     }
 }
