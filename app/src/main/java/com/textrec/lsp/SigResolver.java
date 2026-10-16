@@ -58,18 +58,25 @@ final class SigResolver {
         ArrayList<String> out = new ArrayList<>();
         for (String[] f : top) {
             String cn = f[0], mn = f[1];
+            String tag = Stacks.isObfuscated(cn, mn) ? Stacks.TAG_OBF : Stacks.TAG_STABLE;
             Class<?> c = load(cn, hint);
             if (c == null) {
-                out.add(cn + "#" + mn + "  (类未能加载，无法查签名)");
+                out.add(cn + "#" + mn + "  (类未能加载，无法查签名)" + tag);
                 continue;
             }
+            int before = out.size();
             try {
                 describe(c, cn, mn, out);
             } catch (Throwable t) {
                 out.add(cn + "#" + mn + "  (反射失败: " + t.getClass().getSimpleName() + ")");
             }
+            for (int i = before; i < out.size(); i++) out.set(i, out.get(i) + tag);
         }
         return out.toArray(new String[0]);
+    }
+
+    static Class<?> findClass(String cn, ClassLoader hint) {
+        return load(cn, hint);
     }
 
     private static Class<?> load(String cn, ClassLoader hint) {
