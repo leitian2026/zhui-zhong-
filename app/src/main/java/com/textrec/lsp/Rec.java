@@ -42,6 +42,11 @@ final class Rec {
     static final String TEXTVIEW = "TEXTVIEW";
     static final String CANVAS = "CANVAS";
     static final String COMPOSE = "COMPOSE";
+    /**
+     * 文字被 setText 设置过，但所在控件从未被绘制（INVISIBLE / GONE / 尺寸为 0 / 未挂到窗口 / 父级不可见）。
+     * 这类文字没有“绘制”事件，只能从设置那一侧发现；是否仍“从未绘制”在写快照时动态判断。
+     */
+    static final String TEXTSET = "TEXTSET";
     /** ImageView 图标 / 设了 contentDescription 的非文字控件 */
     static final String ICON = "ICON";
     /** 用户指定的“方法追踪”：draw 栈 = 调用栈，texts = 参数→返回值变体 */
@@ -139,6 +144,16 @@ final class Rec {
         }
     }
 
+    /** TEXTSET：每次 setText 命中时调用（不增加绘制次数）。 */
+    void noteSet(String text, long shape) {
+        last = System.currentTimeMillis();
+        lastText = clip(text);
+        if (shape != lastShape) {
+            lastShape = shape;
+            addSample(shape, text);
+        }
+    }
+
     /** 只计数不取样（高频方法追踪时的降级）。 */
     void tick() {
         drawCount.incrementAndGet();
@@ -227,6 +242,31 @@ final class Rec {
         }
     }
 
+    /** 被跟踪且还活着的 View（拷贝）。 */
+    List<View> liveViews() {
+        ArrayList<View> out = new ArrayList<>();
+        synchronized (views) {
+            for (WeakReference<View> w : views) {
+                View v = w.get();
+                if (v != null) out.add(v);
+            }
+        }
+        return out;
+    }
+
+    /** 已挂在窗口、可见、alpha 不为 0、可见区域与窗口有交集。 */
+    static boolean onScreen(View v, Rect rc) {
+        try {
+            if (!v.isAttachedToWindow() || !v.isShown() || v.getAlpha() < 0.05f) return false;
+            if (!v.getGlobalVisibleRect(rc)) return false;
+            View root = v.getRootView();
+            return !(root != null && (rc.right <= 0 || rc.bottom <= 0
+                    || rc.left >= root.getWidth() || rc.top >= root.getHeight()));
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     /**
      * 此刻在屏幕上的文字/图标：被跟踪的 View 里，已挂在窗口上、可见、alpha 不为 0、
      * 且可见区域与窗口有交集的那些，取它们【当前】的文字和屏幕坐标。
@@ -245,11 +285,7 @@ final class Rec {
         Rect rc = new Rect();
         for (View v : vs) {
             try {
-                if (!v.isAttachedToWindow() || !v.isShown() || v.getAlpha() < 0.05f) continue;
-                if (!v.getGlobalVisibleRect(rc)) continue;
-                View root = v.getRootView();
-                if (root != null && (rc.right <= 0 || rc.bottom <= 0
-                        || rc.left >= root.getWidth() || rc.top >= root.getHeight())) continue;
+                if (!onScreen(v, rc)) continue;
                 String t;
                 if (v instanceof TextView) {
                     CharSequence ct = ((TextView) v).getText();
