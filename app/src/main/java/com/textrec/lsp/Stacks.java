@@ -20,13 +20,28 @@ final class Stacks {
         final String[][] top;
         final boolean compose;
 
+        /** 设置发生在 XML 布局加载里（layout 里写死的 src/text），栈里没有业务代码，不用于 hook */
+        final boolean xmlOnly;
+
         Stk(String[] lines, int more, int sig, String[][] top, boolean compose) {
+            this(lines, more, sig, top, compose, false);
+        }
+
+        Stk(String[] lines, int more, int sig, String[][] top, boolean compose, boolean xmlOnly) {
             this.lines = lines;
             this.more = more;
             this.sig = sig;
             this.top = top;
             this.compose = compose;
+            this.xmlOnly = xmlOnly;
         }
+    }
+
+    /** XML 布局加载链：LayoutInflater / 反射构造 / AppCompat 的 View 工厂。 */
+    static boolean isInflation(String cn) {
+        return cn.startsWith("android.view.LayoutInflater") || cn.startsWith("java.lang.reflect.Constructor")
+                || cn.startsWith("androidx.core.view.LayoutInflaterCompat")
+                || cn.startsWith("androidx.appcompat.app.AppCompatViewInflater");
     }
 
     static boolean isFramework(String cn) {
@@ -180,14 +195,36 @@ final class Stacks {
     static Stk build(List<StackTraceElement> raw, int depth, boolean appOnlySig) {
         int lastApp = -1;
         for (int i = 0; i < raw.size(); i++) {
-            if (!isFramework(raw.get(i).getClassName())) lastApp = i;
+            String c0 = raw.get(i).getClassName();
+            // 尾部的消息分发/LiveData/异步包装这类通用基础设施帧不算“业务帧”，从它们开始截掉
+            if (!isFramework(c0) && !isGenericInfra(c0)) lastApp = i;
         }
         List<StackTraceElement> fr = raw;
         if (lastApp >= 0 && lastApp + 2 < raw.size()) fr = raw.subList(0, lastApp + 2);
 
-        int n = Math.min(depth, fr.size());
+        // 显示行：连续的 XML 布局加载帧（LayoutInflater / Constructor.newInstance…）折叠成一行
+        ArrayList<String> disp = new ArrayList<>();
+        ArrayList<Integer> cover = new ArrayList<>();
+        for (int i = 0; i < fr.size(); ) {
+            if (isInflation(fr.get(i).getClassName())) {
+                int j = i;
+                while (j < fr.size() && isInflation(fr.get(j).getClassName())) j++;
+                disp.add("[XML 布局加载 " + (j - i) + " 帧：Constructor.newInstance … LayoutInflater.inflate]");
+                cover.add(j - i);
+                i = j;
+            } else {
+                disp.add(fr.get(i).toString());
+                cover.add(1);
+                i++;
+            }
+        }
+        int n = Math.min(depth, disp.size());
         String[] lines = new String[n];
-        for (int i = 0; i < n; i++) lines[i] = fr.get(i).toString();
+        int covered = 0;
+        for (int i = 0; i < n; i++) {
+            lines[i] = disp.get(i);
+            covered += cover.get(i);
+        }
 
         // 签名只算到最后一个 App 帧为止：尾部保留的那个系统帧只用于显示，不参与签名
         // （否则 Handler.handleCallback / dispatchMessage 这类调度差异会让同一位置裂成多条）。
@@ -223,6 +260,28 @@ final class Stacks {
             scanned++;
         }
         if (used == 0) h = h * 31 + 0x5f3759df; // 纯系统栈：给一个固定签名
-        return new Stk(lines, fr.size() - n, h, top.toArray(new String[0][]), compose);
+
+        // XML 里写死的设置：布局加载链之前只有构造方法 / 系统帧 / 通用控件帧，没有任何业务代码。
+        boolean xmlOnly = false;
+        int fi = -1;
+        for (int i = 0; i < fr.size(); i++) {
+            if (isInflation(fr.get(i).getClassName())) {
+                fi = i;
+                break;
+            }
+        }
+        if (fi >= 0) {
+            xmlOnly = true;
+            for (int i = 0; i < fi; i++) {
+                StackTraceElement e = fr.get(i);
+                String c1 = e.getClassName();
+                if (!(e.getMethodName().equals("<init>") || isFramework(c1) || isGenericWidget(c1))) {
+                    xmlOnly = false;
+                    break;
+                }
+            }
+        }
+        if (xmlOnly) top.clear(); // 没有可 hook 的业务点，不浪费签名解析和导出体积
+        return new Stk(lines, fr.size() - covered, h, top.toArray(new String[0][]), compose, xmlOnly);
     }
 }
