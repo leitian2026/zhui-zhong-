@@ -58,10 +58,11 @@ final class SigResolver {
         ArrayList<String> out = new ArrayList<>();
         for (String[] f : top) {
             String cn = f[0], mn = f[1];
-            String tag = Stacks.isObfuscated(cn, mn) ? Stacks.TAG_OBF : Stacks.TAG_STABLE;
+            String tag = Stacks.tagFor(cn, mn);
+            String layer = f.length > 2 ? "  @栈第" + f[2] + "层" : "";
             Class<?> c = load(cn, hint);
             if (c == null) {
-                out.add(cn + "#" + mn + "  (类未能加载，无法查签名)" + tag);
+                out.add(cn + "#" + mn + "  (类未能加载，无法查签名)" + layer + tag);
                 continue;
             }
             int before = out.size();
@@ -70,9 +71,10 @@ final class SigResolver {
             } catch (Throwable t) {
                 out.add(cn + "#" + mn + "  (反射失败: " + t.getClass().getSimpleName() + ")");
             }
-            for (int i = before; i < out.size(); i++) out.set(i, out.get(i) + tag);
+            for (int i = before; i < out.size(); i++) out.set(i, out.get(i) + layer + tag);
         }
-        return out.toArray(new String[0]);
+        // 去重（同一个方法被多个栈帧引用时会重复列出）
+        return new java.util.ArrayList<>(new java.util.LinkedHashSet<>(out)).toArray(new String[0]);
     }
 
     static Class<?> findClass(String cn, ClassLoader hint) {
