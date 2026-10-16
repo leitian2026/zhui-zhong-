@@ -45,6 +45,36 @@ final class Stacks {
         return cn.startsWith("kotlin.") || cn.startsWith("kotlinx.");
     }
 
+    static final String TAG_STABLE = "   [稳定]";
+    static final String TAG_OBF = "   [混淆·换版本会变]";
+    /** 字节的构建把方法名改成 LJ / LIZ / LJIIIIZZ 这类；R8 会把名字缩成 a、b、aa… */
+    private static final Pattern OBF_METHOD = Pattern.compile("L[A-Z]{1,12}|[A-Za-z]");
+
+    /** 混淆名：类名 X.xxx、方法名 LJxxx、或类名只有 1~2 个字符。这类名字 App 一更新就会变。 */
+    static boolean isObfuscated(String cn, String mn) {
+        if (cn.startsWith("X.")) return true;
+        if (mn != null && OBF_METHOD.matcher(mn).matches()) return true;
+        int i = cn.lastIndexOf('.');
+        String simple = i >= 0 ? cn.substring(i + 1) : cn;
+        int d = simple.indexOf('$');
+        if (d > 0) simple = simple.substring(0, d);
+        return simple.length() <= 2;
+    }
+
+    /** 稳定：不是系统/语言库/本模块，也没被混淆（如 androidx.compose.ui.text.MultiParagraph.paint-LG529CI） */
+    static boolean isStable(String cn, String mn) {
+        return !isFramework(cn) && !isLangLib(cn) && !isInfra(cn) && !isObfuscated(cn, mn);
+    }
+
+    private static boolean noise(String mn) {
+        return mn.contains("$default") || mn.contains("lambda$") || mn.contains("$lambda") || mn.equals("<clinit>");
+    }
+
+    private static boolean hasFrame(List<String[]> top, String cn, String mn) {
+        for (String[] f : top) if (f[0].equals(cn) && f[1].equals(mn)) return true;
+        return false;
+    }
+
     /**
      * 抓当前调用栈：去掉 Hook 框架自身的帧（含它生成的跳板类、intercept/proceed 调用链）；
      * dropLeading=true 时再去掉最前面的系统帧，直接露出 App 代码。
@@ -141,10 +171,12 @@ final class Stacks {
         int sigEnd = lastApp >= 0 ? lastApp + 1 : fr.size();
         int h = 17, used = 0, idx = 0;
         boolean compose = false;
-        ArrayList<String[]> top = new ArrayList<>(3);
+        ArrayList<String[]> top = new ArrayList<>(6);
+        int extras = 0, scanned = 0;
         for (StackTraceElement e : fr) {
             boolean inSig = idx++ < sigEnd;
             String cn = e.getClassName();
+            String mn = e.getMethodName();
             if (cn.startsWith("androidx.compose.ui.")) compose = true;
             boolean fw = isFramework(cn);
             if (inSig && used < 8 && !(appOnlySig && fw)) {
@@ -152,9 +184,16 @@ final class Stacks {
                 h = h * 31 + nm.hashCode();
                 used++;
             }
-            if (top.size() < 3 && !fw && !isLangLib(cn)) {
-                top.add(new String[]{cn, e.getMethodName()});
+            if (!fw && !isLangLib(cn)) {
+                if (top.size() < 3) {
+                    top.add(new String[]{cn, mn});
+                } else if (extras < 3 && scanned < 16 && !noise(mn) && isStable(cn, mn) && !hasFrame(top, cn, mn)) {
+                    // 前 3 个常常是混淆帧；再多带最多 3 个“没混淆”的帧，换版本后还能用
+                    top.add(new String[]{cn, mn});
+                    extras++;
+                }
             }
+            scanned++;
         }
         if (used == 0) h = h * 31 + 0x5f3759df; // 纯系统栈：给一个固定签名
         return new Stk(lines, fr.size() - n, h, top.toArray(new String[0][]), compose);
