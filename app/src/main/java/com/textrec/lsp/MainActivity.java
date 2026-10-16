@@ -18,8 +18,8 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
-    private EditText etPkgs, etKeywords, etDepth, etPerKey, etSample, etPerSec, etMax;
-    private CheckBox cbEnabled, cbKeywordMode, cbRegex, cbSet, cbDraw;
+    private EditText etPkgs, etKeywords, etDepth, etPerKey, etSample, etPerSec, etMax, etTrace;
+    private CheckBox cbEnabled, cbKeywordMode, cbRegex, cbSet, cbDraw, cbColor, cbIcons, cbAuto;
     private Button btnPush, btnReset;
     private TextView tvStatus;
 
@@ -52,6 +52,12 @@ public class MainActivity extends Activity {
         root.addView(cbSet);
         cbDraw = check("记录“绘制位置”（drawText）");
         root.addView(cbDraw);
+        cbColor = check("记录文字颜色（画笔颜色 + TextView 的 setTextColor 设置位置）");
+        root.addView(cbColor);
+        cbIcons = check("记录图标/按钮图片（ImageView 的 setImage*、setContentDescription）");
+        root.addView(cbIcons);
+        cbAuto = check("自动观察 Compose 文字绘制参数（颜色、描边/填充，如弹幕）");
+        root.addView(cbAuto);
 
         root.addView(label("记录范围"));
         cbKeywordMode = check("只记录命中关键字的文字（默认关闭 = 全量记录屏幕上所有文字）");
@@ -77,6 +83,13 @@ public class MainActivity extends Activity {
         root.addView(text("最多保存多少条记录（默认 2000）", 12));
         etMax = number();
         root.addView(etMax);
+
+        root.addView(label("方法追踪（可选，只读）"));
+        root.addView(text("每行一个 类#方法，例如 androidx.compose.ui.text.MultiParagraph#paint-LG529CI；"
+                + "记录每次调用的参数、返回值和调用栈（谁调用了它）。类没加载时进入相关页面后会自动重试；"
+                + "构造方法写 类#<init>；以 // 开头的行是注释。注意别追踪每秒调用上千次的方法。", 12));
+        etTrace = edit(true, "例如：\nandroidx.compose.ui.text.MultiParagraph#paint-LG529CI");
+        root.addView(etTrace);
 
         btnPush = new Button(this);
         btnPush.setText("保存并推送配置");
@@ -114,6 +127,10 @@ public class MainActivity extends Activity {
         cbEnabled.setChecked(c.enabled);
         cbSet.setChecked(c.traceSet);
         cbDraw.setChecked(c.traceDraw);
+        cbColor.setChecked(c.traceColor);
+        cbIcons.setChecked(c.traceIcons);
+        cbAuto.setChecked(c.autoParams);
+        etTrace.setText(c.traceMethods);
         cbKeywordMode.setChecked(c.keywordMode);
         etKeywords.setText(c.keywords);
         cbRegex.setChecked(c.regex);
@@ -129,6 +146,10 @@ public class MainActivity extends Activity {
         c.enabled = cbEnabled.isChecked();
         c.traceSet = cbSet.isChecked();
         c.traceDraw = cbDraw.isChecked();
+        c.traceColor = cbColor.isChecked();
+        c.traceIcons = cbIcons.isChecked();
+        c.autoParams = cbAuto.isChecked();
+        c.traceMethods = etTrace.getText().toString();
         c.keywordMode = cbKeywordMode.isChecked();
         c.keywords = etKeywords.getText().toString();
         c.regex = cbRegex.isChecked();
