@@ -41,8 +41,8 @@ import java.util.regex.Pattern;
 public class RecordsActivity extends Activity {
     private static final int REQ_TXT = 2001, REQ_JSON = 2002;
     private static final String[] SORTS = {"最近", "次数", "首次"};
-    private static final String[] KINDS = {"全部", "TextView", "自绘", "Compose"};
-    private static final String[] KIND_KEYS = {"", "TEXTVIEW", "CANVAS", "COMPOSE"};
+    private static final String[] KINDS = {"全部", "TextView", "自绘", "Compose", "图标", "方法追踪"};
+    private static final String[] KIND_KEYS = {"", "TEXTVIEW", "CANVAS", "COMPOSE", "ICON", "TRACE"};
 
     private ListView lv;
     private EditText etSearch;
@@ -52,6 +52,9 @@ public class RecordsActivity extends Activity {
     private final List<Snap.Item> all = new ArrayList<>();
     private final List<Snap.Item> shown = new ArrayList<>();
     private volatile String infoBase = "";
+    /** 当前筛选下被“只看屏幕上”隐藏的记录数和编号——导出时写进文件头，免得看文件的人以为是漏记 */
+    private int hiddenOff;
+    private String hiddenIds = "";
     private int sortMode = 0, kindMode = 0;
     private final AtomicBoolean loading = new AtomicBoolean();
     private String pendingExport;
@@ -201,12 +204,14 @@ public class RecordsActivity extends Activity {
         }
         String kindKey = KIND_KEYS[kindMode];
         boolean onlyOnScreen = cbOnScreen.isChecked();
-        int hiddenOff = 0;
+        int hidden = 0;
+        StringBuilder hid = new StringBuilder();
         shown.clear();
         for (Snap.Item it : all) {
             if (!kindKey.isEmpty() && !kindKey.equals(it.o.optString("kind"))) continue;
             if (onlyOnScreen && "no".equals(it.o.optString("vis"))) {
-                hiddenOff++;
+                hidden++;
+                if (hid.length() < 200) hid.append(" #").append(it.o.optInt("id"));
                 continue;
             }
             if (re != null && !re.matcher(it.hay).find()) continue;
@@ -222,6 +227,8 @@ public class RecordsActivity extends Activity {
             }
             shown.add(it);
         }
+        hiddenOff = hidden;
+        hiddenIds = hid.toString();
         final int mode = sortMode;
         Collections.sort(shown, new Comparator<Snap.Item>() {
             @Override
@@ -294,6 +301,15 @@ public class RecordsActivity extends Activity {
             StringBuilder sb = new StringBuilder();
             sb.append("TextRec 导出  ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
                     .append("  共 ").append(shown.size()).append(" 条\n");
+            sb.append("筛选：只看屏幕上=").append(cbOnScreen.isChecked() ? "是" : "否");
+            if (cbOnScreen.isChecked()) {
+                sb.append("（已隐藏 ").append(hiddenOff).append(" 条不在屏幕上的")
+                        .append(hiddenOff > 0 ? "：" + hiddenIds.trim() : "").append("）");
+            }
+            sb.append("  类型=").append(KINDS[kindMode]);
+            String qs = etSearch.getText().toString().trim();
+            if (!qs.isEmpty()) sb.append("  搜索=「").append(qs).append("」");
+            sb.append("  （全部记录 ").append(all.size()).append(" 条）\n");
             if (!infoBase.isEmpty()) sb.append(infoBase);
             sb.append('\n');
             for (Snap.Item it : shown) sb.append(RecFormat.full(it)).append("\n==========================================\n\n");
@@ -306,6 +322,14 @@ public class RecordsActivity extends Activity {
                 JSONArray inf = new JSONArray();
                 for (String s : infoBase.split("\n")) if (!s.trim().isEmpty()) inf.put(s);
                 o.put("info", inf);
+                JSONObject fo = new JSONObject();
+                fo.put("onlyOnScreen", cbOnScreen.isChecked());
+                fo.put("hiddenOffScreen", hiddenOff);
+                fo.put("hiddenIds", hiddenIds.trim());
+                fo.put("kind", KINDS[kindMode]);
+                fo.put("query", etSearch.getText().toString().trim());
+                fo.put("totalRecords", all.size());
+                o.put("filter", fo);
                 JSONArray arr = new JSONArray();
                 for (Snap.Item it : shown) arr.put(it.o);
                 o.put("records", arr);
