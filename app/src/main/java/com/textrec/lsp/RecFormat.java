@@ -61,8 +61,7 @@ final class RecFormat {
         }
         sb.append("   首次 ").append(time(r.optLong("first")))
                 .append("  末次 ").append(time(r.optLong("last"))).append('\n');
-        String rec = recommend(r);
-        if (rec != null) sb.append("推荐 hook 点: ").append(rec).append('\n');
+        appendRecommend(sb, r);
         String id = r.optString("viewId");
         sb.append("View: ").append(r.optString("view")).append(id.isEmpty() ? "" : "   id=" + id).append('\n');
         String act = r.optString("activity");
@@ -131,22 +130,105 @@ final class RecFormat {
         return sb.toString();
     }
 
-    /** 推荐的 hook 点：优先“没混淆”的（换版本还能用），没有再退而求其次用混淆的。 */
-    static String recommend(JSONObject r) {
-        String any = null;
-        String[] keys = {"drawStack", "setStack", "colorStack"};
-        for (String k : keys) {
-            JSONObject s = r.optJSONObject(k);
-            JSONArray g = s == null ? null : s.optJSONArray("sigs");
-            if (g == null) continue;
-            for (int i = 0; i < g.length(); i++) {
-                String sig = g.optString(i);
-                if (sig.contains("类未能加载") || sig.contains("反射失败") || sig.contains("没找到")) continue;
-                if (sig.endsWith(Stacks.TAG_STABLE)) return sig.trim();
-                if (any == null) any = sig.trim();
+    // ------------------------------------------------------------ 推荐 hook 点
+
+    private static final java.util.regex.Pattern LAYER = java.util.regex.Pattern.compile("@栈第(\\d+)层");
+
+    private static int layerOf(String sig) {
+        java.util.regex.Matcher m = LAYER.matcher(sig);
+        return m.find() ? Integer.parseInt(m.group(1)) : 99;
+    }
+
+    /** 去掉末尾的层数和标签，只留“类#方法(参数):返回类型”。 */
+    private static String clean(String sig) {
+        String s = sig;
+        String[] tags = {Stacks.TAG_STABLE, Stacks.TAG_WIDGET, Stacks.TAG_INFRA, Stacks.TAG_OBF};
+        for (String t : tags) {
+            if (s.endsWith(t)) {
+                s = s.substring(0, s.length() - t.length());
+                break;
             }
         }
-        return any == null ? null : any + "   （只有混淆名，App 更新后要重新找）";
+        return LAYER.matcher(s).replaceAll("").trim();
+    }
+
+    private static boolean unresolved(String s) {
+        return s.contains("类未能加载") || s.contains("反射失败") || s.contains("没找到");
+    }
+
+    /**
+     * 从一侧的签名里挑推荐：业务代码里没混淆的 > 通用控件方法（要按 View 过滤）> 只有混淆名。
+     * 基础设施帧（消息分发、LiveData、异步包装）不推荐。层数 = 距离设置/绘制点的 App 栈层（不含系统帧），越小越直接。
+     */
+    static java.util.List<String> pickLines(java.util.List<String> sigs, boolean setSide) {
+        String biz = null, widget = null, obf = null;
+        int bizL = 99, widL = 99, obfL = 99;
+        for (String s : sigs) {
+            if (unresolved(s)) continue;
+            int l = layerOf(s);
+            if (s.endsWith(Stacks.TAG_STABLE)) {
+                // 离得太远（栈第 8 层以后）的稳定帧是上层触发者（事件总线、页面初始化…），不当推荐
+                if (l <= 8 && l < bizL) { bizL = l; biz = s; }
+            } else if (s.endsWith(Stacks.TAG_WIDGET)) {
+                if (l < widL) { widL = l; widget = s; }
+            } else if (s.endsWith(Stacks.TAG_OBF)) {
+                if (l < obfL) { obfL = l; obf = s; }
+            }
+        }
+        java.util.ArrayList<String> out = new java.util.ArrayList<>();
+        if (biz != null) {
+            String t = clean(biz) + "   [稳定，栈第" + bizL + "层]";
+            // 只有设置侧才提醒：绘制侧靠近底层的混淆帧本来就是 Canvas 包装，不是“触发者”问题
+            if (setSide && obfL < bizL) {
+                t += "   ⚠ 更靠近这里的只有混淆帧（栈第" + obfL + "层），它在更上层：hook 后先确认只在目标控件触发";
+            }
+            out.add(t);
+        }
+        if (widget != null) {
+            out.add((biz != null ? "备选(通用控件方法)  " : "") + clean(widget)
+                    + "   [通用控件方法，栈第" + widL + "层：hook 后要按 View id/类过滤，否则影响所有同类控件]");
+        }
+        if (biz == null && widget == null && obf != null) {
+            out.add(clean(obf) + "   （只有混淆名，栈第" + obfL + "层，App 更新后要重新找）");
+        }
+        return out;
+    }
+
+    private static java.util.List<String> sigList(JSONObject stack) {
+        java.util.ArrayList<String> l = new java.util.ArrayList<>();
+        JSONArray g = stack == null ? null : stack.optJSONArray("sigs");
+        if (g != null) for (int i = 0; i < g.length(); i++) l.add(g.optString(i));
+        return l;
+    }
+
+    /** 设置侧、绘制/调用侧各给推荐（图标只有设置侧）。 */
+    static void appendRecommend(StringBuilder sb, JSONObject r) {
+        String kind = r.optString("kind");
+        JSONObject ss = r.optJSONObject("setStack");
+        if (ss != null) {
+            for (String line : pickLines(sigList(ss), true)) sb.append("推荐[设置侧] ").append(line).append('\n');
+        }
+        // 系统方法永远不会被混淆，当兜底：但每个同类控件都会进来，必须按 View 类 / id 过滤
+        String view = r.optString("view");
+        String vid = r.optString("viewId");
+        String flt = "按 View 类 " + simple(view) + (vid.isEmpty() ? "" : "、id " + vid) + " 过滤";
+        if ("TEXTVIEW".equals(kind)) {
+            sb.append("备选[设置侧·系统方法，不会被混淆] android.widget.TextView#setText(java.lang.CharSequence,")
+                    .append("android.widget.TextView$BufferType,boolean,int)   ").append(flt).append('\n');
+        } else if ("ICON".equals(kind)) {
+            if (r.optString("lastText").startsWith("setContentDescription")) {
+                sb.append("备选[设置侧·系统方法，不会被混淆] android.view.View#setContentDescription(java.lang.CharSequence)   ")
+                        .append(flt).append('\n');
+            } else {
+                sb.append("备选[设置侧·系统方法，不会被混淆] android.widget.ImageView#setImageDrawable(android.graphics.drawable.Drawable)")
+                        .append("   ").append(flt).append("（资源名要另外 hook 子类的 setImageResource(int)）\n");
+            }
+        }
+        JSONObject ds = r.optJSONObject("drawStack");
+        if (ds != null && !"ICON".equals(kind)) {
+            String label = "TRACE".equals(kind) ? "调用侧" : "绘制侧";
+            for (String line : pickLines(sigList(ds), false)) sb.append("推荐[").append(label).append("] ").append(line).append('\n');
+        }
     }
 
     /** 列表里的一行文字摘要：这个位置下的前几种文字 */
@@ -231,8 +313,7 @@ final class RecFormat {
     static String sigsOnly(Snap.Item it) {
         StringBuilder sb = new StringBuilder();
         sb.append("# ").append(it.o.optString("view")).append("  文字「").append(oneLine(it.o.optString("lastText"))).append("」\n");
-        String rec = recommend(it.o);
-        if (rec != null) sb.append("推荐: ").append(rec).append('\n');
+        appendRecommend(sb, it.o);
         appendSigs(sb, "设置侧", it.o.optJSONObject("setStack"));
         appendSigs(sb, "绘制/调用侧", it.o.optJSONObject("drawStack"));
         appendSigs(sb, "颜色设置侧", it.o.optJSONObject("colorStack"));
@@ -246,11 +327,12 @@ final class RecFormat {
             sb.append("  (无)\n");
             return;
         }
-        for (int pass = 0; pass < 2; pass++) { // 先列稳定的，再列混淆的
+        for (int pass = 0; pass < 4; pass++) { // 业务稳定 → 通用控件 → 混淆 → 基础设施
             for (int i = 0; i < g.length(); i++) {
                 String sig = g.optString(i);
-                boolean stable = sig.endsWith(Stacks.TAG_STABLE);
-                if ((pass == 0) == stable) sb.append("  ").append(sig).append('\n');
+                int rank = sig.endsWith(Stacks.TAG_STABLE) ? 0 : sig.endsWith(Stacks.TAG_WIDGET) ? 1
+                        : sig.endsWith(Stacks.TAG_INFRA) ? 3 : 2;
+                if (rank == pass) sb.append("  ").append(sig).append('\n');
             }
         }
     }
