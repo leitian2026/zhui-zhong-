@@ -76,8 +76,15 @@ final class Snap {
             JSONObject so = sc.optJSONObject(i);
             if (so != null) sb.append(so.optString("text")).append('\n');
         }
+        sb.append(r.optString("textColor")).append('\n');
+        JSONArray pj = r.optJSONArray("paints");
+        if (pj != null) for (int i = 0; i < pj.length(); i++) {
+            JSONObject po = pj.optJSONObject(i);
+            if (po != null) sb.append(po.optString("desc")).append('\n');
+        }
         appendStack(sb, r.optJSONObject("setStack"));
         appendStack(sb, r.optJSONObject("drawStack"));
+        appendStack(sb, r.optJSONObject("colorStack"));
         return sb.toString().toLowerCase(Locale.ROOT);
     }
 
