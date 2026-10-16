@@ -41,8 +41,8 @@ import java.util.regex.Pattern;
 public class RecordsActivity extends Activity {
     private static final int REQ_TXT = 2001, REQ_JSON = 2002;
     private static final String[] SORTS = {"最近", "次数", "首次"};
-    private static final String[] KINDS = {"全部", "TextView", "自绘", "Compose", "图标", "方法追踪"};
-    private static final String[] KIND_KEYS = {"", "TEXTVIEW", "CANVAS", "COMPOSE", "ICON", "TRACE"};
+    private static final String[] KINDS = {"全部", "TextView", "自绘", "Compose", "图标", "方法追踪", "仅设置"};
+    private static final String[] KIND_KEYS = {"", "TEXTVIEW", "CANVAS", "COMPOSE", "ICON", "TRACE", "TEXTSET"};
 
     private ListView lv;
     private EditText etSearch;
@@ -209,7 +209,8 @@ public class RecordsActivity extends Activity {
         shown.clear();
         for (Snap.Item it : all) {
             if (!kindKey.isEmpty() && !kindKey.equals(it.o.optString("kind"))) continue;
-            if (onlyOnScreen && "no".equals(it.o.optString("vis"))) {
+            // 选了“仅设置”类型就是要看它们（它们本来就不在屏幕上），不再套“只看屏幕上”
+            if (onlyOnScreen && !"TEXTSET".equals(kindKey) && "no".equals(it.o.optString("vis"))) {
                 hidden++;
                 if (hid.length() < 200) hid.append(" #").append(it.o.optInt("id"));
                 continue;
