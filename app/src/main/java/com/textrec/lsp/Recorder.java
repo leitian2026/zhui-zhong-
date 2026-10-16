@@ -66,6 +66,9 @@ final class Recorder {
     private static final Stacks.Stk EMPTY = new Stacks.Stk(new String[0], 0, 0, new String[0][], false);
     private static final Map<TextView, SetStack> VIEW_SET =
             Collections.synchronizedMap(new WeakHashMap<TextView, SetStack>());
+    /** 画过的 TextView（TextView.onDraw 执行过）。用来判断“只设置、从未绘制”的文字。不随清空重置，画过就是画过。 */
+    private static final Map<TextView, Boolean> VIEW_DRAWN =
+            Collections.synchronizedMap(new WeakHashMap<TextView, Boolean>());
     private static final Map<TextView, ColorSet> VIEW_COLOR =
             Collections.synchronizedMap(new WeakHashMap<TextView, ColorSet>());
     private static final ThreadLocal<TextView> CUR = new ThreadLocal<>();
@@ -211,7 +214,10 @@ final class Recorder {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam p) {
                     try {
-                        CUR.set((TextView) p.thisObject);
+                        TextView tv = (TextView) p.thisObject;
+                        CUR.set(tv);
+                        // 不依赖 traceDraw 开关：只要走到 onDraw 就算“画过”
+                        if (!VIEW_DRAWN.containsKey(tv)) VIEW_DRAWN.put(tv, Boolean.TRUE);
                     } catch (Throwable ignored) {
                     }
                 }
@@ -647,10 +653,66 @@ final class Recorder {
         if (ss != null) {
             ss.count.incrementAndGet();
             VIEW_SET.put(v, ss);
+            if (c.traceSetOnly) noteSetOnly(c, v, text, ss);
         } else {
             VIEW_SET.remove(v);
         }
         store.markDirty();
+    }
+
+    /**
+     * 登记“这个位置设置过文字”，用于发现从未被绘制的文字（INVISIBLE/GONE/尺寸为 0/未挂窗口）。
+     * 记录按 (View 类, id, 设置栈) 归并，每个位置一条；它是否仍然“从未绘制”在写快照时才判断，
+     * 所以控件后来被画了，这条记录就不再出现（已有对应的 TEXTVIEW 记录），不会重复。
+     */
+    private static void noteSetOnly(RecConfig c, TextView v, String text, SetStack ss) {
+        String cls = v.getClass().getName();
+        long key = mix(mix(mix(mix(SEED, cls.hashCode()), v.getId()), ss.stk.sig), 13);
+        Store.DrawProxy dp = store.drawProxy(key);
+        Rec r = dp.rec;
+        long shape = shapeHash(text);
+        if (r == null && dp.n.getAndIncrement() == 0) { // 每个位置只尝试建一次，满额时不反复尝试
+            r = obtain(Rec.TEXTSET, cls, idName(v), ss, EMPTY, v, text, shape, c);
+            if (r != null) dp.rec = r;
+        }
+        if (r != null) {
+            r.noteSet(text, shape);
+            r.trackView(v);
+        }
+    }
+
+    /** 这条 TEXTSET 记录里，还从未被绘制过的（活着的）TextView。写快照时调用。 */
+    static java.util.List<View> undrawn(Rec r) {
+        ArrayList<View> out = new ArrayList<>();
+        for (View v : r.liveViews()) {
+            if (v instanceof TextView && !VIEW_DRAWN.containsKey(v)) out.add(v);
+        }
+        return out;
+    }
+
+    /** 一个从未被绘制的控件，为什么没被画。 */
+    static String notDrawnReason(View v) {
+        try {
+            if (!v.isAttachedToWindow()) return "未挂到窗口（已被移除，或还没加入布局）";
+            if (v.getVisibility() == View.GONE) return "自身 GONE";
+            if (v.getVisibility() == View.INVISIBLE) return "自身 INVISIBLE";
+            Object p = v.getParent();
+            for (int i = 0; i < 12 && p instanceof View; i++) {
+                View pv = (View) p;
+                int vis = pv.getVisibility();
+                if (vis != View.VISIBLE) {
+                    String id = idName(pv);
+                    return "祖先 " + simpleName(pv.getClass().getName()) + (id.isEmpty() ? "" : "#" + id)
+                            + (vis == View.GONE ? " 为 GONE" : " 为 INVISIBLE");
+                }
+                p = pv.getParent();
+            }
+            if (v.getWidth() <= 0 || v.getHeight() <= 0) return "尺寸为 0（还没测量/布局，或宽高为 0）";
+            if (v.getAlpha() < 0.05f) return "alpha≈0";
+            return "可见且已布局，但还没被绘制（可能刚设置，下次快照再看；或子类没调用 super.onDraw）";
+        } catch (Throwable t) {
+            return "?";
+        }
     }
 
     /** 文字颜色被设置：记设置栈和颜色值（TextView 的颜色最终由 Paint 带到 drawText，Paint 颜色另记）。 */
@@ -960,14 +1022,20 @@ final class Recorder {
         String key = kind + '|' + viewCls + '|' + viewId + '|' + (ss == null ? 0 : ss.stk.sig) + '|' + d.sig;
         Rec r = store.recs.get(key);
         if (r != null) return r;
+        final boolean setOnly = Rec.TEXTSET.equals(kind);
         if (store.recs.size() >= c.maxRecords) {
             store.droppedCap.incrementAndGet();
+            return null;
+        }
+        if (setOnly && store.setOnlyCount.get() >= c.maxSetOnly) {
+            store.droppedSetOnly.incrementAndGet();
             return null;
         }
         Rec nr = new Rec(store.nextId.getAndIncrement(), key, kind, viewCls, viewId, activityName,
                 v == null ? new String[0] : parentsOf(v), ss, d, Thread.currentThread().getName(), text, shape);
         Rec old = store.recs.putIfAbsent(key, nr);
         if (old != null) return old;
+        if (setOnly) store.setOnlyCount.incrementAndGet();
         SigResolver.resolveRec(nr, v == null ? null : v.getClass().getClassLoader());
         return nr;
     }
