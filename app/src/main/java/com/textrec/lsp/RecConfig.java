@@ -18,6 +18,14 @@ public final class RecConfig {
     public boolean regex = false;
     public boolean traceSet = true;
     public boolean traceDraw = true;
+    /** 记录文字颜色：画笔颜色（所有文字）+ TextView 的 setTextColor 设置位置 */
+    public boolean traceColor = true;
+    /** 记录图标/按钮图片：ImageView 的 setImage* 与 View.setContentDescription */
+    public boolean traceIcons = true;
+    /** 自动观察 Compose 文字绘制（MultiParagraph.paint）的参数：颜色、描边/填充等 */
+    public boolean autoParams = true;
+    /** 方法追踪：每行 类#方法，记录每次调用的参数/返回值和调用栈（只读）。// 开头为注释 */
+    public String traceMethods = "";
     /** 每条记录里保存的调用栈最大帧数 */
     public int stackDepth = 30;
     /** 同一个“位置”前几次要抓栈 */
@@ -43,6 +51,20 @@ public final class RecConfig {
         return out;
     }
 
+    /** 方法追踪目标：只按换行拆，去掉参数括号和 // 注释。 */
+    static List<String> splitTargets(String s) {
+        ArrayList<String> out = new ArrayList<>();
+        if (s == null) return out;
+        for (String p : s.split("[\\n\\r]+")) {
+            String t = p.trim();
+            if (t.isEmpty() || t.startsWith("//")) continue;
+            int i = t.indexOf('(');
+            if (i > 0) t = t.substring(0, i).trim();
+            if (!t.isEmpty() && !out.contains(t)) out.add(t);
+        }
+        return out;
+    }
+
     static List<String> splitLines(String s) {
         ArrayList<String> out = new ArrayList<>();
         if (s == null) return out;
@@ -56,6 +78,8 @@ public final class RecConfig {
     public String summary() {
         return "enabled=" + enabled + " mode=" + (keywordMode ? "keyword" : "all")
                 + " regex=" + regex + " set=" + traceSet + " draw=" + traceDraw
+                + " color=" + traceColor + " icons=" + traceIcons + " auto=" + autoParams
+                + " traces=" + splitTargets(traceMethods).size()
                 + " depth=" + stackDepth + " perKey=" + perKeyStacks + " sample=" + sampleEvery
                 + " perSec=" + stacksPerSec + " max=" + maxRecords + " flush=" + flushSec;
     }
@@ -69,6 +93,10 @@ public final class RecConfig {
             p.setProperty("regex", String.valueOf(regex));
             p.setProperty("traceSet", String.valueOf(traceSet));
             p.setProperty("traceDraw", String.valueOf(traceDraw));
+            p.setProperty("traceColor", String.valueOf(traceColor));
+            p.setProperty("traceIcons", String.valueOf(traceIcons));
+            p.setProperty("autoParams", String.valueOf(autoParams));
+            p.setProperty("traceMethods", traceMethods);
             p.setProperty("stackDepth", String.valueOf(stackDepth));
             p.setProperty("perKeyStacks", String.valueOf(perKeyStacks));
             p.setProperty("sampleEvery", String.valueOf(sampleEvery));
@@ -115,6 +143,10 @@ public final class RecConfig {
         c.regex = bool(p, "regex", c.regex);
         c.traceSet = bool(p, "traceSet", c.traceSet);
         c.traceDraw = bool(p, "traceDraw", c.traceDraw);
+        c.traceColor = bool(p, "traceColor", c.traceColor);
+        c.traceIcons = bool(p, "traceIcons", c.traceIcons);
+        c.autoParams = bool(p, "autoParams", c.autoParams);
+        c.traceMethods = p.getProperty("traceMethods", c.traceMethods);
         c.stackDepth = clamp(num(p, "stackDepth", c.stackDepth), 1, 60);
         c.perKeyStacks = clamp(num(p, "perKeyStacks", c.perKeyStacks), 1, 50);
         c.sampleEvery = clamp(num(p, "sampleEvery", c.sampleEvery), 10, 100000);
