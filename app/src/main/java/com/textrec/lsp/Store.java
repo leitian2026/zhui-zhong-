@@ -49,6 +49,7 @@ final class Store {
 
     volatile String appVersion = "";
     private volatile String warn = "";
+    private volatile String traceWarn = "";
     private volatile RecConfig conf = new RecConfig();
     private volatile File dir;
     private volatile String proc = "main";
@@ -77,6 +78,11 @@ final class Store {
 
     void setWarn(String w) {
         warn = w == null ? "" : w;
+    }
+
+    /** 方法追踪的安装结果（类没找到、方法不存在等），随快照一起显示在“⚠”里。 */
+    void setTraceWarn(String w) {
+        traceWarn = w == null ? "" : w;
     }
 
     void reset() {
@@ -174,13 +180,13 @@ final class Store {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.2");
+        root.put("module", "TextRec 1.3");
         root.put("pkg", pkg);
         root.put("process", proc);
         root.put("appVersion", appVersion);
         root.put("sdk", Build.VERSION.SDK_INT);
         root.put("snapshotTime", System.currentTimeMillis());
-        root.put("warn", warn);
+        root.put("warn", warn + traceWarn);
 
         JSONObject cj = new JSONObject();
         cj.put("mode", c.keywordMode ? "keyword" : "all");
@@ -191,6 +197,10 @@ final class Store {
         cj.put("sampleEvery", c.sampleEvery);
         cj.put("stacksPerSec", c.stacksPerSec);
         cj.put("maxRecords", c.maxRecords);
+        cj.put("traceColor", c.traceColor);
+        cj.put("traceIcons", c.traceIcons);
+        cj.put("autoParams", c.autoParams);
+        cj.put("traceMethods", c.traceMethods);
         root.put("config", cj);
 
         ArrayList<Rec> list = new ArrayList<>(recs.values());
@@ -242,6 +252,23 @@ final class Store {
         j.put("texts", new JSONArray(r.sampleList()));
         j.put("textsMore", r.sampleOverflow());
 
+        // 画笔 / 绘制参数变体（颜色、字号、描边或填充；Compose 文字还有 paint 的参数）
+        JSONArray pj = new JSONArray();
+        for (Rec.PaintVar pv : r.paintList()) {
+            JSONObject po = new JSONObject();
+            po.put("desc", pv.desc);
+            po.put("n", pv.n);
+            pj.put(po);
+        }
+        j.put("paints", pj);
+        j.put("paintsMore", r.paintOverflow());
+        if (r.hasPos()) j.put("pos", new JSONArray(Arrays.asList(r.posX, r.posY)));
+        ColorSet cs = r.colorSet;
+        if (cs != null) {
+            j.put("textColor", String.format("0x%08X", cs.color));
+            if (cs.ss != null) j.put("colorStack", stackJson(cs.ss.stk, cs.ss.sigs, cs.ss.thread));
+        }
+
         // 此刻是否在屏幕上：TextView 记录直接问被跟踪的 View；自绘/Compose 没有 View 可问，
         // 3 秒内画过就算在屏幕上，否则标“未知”（不会因此被“只看屏幕上”过滤掉）
         JSONArray screen = new JSONArray();
@@ -264,12 +291,19 @@ final class Store {
         } else {
             j.put("setStack", JSONObject.NULL);
             String note;
-            if (Rec.COMPOSE.equals(r.kind)) note = "Compose：无 setText（状态变化触发重组后再绘制），“谁算出这段文字”要靠盯参数找";
+            if (Rec.COMPOSE.equals(r.kind)) note = "Compose：无 setText（状态变化触发重组后再绘制），看下方“画笔/参数”里的颜色和描边/填充，以及“可 hook 的方法签名”里标 [稳定] 的那个";
             else if (Rec.CANVAS.equals(r.kind)) note = "自绘文字：没有 setText，只有画的位置";
+            else if (Rec.TRACE.equals(r.kind)) note = "方法追踪：右侧“调用栈”是谁调用了这个方法；参数→返回值的各种取值见上方“调用参数变体”";
             else note = "无设置栈：设置发生在记录开始之前（可重启后冷启动记录），或被限流";
             j.put("setNote", note);
         }
-        j.put("drawStack", stackJson(r.draw, r.drawSigs, r.drawThread));
+        if (Rec.ICON.equals(r.kind)) {
+            // 图标没有“绘制栈”，只有“谁设置了它”（左侧设置栈）
+            j.put("drawStack", JSONObject.NULL);
+            j.put("drawNote", "图标：没有绘制栈，只记录“谁设置了图标”（setImage* / setContentDescription），见左侧设置栈");
+        } else {
+            j.put("drawStack", stackJson(r.draw, r.drawSigs, r.drawThread));
+        }
         return j;
     }
 }
