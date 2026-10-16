@@ -18,8 +18,8 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 public class MainActivity extends Activity {
-    private EditText etPkgs, etKeywords, etDepth, etPerKey, etSample, etPerSec, etMax, etTrace;
-    private CheckBox cbEnabled, cbKeywordMode, cbRegex, cbSet, cbDraw, cbColor, cbIcons, cbAuto;
+    private EditText etPkgs, etKeywords, etDepth, etPerKey, etSample, etPerSec, etMax, etMaxSetOnly, etTrace;
+    private CheckBox cbEnabled, cbKeywordMode, cbRegex, cbSet, cbDraw, cbColor, cbIcons, cbAuto, cbSetOnly;
     private Button btnPush, btnReset;
     private TextView tvStatus;
 
@@ -58,6 +58,8 @@ public class MainActivity extends Activity {
         root.addView(cbIcons);
         cbAuto = check("自动观察 Compose 文字绘制参数（颜色、描边/填充，如弹幕）");
         root.addView(cbAuto);
+        cbSetOnly = check("记录“只被设置、从未被绘制”的文字（隐藏的控件，如拖动进度条才出现的时长）");
+        root.addView(cbSetOnly);
 
         root.addView(label("记录范围"));
         cbKeywordMode = check("只记录命中关键字的文字（默认关闭 = 全量记录屏幕上所有文字）");
@@ -83,6 +85,9 @@ public class MainActivity extends Activity {
         root.addView(text("最多保存多少条记录（默认 2000）", 12));
         etMax = number();
         root.addView(etMax);
+        root.addView(text("“仅设置、未绘制”记录的上限（默认 500，单独计）", 12));
+        etMaxSetOnly = number();
+        root.addView(etMaxSetOnly);
 
         root.addView(label("方法追踪（可选，只读）"));
         root.addView(text("每行一个 类#方法，例如 androidx.compose.ui.text.MultiParagraph#paint-LG529CI；"
@@ -130,6 +135,7 @@ public class MainActivity extends Activity {
         cbColor.setChecked(c.traceColor);
         cbIcons.setChecked(c.traceIcons);
         cbAuto.setChecked(c.autoParams);
+        cbSetOnly.setChecked(c.traceSetOnly);
         etTrace.setText(c.traceMethods);
         cbKeywordMode.setChecked(c.keywordMode);
         etKeywords.setText(c.keywords);
@@ -139,6 +145,7 @@ public class MainActivity extends Activity {
         etSample.setText(String.valueOf(c.sampleEvery));
         etPerSec.setText(String.valueOf(c.stacksPerSec));
         etMax.setText(String.valueOf(c.maxRecords));
+        etMaxSetOnly.setText(String.valueOf(c.maxSetOnly));
     }
 
     private RecConfig read(long epoch) {
@@ -149,6 +156,7 @@ public class MainActivity extends Activity {
         c.traceColor = cbColor.isChecked();
         c.traceIcons = cbIcons.isChecked();
         c.autoParams = cbAuto.isChecked();
+        c.traceSetOnly = cbSetOnly.isChecked();
         c.traceMethods = etTrace.getText().toString();
         c.keywordMode = cbKeywordMode.isChecked();
         c.keywords = etKeywords.getText().toString();
@@ -158,6 +166,7 @@ public class MainActivity extends Activity {
         c.sampleEvery = RecConfig.clamp(parse(etSample, 200), 10, 100000);
         c.stacksPerSec = RecConfig.clamp(parse(etPerSec, 1000), 1, 5000);
         c.maxRecords = RecConfig.clamp(parse(etMax, 2000), 10, 20000);
+        c.maxSetOnly = RecConfig.clamp(parse(etMaxSetOnly, 500), 10, 5000);
         c.epoch = epoch;
         return c;
     }
