@@ -23,6 +23,7 @@ final class RecFormat {
         if ("ICON".equals(kind)) return "图标";
         if ("TRACE".equals(kind)) return "方法追踪";
         if ("TEXTSET".equals(kind)) return "仅设置";
+        if ("STATE".equals(kind)) return "状态变化";
         return kind;
     }
 
@@ -53,6 +54,8 @@ final class RecFormat {
         String kind = r.optString("kind");
         if ("TRACE".equals(kind)) {
             sb.append("调用 ").append(r.optInt("drawCount")).append(" 次（同一个调用位置）");
+        } else if ("STATE".equals(kind)) {
+            sb.append("变化 ").append(r.optInt("drawCount")).append(" 次（含重复）");
         } else if ("ICON".equals(kind)) {
             sb.append("设置 ").append(r.optInt("drawCount")).append(" 次 / 该设置位置共调用 ").append(r.optInt("setCount"))
                     .append(" 次(可能含同一代码设置的其他控件)");
@@ -67,7 +70,20 @@ final class RecFormat {
                 .append("  末次 ").append(time(r.optLong("last"))).append('\n');
         appendRecommend(sb, r);
         String id = r.optString("viewId");
-        sb.append("View: ").append(r.optString("view")).append(id.isEmpty() ? "" : "   id=" + id).append('\n');
+        JSONArray idsA = r.optJSONArray("ids");
+        String idTxt;
+        if (idsA != null && idsA.length() > 1) {
+            StringBuilder ib = new StringBuilder();
+            for (int i = 0; i < idsA.length() && i < 12; i++) {
+                if (i > 0) ib.append(", ");
+                ib.append(idsA.optString(i));
+            }
+            if (idsA.length() > 12) ib.append(" …");
+            idTxt = "   id=" + ib + "（同一段代码设置的 " + idsA.length() + (r.optBoolean("idsFull") ? "+" : "") + " 个控件合并在这一条）";
+        } else {
+            idTxt = id.isEmpty() ? "" : "   id=" + id;
+        }
+        sb.append("View: ").append(r.optString("view")).append(idTxt).append('\n');
         String act = r.optString("activity");
         sb.append("页面: ").append(act.isEmpty() ? "(启动中，尚无 Activity)" : act).append('\n');
         JSONArray ps = r.optJSONArray("parents");
@@ -118,8 +134,9 @@ final class RecFormat {
         JSONArray ts = r.optJSONArray("texts");
         int n = ts == null ? 0 : ts.length();
         int more = r.optInt("textsMore");
-        String what = "TRACE".equals(kind) ? "调用" : "ICON".equals(kind) ? "图标" : "文字";
-        String varLabel = "TRACE".equals(kind) ? "种调用参数（参数 → 返回值）" : "ICON".equals(kind) ? "种图标设置" : "种文字";
+        String what = "TRACE".equals(kind) ? "调用" : "ICON".equals(kind) ? "图标" : "STATE".equals(kind) ? "状态" : "文字";
+        String varLabel = "TRACE".equals(kind) ? "种调用参数（this + 参数 → 返回值）" : "ICON".equals(kind) ? "种图标设置"
+                : "STATE".equals(kind) ? "种状态变化" : "种文字";
         if (n <= 1) {
             sb.append(what).append(": 「").append(oneLine(r.optString("lastText"))).append("」\n");
         } else {
@@ -233,6 +250,9 @@ final class RecFormat {
         if ("TEXTVIEW".equals(kind) || "TEXTSET".equals(kind)) {
             sb.append("备选[设置侧·系统方法，不会被混淆] android.widget.TextView#setText(java.lang.CharSequence,")
                     .append("android.widget.TextView$BufferType,boolean,int)   ").append(flt).append('\n');
+        } else if ("STATE".equals(kind)) {
+            sb.append("备选[系统方法，不会被混淆] android.view.View#setAlpha(float) / #setVisibility(int) / #setSelected(boolean)   ")
+                    .append(flt).append("（谁改的看设置栈）\n");
         } else if ("ICON".equals(kind)) {
             if (r.optString("lastText").startsWith("setContentDescription")) {
                 sb.append("备选[设置侧·系统方法，不会被混淆] android.view.View#setContentDescription(java.lang.CharSequence)   ")
@@ -281,8 +301,18 @@ final class RecFormat {
         return s.length() > n ? s.substring(0, n) + "…" : s;
     }
 
+    /** 导出时的去重表：同一份栈 / 同一份签名在整份导出里只完整写一次，后面的记录写“同 #N”。 */
+    static final class Dedup {
+        final java.util.HashMap<String, Integer> frames = new java.util.HashMap<>();
+        final java.util.HashMap<String, Integer> sigs = new java.util.HashMap<>();
+    }
+
     /** 一栏：设置栈或绘制栈。stack 为 null 时显示 note。 */
     static String column(String title, JSONObject stack, String note) {
+        return column(title, stack, note, null, 0);
+    }
+
+    static String column(String title, JSONObject stack, String note, Dedup dd, int recId) {
         StringBuilder sb = new StringBuilder();
         if (stack == null) {
             sb.append("【").append(title).append("】\n").append(note == null ? "" : note).append('\n');
@@ -290,27 +320,55 @@ final class RecFormat {
         }
         sb.append("【").append(title).append("】线程 ").append(stack.optString("thread")).append('\n');
         JSONArray f = stack.optJSONArray("frames");
-        if (f != null) for (int i = 0; i < f.length(); i++) sb.append("  at ").append(f.optString(i)).append('\n');
-        int more = stack.optInt("more");
-        if (more > 0) sb.append("  … 另有 ").append(more).append(" 帧\n");
+        StringBuilder fk = new StringBuilder();
+        if (f != null) for (int i = 0; i < f.length(); i++) fk.append(f.optString(i)).append('\n');
+        fk.append(stack.optInt("more"));
+        Integer same = dd == null ? null : dd.frames.get(fk.toString());
+        if (same != null && f != null && f.length() > 0) {
+            sb.append("  （调用栈与 #").append(same).append(" 完全相同，不重复列出）\n");
+        } else {
+            if (dd != null && f != null && f.length() > 0) dd.frames.put(fk.toString(), recId);
+            if (f != null) for (int i = 0; i < f.length(); i++) sb.append("  at ").append(f.optString(i)).append('\n');
+            int more = stack.optInt("more");
+            if (more > 0) sb.append("  … 另有 ").append(more).append(" 帧\n");
+        }
+        if (stack.optBoolean("xmlOnly")) {
+            sb.append("\nXML 布局里写死的设置：栈里只有控件构造方法和布局加载，没有业务代码，不用于 hook。\n")
+                    .append("要改它：hook 控件类的 onDraw / setText / setImageDrawable，再按 View 类 + id 过滤。\n");
+            return sb.toString();
+        }
         JSONArray g = stack.optJSONArray("sigs");
         sb.append("\n可 hook 的方法签名：\n");
         if (g == null || g.length() == 0) {
             sb.append("  (栈顶没有 App 帧，或正在解析)\n");
         } else {
-            for (int i = 0; i < g.length(); i++) sb.append("  ").append(g.optString(i)).append('\n');
+            StringBuilder sk = new StringBuilder();
+            for (int i = 0; i < g.length(); i++) sk.append(g.optString(i)).append('\n');
+            Integer ss = dd == null ? null : dd.sigs.get(sk.toString());
+            if (ss != null) {
+                sb.append("  （签名与 #").append(ss).append(" 完全相同，不重复列出）\n");
+            } else {
+                if (dd != null) dd.sigs.put(sk.toString(), recId);
+                for (int i = 0; i < g.length(); i++) sb.append("  ").append(g.optString(i)).append('\n');
+            }
         }
         return sb.toString();
     }
 
     static String setColumn(Snap.Item it) {
+        return setColumn(it, null);
+    }
+
+    static String setColumn(Snap.Item it, Dedup dd) {
         JSONObject r = it.o;
         String kind = r.optString("kind");
-        String title = "ICON".equals(kind) ? "设置栈 setImage*/setContentDescription" : "设置栈 setText";
-        String s = column(title, r.optJSONObject("setStack"), r.optString("setNote"));
+        int id = r.optInt("id");
+        String title = "ICON".equals(kind) ? "设置栈 setImage*/setContentDescription"
+                : "STATE".equals(kind) ? "设置栈（谁改了 alpha/visibility/selected）" : "设置栈 setText";
+        String s = column(title, r.optJSONObject("setStack"), r.optString("setNote"), dd, id);
         JSONObject cs = r.optJSONObject("colorStack");
         if (cs != null) {
-            s += "\n" + column("文字颜色设置栈 setTextColor（颜色 " + r.optString("textColor") + "）", cs, "");
+            s += "\n" + column("文字颜色设置栈 setTextColor（颜色 " + r.optString("textColor") + "）", cs, "", dd, id);
         } else if (!r.optString("textColor").isEmpty()) {
             s += "\n【文字颜色】" + r.optString("textColor") + "（设置栈被限流，没抓到）\n";
         }
@@ -318,13 +376,22 @@ final class RecFormat {
     }
 
     static String drawColumn(Snap.Item it) {
+        return drawColumn(it, null);
+    }
+
+    static String drawColumn(Snap.Item it, Dedup dd) {
         JSONObject r = it.o;
         String title = "TRACE".equals(r.optString("kind")) ? "调用栈（谁调用了它）" : "绘制栈 draw";
-        return column(title, r.optJSONObject("drawStack"), r.optString("drawNote"));
+        return column(title, r.optJSONObject("drawStack"), r.optString("drawNote"), dd, r.optInt("id"));
     }
 
     static String full(Snap.Item it) {
         return header(it) + "\n" + setColumn(it) + "\n" + drawColumn(it);
+    }
+
+    /** 导出整份文件用：重复的栈和签名只写一次。 */
+    static String full(Snap.Item it, Dedup dd) {
+        return header(it) + "\n" + setColumn(it, dd) + "\n" + drawColumn(it, dd);
     }
 
     /** 只要可 hook 的签名（设置侧、绘制侧各一段） */
