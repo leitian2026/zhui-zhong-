@@ -9,12 +9,15 @@ import android.graphics.Paint;
 import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
+import android.os.FileObserver;
 import android.os.SystemClock;
 import android.view.View;
+import android.view.ViewGroup;
 import android.widget.ImageView;
 import android.widget.TextView;
 
 import java.io.File;
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Constructor;
 import java.lang.reflect.Member;
 import java.lang.reflect.Method;
@@ -74,6 +77,11 @@ final class Recorder {
     /** 设置过图标 / contentDescription 的 View（弱引用），用来判断 alpha/visibility/selected 的变化是否值得记。 */
     private static final Map<View, Boolean> ICON_VIEWS =
             Collections.synchronizedMap(new WeakHashMap<View, Boolean>());
+    /** 图标最近一次的设置栈：“清空记录”后重新扫描屏幕时用它给静态图标补上设置栈。 */
+    private static final Map<View, SetStack> ICON_SET =
+            Collections.synchronizedMap(new WeakHashMap<View, SetStack>());
+    private static volatile WeakReference<Activity> resumed;
+    private static FileObserver cfgObserver; // 静态引用，避免被 GC
     private static final ThreadLocal<TextView> CUR = new ThreadLocal<>();
     private static final ThreadLocal<PaintCtx> PAINT = new ThreadLocal<>();
     private static final ThreadLocal<int[]> DEPTH = new ThreadLocal<int[]>() {
@@ -128,6 +136,7 @@ final class Recorder {
         store.init(d, lp.processName, lp.packageName);
         SigResolver.addLoader(lp.classLoader);
         reload(true);
+        watchConfig(d);
         hookActivity();
         hookTextViewDraw();
         hookSetText();
@@ -167,9 +176,9 @@ final class Recorder {
             store.setWarn(kf.warn);
             if (appliedEpoch != c.epoch) {
                 if (appliedEpoch != Long.MIN_VALUE) {
+                    // 只清记录，不清“View → 设置栈 / 颜色栈”的对应：View 的设置发生在清空之前，清掉就再也补不回来了
                     store.reset();
-                    VIEW_SET.clear();
-                    VIEW_COLOR.clear();
+                    rescanLater(); // 屏幕上静态不变的文字不会再画，主动让它们重画一次，才能被记录
                 }
                 appliedEpoch = c.epoch;
             }
@@ -189,6 +198,7 @@ final class Recorder {
                     try {
                         Activity a = (Activity) p.thisObject;
                         activityName = a.getClass().getName();
+                        resumed = new WeakReference<>(a);
                         ClassLoader acl = a.getClass().getClassLoader();
                         SigResolver.addLoader(acl);
                         maybeReload();
@@ -411,6 +421,109 @@ final class Recorder {
         } catch (Throwable ignored) {
             // 目标 App 没有 AppCompat，或类还没法加载：下次 Activity.onResume 再试
         }
+    }
+
+    // ------------------------------------------------------------ 配置热更新（事件触发）与“清空后重新采集屏幕”
+
+    /**
+     * 用 inotify 监听配置文件：模块那边一改配置（包括“清空记录”）目标进程立刻就知道，
+     * 不用等下一次 hook 事件，也不用轮询。屏幕完全静止时旧版就是因为没有事件而一直读不到新配置。
+     */
+    private static void watchConfig(File d) {
+        try {
+            cfgObserver = new FileObserver(d.getAbsolutePath(),
+                    FileObserver.CLOSE_WRITE | FileObserver.MOVED_TO | FileObserver.CREATE) {
+                @Override
+                public void onEvent(int event, String path) {
+                    if (path == null || !path.equals("config.properties")) return;
+                    try {
+                        reload(true);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            };
+            cfgObserver.startWatching();
+        } catch (Throwable t) {
+            XposedBridge.log("[TextRec] watch config failed: " + t);
+        }
+    }
+
+    /**
+     * 清空记录后，屏幕上已经显示的文字不会再被绘制（硬件加速复用显示列表），没有事件就没有记录。
+     * 这里在界面线程遍历当前窗口：文字控件 invalidate() 让它重画一次（走正常的 drawText 记录，设置栈还在）；
+     * 图标 / 带内容描述的控件直接补一条记录（带上最近一次的设置栈）。只读，不改任何内容。
+     */
+    private static void rescanLater() {
+        try {
+            WeakReference<Activity> w = resumed;
+            Activity a = w == null ? null : w.get();
+            if (a == null) return;
+            final View decor = a.getWindow().getDecorView();
+            decor.post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        rescan(decor);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void rescan(View root) {
+        ArrayList<View> todo = new ArrayList<>();
+        todo.add(root);
+        int seen = 0;
+        while (!todo.isEmpty() && seen < 6000) {
+            View v = todo.remove(todo.size() - 1);
+            seen++;
+            if (v.getVisibility() != View.VISIBLE) continue; // 不可见的整棵子树都不用看
+            if (v instanceof TextView) {
+                CharSequence ct = ((TextView) v).getText();
+                if (ct != null && ct.length() > 0) v.invalidate();
+            } else {
+                scanIcon(v);
+            }
+            if (v instanceof ViewGroup) {
+                ViewGroup g = (ViewGroup) v;
+                for (int i = 0; i < g.getChildCount(); i++) todo.add(g.getChildAt(i));
+            }
+        }
+        store.markDirty();
+    }
+
+    private static void scanIcon(View v) {
+        RecConfig c = cfg;
+        if (!c.enabled || !c.traceIcons) return;
+        CharSequence cd = v.getContentDescription();
+        boolean hasDesc = cd != null && cd.length() > 0;
+        if (!(v instanceof ImageView) && !hasDesc) return;
+        StringBuilder sb = new StringBuilder(64);
+        sb.append("屏幕扫描");
+        if (v instanceof ImageView) {
+            Drawable d = ((ImageView) v).getDrawable();
+            if (d == null) {
+                sb.append(" drawable=null");
+            } else {
+                sb.append(" drawable=").append(d.getClass().getSimpleName());
+                if (d instanceof BitmapDrawable) {
+                    Bitmap b = ((BitmapDrawable) d).getBitmap();
+                    if (b != null) sb.append(' ').append(b.getWidth()).append('x').append(b.getHeight());
+                }
+            }
+        }
+        if (hasDesc) sb.append(" desc=\"").append(cd.length() > 40 ? cd.subSequence(0, 40) + "…" : cd).append('"');
+        String desc = sb.toString();
+        if (!filter.accept(desc)) return;
+        long shape = shapeHash(desc);
+        SetStack ss = ICON_SET.get(v);
+        Rec r = obtain(Rec.ICON, v.getClass().getName(), idName(v), ss, EMPTY, v, desc, shape, c);
+        if (r == null) return;
+        r.touch(desc, shape);
+        r.trackView(v);
+        ICON_VIEWS.put(v, Boolean.TRUE);
     }
 
     // ------------------------------------------------------------ View 状态变化（alpha / visibility / selected）
@@ -890,6 +1003,7 @@ final class Recorder {
         boolean want = r == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
         ICON_VIEWS.put(v, Boolean.TRUE);
         if (!want) { // 列表滚动时图标会被反复设置：已知位置只计数
+            if (r.set != null) ICON_SET.put(v, r.set);
             r.tick();
             r.trackView(v);
             store.markDirty();
@@ -903,6 +1017,7 @@ final class Recorder {
             Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.stackDepth, false);
             SetStack ss = store.internSet(new SetStack(stk, Thread.currentThread().getName()), v.getClass().getClassLoader());
             ss.count.incrementAndGet();
+            ICON_SET.put(v, ss);
             Rec nr = obtain(Rec.ICON, cls, idName(v), ss, EMPTY, v, desc, shape, c);
             if (nr != null) {
                 dp.rec = nr;
