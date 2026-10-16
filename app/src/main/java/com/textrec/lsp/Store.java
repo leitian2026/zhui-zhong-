@@ -185,7 +185,7 @@ final class Store {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.5");
+        root.put("module", "TextRec 1.6");
         root.put("pkg", pkg);
         root.put("process", proc);
         root.put("appVersion", appVersion);
@@ -206,6 +206,7 @@ final class Store {
         cj.put("traceIcons", c.traceIcons);
         cj.put("autoParams", c.autoParams);
         cj.put("traceSetOnly", c.traceSetOnly);
+        cj.put("traceState", c.traceState);
         cj.put("maxSetOnly", c.maxSetOnly);
         cj.put("traceMethods", c.traceMethods);
         root.put("config", cj);
@@ -246,6 +247,7 @@ final class Store {
         o.put("thread", thread);
         o.put("frames", new JSONArray(Arrays.asList(s.lines)));
         o.put("more", s.more);
+        if (s.xmlOnly) o.put("xmlOnly", true);
         o.put("sigs", new JSONArray(Arrays.asList(sigs)));
         return o;
     }
@@ -262,6 +264,9 @@ final class Store {
         j.put("kind", r.kind);
         j.put("view", r.viewClass);
         j.put("viewId", r.viewId);
+        // 同一个位置（栈相同）出现过的所有 View id；归并后一条记录可能对应一批控件
+        j.put("ids", new JSONArray(r.idList()));
+        j.put("idsFull", r.idsFull());
         j.put("activity", r.activity);
         j.put("parents", new JSONArray(Arrays.asList(r.parents)));
         j.put("drawCount", r.drawCount.get());
@@ -351,10 +356,14 @@ final class Store {
             if (Rec.COMPOSE.equals(r.kind)) note = "Compose：无 setText（状态变化触发重组后再绘制），看下方“画笔/参数”里的颜色和描边/填充，以及“可 hook 的方法签名”里标 [稳定] 的那个";
             else if (Rec.CANVAS.equals(r.kind)) note = "自绘文字：没有 setText，只有画的位置";
             else if (Rec.TRACE.equals(r.kind)) note = "方法追踪：右侧“调用栈”是谁调用了这个方法；参数→返回值的各种取值见上方“调用参数变体”";
+            else if (Rec.STATE.equals(r.kind)) note = "状态变化：设置栈 = 谁改了 alpha/visibility/selected；各种取值见上方“状态变化”";
             else note = "无设置栈：设置发生在记录开始之前（可重启后冷启动记录），或被限流";
             j.put("setNote", note);
         }
-        if (Rec.ICON.equals(r.kind)) {
+        if (Rec.STATE.equals(r.kind)) {
+            j.put("drawStack", JSONObject.NULL);
+            j.put("drawNote", "状态变化：没有绘制栈，只记录“谁改了它的 alpha / visibility / selected”，见左侧设置栈");
+        } else if (Rec.ICON.equals(r.kind)) {
             // 图标没有“绘制栈”，只有“谁设置了它”（左侧设置栈）
             j.put("drawStack", JSONObject.NULL);
             j.put("drawNote", "图标：没有绘制栈，只记录“谁设置了图标”（setImage* / setContentDescription），见左侧设置栈");
