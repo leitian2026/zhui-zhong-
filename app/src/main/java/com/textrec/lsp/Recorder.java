@@ -282,7 +282,7 @@ final class Recorder {
                 if (appliedEpoch != Long.MIN_VALUE) {
                     // 只清记录，不清“View → 设置栈 / 颜色栈”的对应：View 的设置发生在清空之前，清掉就再也补不回来了
                     store.reset();
-                    rescanLater(); // 屏幕上静态不变的文字不会再画，主动让它们重画一次，才能被记录
+                    if (!c.traceOnly) rescanLater(); // 屏幕上静态不变的文字不会再画，主动让它们重画一次，才能被记录（只记方法追踪时不需要）
                 }
                 appliedEpoch = c.epoch;
             }
