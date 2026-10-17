@@ -118,6 +118,7 @@ final class RecFormat {
         sb.append("View: ").append(r.optString("view")).append(idTxt).append('\n');
         String act = r.optString("activity");
         String pg = r.optString("page");
+        if (r.optJSONArray("thumbs") != null) sb.append("图标图片: ").append(r.optJSONArray("thumbs").length()).append(" 张（txt 放不了图，见记录页缩略图 / 导出 HTML / JSON 的 thumbs）\n");
         String rawPg = !pg.isEmpty() ? pg : act.isEmpty() ? "(启动中，尚无 Activity)" : act;
         String label = pageOf(r);
         sb.append("页面: ").append(label).append(label.equals(rawPg) ? "" : "（" + rawPg + "）").append('\n');
