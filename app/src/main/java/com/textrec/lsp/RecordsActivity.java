@@ -39,7 +39,7 @@ import java.util.regex.Pattern;
 
 /** 记录列表：一个位置一行，可搜索（文字 / 类名 / 栈帧 / 页面），可排序，可导出 txt 和 JSON。 */
 public class RecordsActivity extends Activity {
-    private static final int REQ_TXT = 2001, REQ_JSON = 2002;
+    private static final int REQ_TXT = 2001, REQ_JSON = 2002, REQ_HTML = 2003;
     private static final String[] SORTS = {"最近", "次数", "首次"};
     private static final String[] KINDS = {"全部", "TextView", "自绘", "Compose", "图标", "方法追踪", "仅设置", "状态变化"};
     private static final String[] KIND_KEYS = {"", "TEXTVIEW", "CANVAS", "COMPOSE", "ICON", "TRACE", "TEXTSET", "STATE"};
@@ -95,6 +95,7 @@ public class RecordsActivity extends Activity {
         bar2.setOrientation(LinearLayout.HORIZONTAL);
         bar2.addView(btn("导出txt", v -> export(REQ_TXT)), w1());
         bar2.addView(btn("导出JSON", v -> export(REQ_JSON)), w1());
+        bar2.addView(btn("导出HTML(含图标)", v -> export(REQ_HTML)), w1());
         bar2.addView(btn("清空", v -> confirmClear()), w1());
         root.addView(bar2);
 
@@ -400,11 +401,13 @@ public class RecordsActivity extends Activity {
     private View row(Snap.Item it, View cv) {
         LinearLayout row;
         TextView t1, t2, t3;
+        LinearLayout th;
         if (cv instanceof LinearLayout && cv.getTag() != null) {
             row = (LinearLayout) cv;
             t1 = (TextView) row.getChildAt(0);
-            t2 = (TextView) row.getChildAt(1);
-            t3 = (TextView) row.getChildAt(2);
+            th = (LinearLayout) row.getChildAt(1);
+            t2 = (TextView) row.getChildAt(2);
+            t3 = (TextView) row.getChildAt(3);
         } else {
             row = new LinearLayout(this);
             row.setOrientation(LinearLayout.VERTICAL);
@@ -418,12 +421,23 @@ public class RecordsActivity extends Activity {
             t3.setTextSize(11);
             t3.setTypeface(Typeface.MONOSPACE);
             t3.setTextColor(Color.GRAY);
+            th = new LinearLayout(this);
+            th.setOrientation(LinearLayout.HORIZONTAL);
             row.addView(t1);
+            row.addView(th);
             row.addView(t2);
             row.addView(t3);
             row.setTag("row");
         }
         JSONObject r = it.o;
+        th.removeAllViews();
+        JSONArray ta = r.optJSONArray("thumbs");
+        if (ta == null || ta.length() == 0) {
+            th.setVisibility(View.GONE);
+        } else {
+            th.setVisibility(View.VISIBLE);
+            for (int k = 0; k < ta.length(); k++) th.addView(thumbView(this, ta.optString(k), dp(44)));
+        }
         t1.setText(RecFormat.visMark(r) + " #" + r.optInt("id") + " [" + RecFormat.kindLabel(r.optString("kind")) + "] "
                 + RecFormat.samplesLine(r, 10, 4) + " ×" + r.optInt("drawCount"));
         String id = r.optString("viewId");
@@ -431,6 +445,35 @@ public class RecordsActivity extends Activity {
                 + "   页面 " + RecFormat.pageOf(r));
         t3.setText("设: " + topFrame(r.optJSONObject("setStack")) + "\n画: " + topFrame(r.optJSONObject("drawStack")));
         return row;
+    }
+
+    private static final android.util.LruCache<String, android.graphics.Bitmap> THUMBS = new android.util.LruCache<>(300);
+
+    static android.graphics.Bitmap thumbBitmap(String b64) {
+        android.graphics.Bitmap b = THUMBS.get(b64);
+        if (b != null) return b;
+        try {
+            byte[] raw = android.util.Base64.decode(b64, android.util.Base64.DEFAULT);
+            b = android.graphics.BitmapFactory.decodeByteArray(raw, 0, raw.length);
+            if (b != null) THUMBS.put(b64, b);
+        } catch (Throwable ignored) {
+        }
+        return b;
+    }
+
+    /** 缩略图控件：灰底，白色图标也看得见。 */
+    static android.widget.ImageView thumbView(android.content.Context ctx, String b64, int sizePx) {
+        android.widget.ImageView iv = new android.widget.ImageView(ctx);
+        iv.setBackgroundColor(0xFF9E9E9E);
+        iv.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+        android.graphics.Bitmap b = thumbBitmap(b64);
+        if (b != null) iv.setImageBitmap(b);
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(sizePx, sizePx);
+        lp.rightMargin = sizePx / 8;
+        lp.topMargin = sizePx / 10;
+        lp.bottomMargin = sizePx / 10;
+        iv.setLayoutParams(lp);
+        return iv;
     }
 
     private static String topFrame(JSONObject s) {
@@ -455,6 +498,44 @@ public class RecordsActivity extends Activity {
             Collections.sort(out, (a, b) -> Integer.compare(rank.get(RecFormat.pageOf(a.o)), rank.get(RecFormat.pageOf(b.o)))); // 稳定排序
         }
         return out;
+    }
+
+    private static String esc(String s) {
+        return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
+    }
+
+    /** 带图标图片的网页：txt 放不了图，用浏览器打开这个文件就能一眼看出每条记录是哪个图标。 */
+    private String buildHtml() {
+        StringBuilder sb = new StringBuilder(1 << 16);
+        sb.append("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width,initial-scale=1'>")
+                .append("<title>TextRec</title><style>body{font:13px sans-serif;margin:8px}table{border-collapse:collapse;width:100%}")
+                .append("td,th{border:1px solid #bbb;padding:4px;vertical-align:top}img{width:56px;height:56px;object-fit:contain;")
+                .append("background:#9e9e9e;margin-right:4px}.g{background:#e8eef7;font-weight:bold}code{font-size:11px;word-break:break-all}</style>");
+        sb.append("<h3>TextRec 导出 ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
+                .append("　类型=").append(esc(KINDS[kindMode])).append("　页面=").append(esc(pageFilter.isEmpty() ? "全部" : pageFilter))
+                .append("　共 ").append(shown.size()).append(" 条</h3>");
+        sb.append("<table><tr><th>#</th><th>图标</th><th>类型</th><th>文字 / 描述</th><th>View</th><th>设置位置</th><th>次数</th></tr>");
+        String cur = null;
+        for (Snap.Item it : exportOrder()) {
+            JSONObject r = it.o;
+            String pg = RecFormat.pageOf(r);
+            if (pageFilter.isEmpty() && !pg.equals(cur)) {
+                cur = pg;
+                sb.append("<tr><td class=g colspan=7>页面：").append(esc(pg)).append("（").append(countPage(pg)).append(" 条）</td></tr>");
+            }
+            sb.append("<tr><td>").append(r.optInt("id")).append("</td><td>");
+            JSONArray ta = r.optJSONArray("thumbs");
+            if (ta != null) for (int i = 0; i < ta.length(); i++) {
+                sb.append("<img src='data:image/png;base64,").append(ta.optString(i)).append("'>");
+            }
+            String id = r.optString("viewId");
+            sb.append("</td><td>").append(esc(RecFormat.kindLabel(r.optString("kind")))).append("</td><td>")
+                    .append(esc(RecFormat.samplesLine(r, 40, 4))).append("<br><code>").append(esc(r.optString("lastText"))).append("</code></td><td>")
+                    .append(esc(RecFormat.simple(r.optString("view")))).append(id.isEmpty() ? "" : " id=" + esc(id)).append("</td><td><code>")
+                    .append(esc(topFrame(r.optJSONObject("setStack")))).append("</code></td><td>").append(r.optInt("drawCount")).append("</td></tr>");
+        }
+        sb.append("</table>");
+        return sb.toString();
     }
 
     private int countPage(String page) {
@@ -498,6 +579,8 @@ public class RecordsActivity extends Activity {
                 sb.append(RecFormat.full(it, dd)).append("\n==========================================\n\n");
             }
             content = sb.toString();
+        } else if (req == REQ_HTML) {
+            content = buildHtml();
         } else {
             try {
                 JSONObject o = new JSONObject();
@@ -530,16 +613,16 @@ public class RecordsActivity extends Activity {
         pendingExport = content;
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType(req == REQ_TXT ? "text/plain" : "application/json");
+        i.setType(req == REQ_TXT ? "text/plain" : req == REQ_HTML ? "text/html" : "application/json");
         i.putExtra(Intent.EXTRA_TITLE, "textrec-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date())
-                + (req == REQ_TXT ? ".txt" : ".json"));
+                + (req == REQ_TXT ? ".txt" : req == REQ_HTML ? ".html" : ".json"));
         startActivityForResult(i, req);
     }
 
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
-        if ((req != REQ_TXT && req != REQ_JSON) || res != RESULT_OK || data == null || data.getData() == null) return;
+        if ((req != REQ_TXT && req != REQ_JSON && req != REQ_HTML) || res != RESULT_OK || data == null || data.getData() == null) return;
         final Uri uri = data.getData();
         final String content = pendingExport;
         if (content == null) return;
