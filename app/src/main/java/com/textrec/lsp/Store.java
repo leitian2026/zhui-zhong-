@@ -187,7 +187,7 @@ final class Store {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.11");
+        root.put("module", "TextRec 1.12");
         root.put("pkg", pkg);
         root.put("process", proc);
         root.put("appVersion", appVersion);
@@ -271,6 +271,10 @@ final class Store {
         j.put("idsFull", r.idsFull());
         j.put("activity", r.activity);
         j.put("page", r.page);
+        if (Rec.ICON.equals(r.kind)) {
+            java.util.List<String> th = r.thumbList();
+            if (!th.isEmpty()) j.put("thumbs", new JSONArray(th));
+        }
         j.put("parents", new JSONArray(Arrays.asList(r.parents)));
         j.put("drawCount", r.drawCount.get());
         j.put("setCount", r.set == null ? 0 : r.set.count.get());
