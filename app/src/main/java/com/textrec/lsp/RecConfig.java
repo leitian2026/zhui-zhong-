@@ -51,6 +51,12 @@ public final class RecConfig {
     public String viewFilter = "";
     /** 值匹配：方法追踪的参数或返回值里包含其中任意一个值才记；时长会自动展开成多种写法；空 = 不限 */
     public String valueFilter = "";
+    /** 开关：排除通用基础设施（LiveData、Fragment 生命周期、字节的异步包装等，几乎所有功能都会经过的类） */
+    public boolean excludeInfra = false;
+    /** 线程：0 = 全部，1 = 只主线程，2 = 只后台线程 */
+    public int threadMode = 0;
+    /** 开关：方法追踪只记参数或返回值里带时间的调用（形如 00:00、1:37） */
+    public boolean valueClock = false;
     /** 持续型自动降频：同一位置调用超过这个次数、且持续超过 quietSpanMs，之后只计数不抓栈；0 = 关 */
     public int quietCount = 0;
     public int quietSpanMs = 3000;
@@ -178,6 +184,7 @@ public final class RecConfig {
                 + " setOnly=" + traceSetOnly + "/" + maxSetOnly + " state=" + traceState
                 + " traces=" + splitTargets(traceMethods).size()
                 + " window=" + windowMs + (windowAll ? "/all" : "") + " quiet=" + quietCount + "/" + quietSpanMs
+                + " infra=" + excludeInfra + " thrMode=" + threadMode + " clock=" + valueClock
                 + " thr=" + splitLines(threadFilter).size() + " page=" + splitLines(pageFilter).size()
                 + " view=" + splitLines(viewFilter).size() + " excl=" + splitLines(excludeList).size()
                 + " val=" + splitLines(valueFilter).size()
@@ -204,6 +211,9 @@ public final class RecConfig {
             p.setProperty("traceMethods", traceMethods);
             p.setProperty("windowMs", String.valueOf(windowMs));
             p.setProperty("windowAll", String.valueOf(windowAll));
+            p.setProperty("excludeInfra", String.valueOf(excludeInfra));
+            p.setProperty("threadMode", String.valueOf(threadMode));
+            p.setProperty("valueClock", String.valueOf(valueClock));
             p.setProperty("excludeList", excludeList);
             p.setProperty("threadFilter", threadFilter);
             p.setProperty("pageFilter", pageFilter);
@@ -276,6 +286,9 @@ public final class RecConfig {
         c.traceMethods = p.getProperty("traceMethods", c.traceMethods);
         c.windowMs = clamp(num(p, "windowMs", c.windowMs), 0, 600000);
         c.windowAll = bool(p, "windowAll", c.windowAll);
+        c.excludeInfra = bool(p, "excludeInfra", c.excludeInfra);
+        c.threadMode = clamp(num(p, "threadMode", c.threadMode), 0, 2);
+        c.valueClock = bool(p, "valueClock", c.valueClock);
         c.excludeList = p.getProperty("excludeList", c.excludeList);
         c.threadFilter = p.getProperty("threadFilter", c.threadFilter);
         c.pageFilter = p.getProperty("pageFilter", c.pageFilter);
