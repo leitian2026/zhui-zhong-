@@ -21,19 +21,19 @@ public final class RecConfig {
     /** 记录文字颜色：画笔颜色（所有文字）+ TextView 的 setTextColor 设置位置 */
     public boolean traceColor = true;
     /** 记录图标/按钮图片：ImageView 的 setImage* 与 View.setContentDescription */
-    public boolean traceIcons = true;
+    public boolean traceIcons = false;
     /** 自动观察 Compose 文字绘制（MultiParagraph.paint）的参数：颜色、描边/填充等 */
     public boolean autoParams = true;
     /** 记录“只被 setText、从未被绘制”的文字（控件 INVISIBLE/GONE/尺寸为 0/未挂窗口，如拖动才出现的时长） */
-    public boolean traceSetOnly = true;
+    public boolean traceSetOnly = false;
     /** 记录被跟踪 View 的 alpha / visibility / selected 变化（谁在改、改成什么） */
-    public boolean traceState = true;
+    public boolean traceState = false;
     /** 这类记录的上限（单独计，不占用 maxRecords 的大头） */
     public int maxSetOnly = 500;
     /** 方法追踪：每行 类#方法，记录每次调用的参数/返回值和调用栈（只读）。// 开头为注释 */
     public String traceMethods = "";
     /** 每条记录里保存的调用栈最大帧数 */
-    public int stackDepth = 30;
+    public int stackDepth = 12;
     /** 同一个“位置”前几次要抓栈 */
     public int perKeyStacks = 3;
     /** 之后每隔多少次再抽样抓一次（发现同一控件的其他调用路径） */
