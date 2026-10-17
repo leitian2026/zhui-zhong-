@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
 /** 首页：流程说明 → 目标 App → 记录内容 → 记录范围 → 高级；底部固定「查看记录」和「应用并重新记录」。 */
 public class MainActivity extends Activity {
     private EditText etPkgs, etKeywords, etDepth, etPerKey, etSample, etPerSec, etMax, etMaxSetOnly, etTrace;
-    private Switch swEnabled, swRegex, swSet, swDraw, swColor, swIcons, swAuto, swSetOnly, swState;
+    private Switch swEnabled, swTraceOnly, swRegex, swSet, swDraw, swColor, swIcons, swAuto, swSetOnly, swState;
     private Ui.Seg segRange;
     private LinearLayout kwBox, advBody;
     private TextView advHeader, rangeDesc, tvStatus, btnPush, btnReset, btnApplyOnly;
@@ -137,6 +137,7 @@ public class MainActivity extends Activity {
         presets.setGravity(Gravity.CENTER_VERTICAL);
         presets.addView(Ui.tv(this, "快速选择", 12.5f, R.color.text_hint, false), Ui.lpM(this, -2, -2, 4, 0, 10, 0));
         presets.addView(Ui.chip(this, "只记文字（推荐）", false, v -> {
+            swTraceOnly.setChecked(false);
             swIcons.setChecked(false);
             swSetOnly.setChecked(false);
             swState.setChecked(false);
@@ -148,6 +149,7 @@ public class MainActivity extends Activity {
             toast("已选「只记文字」，点底部「应用并重新记录」后生效");
         }), Ui.lpM(this, -2, -2, 0, 0, 8, 0));
         presets.addView(Ui.chip(this, "全部打开", false, v -> {
+            swTraceOnly.setChecked(false);
             swSet.setChecked(true);
             swDraw.setChecked(true);
             swColor.setChecked(true);
@@ -163,6 +165,13 @@ public class MainActivity extends Activity {
         LinearLayout card = Ui.card(this);
         card.setPadding(Ui.dp(this, 16), Ui.dp(this, 2), Ui.dp(this, 16), Ui.dp(this, 2));
         Ui.Sw s;
+        s = Ui.switchRow(this, "只记方法追踪", "打开后下面所有文字 / 图标 / 颜色 / 状态记录都不记，只记「高级」里「方法追踪」填的方法，记录最干净");
+        swTraceOnly = s.sw;
+        swTraceOnly.setOnCheckedChangeListener((b, on) -> {
+            if (on) setAdvanced(true); // 方法清单在「高级」里，顺手展开
+        });
+        card.addView(s.row);
+        card.addView(Ui.divider(this));
         s = Ui.switchRow(this, "文字是谁设置的", "记下每段文字由哪行代码 setText 出来（最常用）");
         swSet = s.sw;
         card.addView(s.row);
@@ -302,6 +311,7 @@ public class MainActivity extends Activity {
             sp.edit().putInt("ver", 2).putString("cfg", c.toText()).apply();
         }
         swEnabled.setChecked(c.enabled);
+        swTraceOnly.setChecked(c.traceOnly);
         swSet.setChecked(c.traceSet);
         swDraw.setChecked(c.traceDraw);
         swColor.setChecked(c.traceColor);
@@ -327,6 +337,7 @@ public class MainActivity extends Activity {
     private RecConfig read(long epoch) {
         RecConfig c = new RecConfig();
         c.enabled = swEnabled.isChecked();
+        c.traceOnly = swTraceOnly.isChecked();
         c.traceSet = swSet.isChecked();
         c.traceDraw = swDraw.isChecked();
         c.traceColor = swColor.isChecked();
