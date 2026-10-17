@@ -59,6 +59,66 @@ final class Recorder {
     static volatile KeywordFilter filter = new KeywordFilter(cfg);
     static final Store store = new Store();
     static volatile String activityName = "";
+    /**
+     * 当前“页面”：Activity 简名 + 最近显示出来的 Fragment（单 Activity 的 App 靠 Fragment 区分首页/消息/同城…）。
+     * 它进记录的归并 key：同一个控件换了页面再出现，另记一条，互不覆盖；导出时可按页面选择。
+     */
+    static volatile String pageName = "";
+    static volatile long pageHash = 0;
+    private static volatile String pageActivity = "";
+    private static final AtomicBoolean FRAGMENT_HOOKED = new AtomicBoolean();
+
+    static void setPage(String name) {
+        if (name == null) name = "";
+        if (name.equals(pageName)) return;
+        pageName = name;
+        pageHash = name.hashCode() * 0x9E3779B97F4A7C15L;
+        store.markDirty();
+    }
+
+    private static String simpleName(String cls) {
+        if (cls == null) return "";
+        int i = cls.lastIndexOf('.');
+        return i < 0 ? cls : cls.substring(i + 1);
+    }
+
+    private static void noteFragment(Object f) {
+        if (f == null) return;
+        String n = simpleName(f.getClass().getName());
+        String a = pageActivity;
+        setPage(a.isEmpty() ? n : a + " > " + n);
+    }
+
+    /** Fragment 显示出来（onResume / 取消隐藏 / ViewPager 里变成可见）就把页面切到它。 */
+    private static void ensureFragmentHook(ClassLoader cl) {
+        if (cl == null || FRAGMENT_HOOKED.get()) return;
+        try {
+            Class<?> k = Class.forName("androidx.fragment.app.Fragment", false, cl);
+            if (!FRAGMENT_HOOKED.compareAndSet(false, true)) return;
+            XC_MethodHook h = new XC_MethodHook() {
+                @Override
+                protected void afterHookedMethod(MethodHookParam p) {
+                    try {
+                        String m = p.method.getName();
+                        if ("onHiddenChanged".equals(m) || "setUserVisibleHint".equals(m)) {
+                            if (p.args == null || p.args.length < 1 || !(p.args[0] instanceof Boolean)) return;
+                            boolean b = (Boolean) p.args[0];
+                            // onHiddenChanged(true) / setUserVisibleHint(false) 是“离开”，不算显示出来
+                            if ("onHiddenChanged".equals(m) ? b : !b) return;
+                        }
+                        noteFragment(p.thisObject);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            };
+            XposedBridge.hookAllMethods(k, "onResume", h);
+            XposedBridge.hookAllMethods(k, "onHiddenChanged", h);
+            XposedBridge.hookAllMethods(k, "setUserVisibleHint", h);
+            XposedBridge.log("[TextRec] Fragment page hooks installed");
+        } catch (Throwable ignored) {
+            // 目标 App 没有 androidx Fragment，或类还加载不了：下次 Activity.onResume 再试；页面就只按 Activity 区分
+        }
+    }
 
     private static volatile long cfgMtime = -1;
     private static volatile long lastCheck;
@@ -200,6 +260,12 @@ final class Recorder {
                         activityName = a.getClass().getName();
                         resumed = new WeakReference<>(a);
                         ClassLoader acl = a.getClass().getClassLoader();
+                        String an = simpleName(activityName);
+                        if (!an.equals(pageActivity)) { // 换了 Activity 才重置页面；同一个 Activity 保留 Fragment 标签
+                            pageActivity = an;
+                            setPage(an);
+                        }
+                        ensureFragmentHook(acl);
                         SigResolver.addLoader(acl);
                         maybeReload();
                         ensureComposeHook(acl);
@@ -1267,7 +1333,7 @@ final class Recorder {
      */
     private static Rec obtain(String kind, String viewCls, String viewId, String keyExtra, SetStack ss,
                               Stacks.Stk d, View v, String text, long shape, RecConfig c) {
-        String key = kind + '|' + viewCls + '|' + keyExtra + '|' + (ss == null ? 0 : ss.stk.sig) + '|' + d.sig;
+        String key = kind + '|' + pageName + '|' + viewCls + '|' + keyExtra + '|' + (ss == null ? 0 : ss.stk.sig) + '|' + d.sig;
         Rec r = store.recs.get(key);
         if (r != null) {
             r.addId(viewId);
@@ -1282,7 +1348,7 @@ final class Recorder {
             store.droppedSetOnly.incrementAndGet();
             return null;
         }
-        Rec nr = new Rec(store.nextId.getAndIncrement(), key, kind, viewCls, viewId, activityName,
+        Rec nr = new Rec(store.nextId.getAndIncrement(), key, kind, viewCls, viewId, activityName, pageName,
                 v == null ? new String[0] : parentsOf(v), ss, d, Thread.currentThread().getName(), text, shape);
         Rec old = store.recs.putIfAbsent(key, nr);
         if (old != null) {
