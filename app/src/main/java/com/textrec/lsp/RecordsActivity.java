@@ -287,6 +287,18 @@ public class RecordsActivity extends Activity {
                 all.clear();
                 all.addAll(items);
                 infoBase = ib.toString();
+                if (kindMode == 1) { // 默认只看 TextView：但记录里只有方法追踪时，那样会什么都看不到
+                    int trace = 0, other = 0;
+                    for (Snap.Item it : all) {
+                        if ("TRACE".equals(it.o.optString("kind"))) trace++;
+                        else other++;
+                    }
+                    if (trace > 0 && other == 0) {
+                        kindMode = 5;
+                        hideCommon = false;
+                        updateChips();
+                    }
+                }
                 applyFilter();
             });
         }).start();
