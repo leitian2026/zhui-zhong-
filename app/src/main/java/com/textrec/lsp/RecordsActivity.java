@@ -64,7 +64,13 @@ public class RecordsActivity extends Activity {
             "控件放在哪个特殊容器里，如底部栏、顶部 Tab 项",
             "设置这段文字的代码属于哪个功能包，如 feed.bottombar",
             "控件本身的类名，如 TextView、DmtTextView",
-            "控件中心点所在区域：顶部栏 / 底部栏 / 右侧栏 / 左下信息区 / 内容区 / 不在屏幕上"};
+            "控件中心点所在区域：顶部栏 / 底部栏 / 右侧栏 / 左下信息区 / 内容区 / 不在屏幕上",
+            "TextView / Compose / 自绘 / 图标 / 方法追踪 / 仅设置 / 状态变化",
+            "现在能不能直接拿去写 hook：有稳定业务帧 / 只有通用控件帧 / 只有混淆帧 / 无可用帧",
+            "调用或绘制了多少次：仅一次的多半是固定文案，高频的多半是列表项公共渲染点",
+            "同一段代码（控件类+最近稳定帧）是不是在好几个页面都出现，越多越像全局公共入口",
+            "这个位置出现过的文字长什么样：时长格式 / 纯数字计数 / 固定文案 / 多种动态文案",
+            "相对这批记录里最晚一次更新时间，是刚冒出来的还是很久前就有的历史记录"};
 
     private ListView lv;
     private EditText etSearch;
@@ -73,8 +79,13 @@ public class RecordsActivity extends Activity {
     private ProgressBar progress;
     private TextView chType, chPage, chCat, chSort, chScreen, chCommon;
     private TextView tvLegend, tvBanner, emptyTitle, emptyDesc, emptyBtn;
-    /** 分类筛选（空 = 不限）：0 所属容器  1 代码模块  2 控件类  3 屏幕位置，几项同时选是“且”。 */
-    private final String[] catVal = {"", "", "", ""};
+    /** 分类筛选（空 = 不限），维度见 RecFormat.CAT_DIMS，几项同时选是“且”。 */
+    private final String[] catVal = new String[RecFormat.CAT_DIMS.length];
+    { java.util.Arrays.fill(catVal, ""); }
+    /** 复用范围 / 新鲜度两个维度要扫一遍全部记录才能算，缓存起来，数据没变就不重算。 */
+    private Object aggKey;
+    private java.util.Map<String, java.util.Set<String>> reuseGroups = new java.util.HashMap<>();
+    private long maxLast;
     private int scrW, scrH;
     private Object scrKey;
     private boolean onlyOnScreen = true;
@@ -343,9 +354,31 @@ public class RecordsActivity extends Activity {
 
     private boolean catMatch(JSONObject r) {
         for (int d = 0; d < catVal.length; d++) {
-            if (!catVal[d].isEmpty() && !catVal[d].equals(RecFormat.catOf(d, r, scrW, scrH))) return false;
+            if (!catVal[d].isEmpty() && !catVal[d].equals(RecFormat.catOf(d, r, scrW, scrH, reuseGroups, maxLast))) return false;
         }
         return true;
+    }
+
+    /** 复用范围（dim 7）、新鲜度（dim 9）要先扫一遍 all 才能算；按 all 是否变过缓存，和 ensureScreen 同一套套路。 */
+    private void ensureAgg() {
+        Object key = all.isEmpty() ? "" : all.size() + ":" + System.identityHashCode(all.get(0));
+        if (key.equals(aggKey)) return;
+        aggKey = key;
+        java.util.HashMap<String, java.util.Set<String>> groups = new java.util.HashMap<>();
+        long mx = 0;
+        for (Snap.Item it : all) {
+            String k = RecFormat.reuseKeyOf(it.o);
+            java.util.Set<String> pages = groups.get(k);
+            if (pages == null) {
+                pages = new java.util.HashSet<>();
+                groups.put(k, pages);
+            }
+            pages.add(RecFormat.pageOf(it.o));
+            long last = it.o.optLong("last");
+            if (last > mx) mx = last;
+        }
+        reuseGroups = groups;
+        maxLast = mx;
     }
 
     /** 屏幕尺寸取记录里出现过的最大坐标（和目标 App 窗口同一坐标系）；一条都没有就用本机屏幕。 */
@@ -583,9 +616,10 @@ public class RecordsActivity extends Activity {
         final String keep = catVal[dim];
         catVal[dim] = "";
         applyFilter(); // 此时 shown = 不含这一项分类筛选的结果
+        ensureAgg();
         final java.util.HashMap<String, Integer> cnt = new java.util.HashMap<>();
         for (Snap.Item it : shown) {
-            String v = RecFormat.catOf(dim, it.o, scrW, scrH);
+            String v = RecFormat.catOf(dim, it.o, scrW, scrH, reuseGroups, maxLast);
             Integer n = cnt.get(v);
             cnt.put(v, n == null ? 1 : n + 1);
         }
@@ -649,6 +683,7 @@ public class RecordsActivity extends Activity {
         shown.clear();
         final java.util.HashSet<String> common = hideCommon ? commonKeys() : null;
         if (!catVal[3].isEmpty()) ensureScreen();
+        ensureAgg(); // 有缓存，all 没变时这一句基本免费
         int hiddenC = 0;
         for (Snap.Item it : all) {
             if (common != null && common.contains(commonKey(it.o))) {
@@ -896,7 +931,7 @@ public class RecordsActivity extends Activity {
         helpItem(body, "仅屏幕上", "只显示 ● 和 ?，把 ○ 藏起来。想看全部就关掉。");
         helpItem(body, "隐藏公共控件", "在两个以上页面里位置和文字都一样的控件（底部栏、顶部栏等）。隐藏后更容易看到当前页面独有的内容。");
         helpItem(body, "类型 / 页面", "类型 = 记录是怎么来的（TextView、Compose、图标…）。页面 = 记录发生在哪个页面，可以给页面起名字。");
-        helpItem(body, "分类", "按所属容器、代码模块、控件类、屏幕位置缩小范围，几项同时选 = 同时满足。");
+        helpItem(body, "分类", "按所属容器、代码模块、控件类、屏幕位置、记录类型、hook可靠度、调用频次、复用范围、内容形态、新鲜度缩小范围，几项同时选 = 同时满足。");
         helpItem(body, "搜索", "多个词用空格分隔，都要命中；以 re: 开头按正则匹配。搜的范围包括文字、类名、栈帧、页面。");
         helpItem(body, "长按列表里的一张卡片", "给它所在的页面起名字。");
         new Ui.Dlg(this, "筛选说明", null).body(body, true).button("知道了", true, null).show();
