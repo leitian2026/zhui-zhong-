@@ -39,7 +39,7 @@ import java.util.regex.Pattern;
 
 /** 记录列表：一个位置一行，可搜索（文字 / 类名 / 栈帧 / 页面），可排序，可导出 txt 和 JSON。 */
 public class RecordsActivity extends Activity {
-    private static final int REQ_TXT = 2001, REQ_JSON = 2002, REQ_HTML = 2003;
+    private static final int REQ_TXT = 2001, REQ_JSON = 2002, REQ_HTML = 2003, REQ_HOOK = 2004;
     private static final String[] SORTS = {"最近", "次数", "首次"};
     private static final String[] KINDS = {"全部", "TextView", "自绘", "Compose", "图标", "方法追踪", "仅设置", "状态变化"};
     private static final String[] KIND_KEYS = {"", "TEXTVIEW", "CANVAS", "COMPOSE", "ICON", "TRACE", "TEXTSET", "STATE"};
@@ -93,11 +93,16 @@ public class RecordsActivity extends Activity {
 
         LinearLayout bar2 = new LinearLayout(this);
         bar2.setOrientation(LinearLayout.HORIZONTAL);
+        bar2.addView(btn("导出hook清单", v -> export(REQ_HOOK)), w1());
         bar2.addView(btn("导出txt", v -> export(REQ_TXT)), w1());
         bar2.addView(btn("导出JSON", v -> export(REQ_JSON)), w1());
-        bar2.addView(btn("导出HTML(含图标)", v -> export(REQ_HTML)), w1());
-        bar2.addView(btn("清空", v -> confirmClear()), w1());
         root.addView(bar2);
+
+        LinearLayout bar2b = new LinearLayout(this);
+        bar2b.setOrientation(LinearLayout.HORIZONTAL);
+        bar2b.addView(btn("导出HTML(含图标)", v -> export(REQ_HTML)), w1());
+        bar2b.addView(btn("清空", v -> confirmClear()), w1());
+        root.addView(bar2b);
 
         btnPage = btn("页面：全部（点这里选择，长按条目可命名）", v -> choosePage());
         root.addView(btnPage);
@@ -500,6 +505,41 @@ public class RecordsActivity extends Activity {
         return out;
     }
 
+    /** hook 清单：每个控件只写“它是什么 + 可以 hook 哪里”，没有栈、画笔、父级链。按页面分组。 */
+    private String buildHookList() {
+        StringBuilder sb = new StringBuilder();
+        StringBuilder entries = new StringBuilder();
+        int skipped = 0, written = 0;
+        String curPage = null;
+        for (Snap.Item it : exportOrder()) {
+            String e = RecFormat.hookEntry(it);
+            if (e == null) {
+                skipped++;
+                continue;
+            }
+            String pg = RecFormat.pageOf(it.o);
+            if (!pg.equals(curPage)) {
+                curPage = pg;
+                entries.append("\n████ 页面：").append(pg).append(" ████\n\n");
+            }
+            entries.append(e).append('\n');
+            written++;
+        }
+        sb.append("TextRec hook 清单  ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
+                .append("  共 ").append(written).append(" 条");
+        if (skipped > 0) sb.append("（另有 ").append(skipped).append(" 条没有可用 hook，已略过）");
+        sb.append('\n');
+        sb.append("筛选：类型=").append(KINDS[kindMode]).append("  页面=").append(pageFilter.isEmpty() ? "全部" : pageFilter)
+                .append("  只看屏幕上=").append(cbOnScreen.isChecked() ? "是" : "否");
+        if (cbCommon.isChecked()) sb.append("  已隐藏公共控件=").append(hiddenCommon);
+        sb.append('\n');
+        if (!infoBase.isEmpty()) sb.append(infoBase);
+        sb.append("说明：[稳定]=类名和方法名都没混淆；[混淆]=只对记录时的这个版本有效，换版本重新记录一次；栈N=离设置/绘制点第几层，越小越精确。\n");
+        sb.append("“系统方法”是兜底，不会被混淆，但同类控件都会进来，必须按 View 类 / id（/文字）过滤。\n");
+        sb.append(entries);
+        return sb.toString();
+    }
+
     private static String esc(String s) {
         return s == null ? "" : s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;");
     }
@@ -579,6 +619,8 @@ public class RecordsActivity extends Activity {
                 sb.append(RecFormat.full(it, dd)).append("\n==========================================\n\n");
             }
             content = sb.toString();
+        } else if (req == REQ_HOOK) {
+            content = buildHookList();
         } else if (req == REQ_HTML) {
             content = buildHtml();
         } else {
@@ -613,16 +655,16 @@ public class RecordsActivity extends Activity {
         pendingExport = content;
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType(req == REQ_TXT ? "text/plain" : req == REQ_HTML ? "text/html" : "application/json");
+        i.setType(req == REQ_TXT || req == REQ_HOOK ? "text/plain" : req == REQ_HTML ? "text/html" : "application/json");
         i.putExtra(Intent.EXTRA_TITLE, "textrec-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date())
-                + (req == REQ_TXT ? ".txt" : req == REQ_HTML ? ".html" : ".json"));
+                + (req == REQ_TXT || req == REQ_HOOK ? ".txt" : req == REQ_HTML ? ".html" : ".json"));
         startActivityForResult(i, req);
     }
 
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
-        if ((req != REQ_TXT && req != REQ_JSON && req != REQ_HTML) || res != RESULT_OK || data == null || data.getData() == null) return;
+        if ((req != REQ_TXT && req != REQ_JSON && req != REQ_HTML && req != REQ_HOOK) || res != RESULT_OK || data == null || data.getData() == null) return;
         final Uri uri = data.getData();
         final String content = pendingExport;
         if (content == null) return;
