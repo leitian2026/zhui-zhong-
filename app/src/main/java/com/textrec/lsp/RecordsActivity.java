@@ -66,6 +66,7 @@ public class RecordsActivity extends Activity {
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         setTitle("记录");
+        loadAlias();
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
         int pad = dp(8);
@@ -95,7 +96,7 @@ public class RecordsActivity extends Activity {
         bar2.addView(btn("清空", v -> confirmClear()), w1());
         root.addView(bar2);
 
-        btnPage = btn("页面：全部（点这里选择）", v -> choosePage());
+        btnPage = btn("页面：全部（点这里选择，长按条目可命名）", v -> choosePage());
         root.addView(btnPage);
 
         // 默认只看此刻在屏幕上的文字：预加载的、已离开页面的不显示；自绘/Compose 可见性未知，照常显示
@@ -191,12 +192,54 @@ public class RecordsActivity extends Activity {
         }).start();
     }
 
+    // ------------------------------------------------------------ 页面别名
+
+    private void loadAlias() {
+        RecFormat.ALIAS.clear();
+        String s = getSharedPreferences("pages", MODE_PRIVATE).getString("alias", "");
+        for (String line : s.split("\n")) {
+            int i = line.indexOf('\t');
+            if (i > 0 && i < line.length() - 1) RecFormat.ALIAS.put(line.substring(0, i), line.substring(i + 1));
+        }
+    }
+
+    private void saveAlias() {
+        StringBuilder sb = new StringBuilder();
+        for (java.util.Map.Entry<String, String> e : RecFormat.ALIAS.entrySet()) {
+            if (e.getValue() == null || e.getValue().isEmpty()) continue;
+            sb.append(e.getKey()).append('\t').append(e.getValue().replace('\n', ' ').replace('\t', ' ')).append('\n');
+        }
+        getSharedPreferences("pages", MODE_PRIVATE).edit().putString("alias", sb.toString()).apply();
+    }
+
+    private void renamePage(final String raw) {
+        final EditText et = new EditText(this);
+        et.setSingleLine(true);
+        et.setText(RecFormat.aliasOfRaw(raw).equals(raw) ? "" : RecFormat.aliasOfRaw(raw));
+        et.setHint("起个名字，如：消息（留空=用原名）");
+        new AlertDialog.Builder(this)
+                .setTitle("给 " + raw + " 命名")
+                .setMessage("多个页面起同一个名字，会合成一类。")
+                .setView(et)
+                .setPositiveButton("确定", (d, w) -> {
+                    String n = et.getText().toString().trim();
+                    if (n.isEmpty()) RecFormat.ALIAS.remove(raw);
+                    else RecFormat.ALIAS.put(raw, n);
+                    saveAlias();
+                    pageFilter = ""; // 名字变了，旧筛选可能失效
+                    btnPage.setText("页面：全部（点这里选择，长按条目可命名）");
+                    applyFilter();
+                })
+                .setNegativeButton("取消", null)
+                .show();
+    }
+
     // ------------------------------------------------------------ 页面选择
 
     private void choosePage() {
-        final java.util.LinkedHashMap<String, Integer> cnt = new java.util.LinkedHashMap<>();
+        final java.util.LinkedHashMap<String, Integer> cnt = new java.util.LinkedHashMap<>(); // 原始页面名 → 条数
         for (Snap.Item it : all) {
-            String p = RecFormat.pageOf(it.o);
+            String p = RecFormat.rawPageOf(it.o);
             Integer n = cnt.get(p);
             cnt.put(p, n == null ? 1 : n + 1);
         }
@@ -204,23 +247,33 @@ public class RecordsActivity extends Activity {
             Toast.makeText(this, "还没有记录，先刷新", Toast.LENGTH_SHORT).show();
             return;
         }
-        final String[] names = new String[cnt.size()];
+        final String[] raws = new String[cnt.size()];
         final String[] labels = new String[cnt.size() + 1];
-        labels[0] = "全部页面（" + all.size() + " 条）";
+        labels[0] = "全部页面（" + all.size() + " 条，导出时按页面分组）";
         int i = 0;
         for (java.util.Map.Entry<String, Integer> e : cnt.entrySet()) {
-            names[i] = e.getKey();
-            labels[i + 1] = e.getKey() + "（" + e.getValue() + " 条）";
+            raws[i] = e.getKey();
+            String nm = RecFormat.aliasOfRaw(e.getKey());
+            labels[i + 1] = nm + (nm.equals(e.getKey()) ? "" : "（" + e.getKey().replace("MainActivity > ", "") + "）")
+                    + "  " + e.getValue() + " 条";
             i++;
         }
-        new AlertDialog.Builder(this)
-                .setTitle("选择页面（导出也只导出所选页面）")
+        final AlertDialog dlg = new AlertDialog.Builder(this)
+                .setTitle("选择页面（点选=只看/只导出；长按=命名）")
                 .setItems(labels, (d, which) -> {
-                    pageFilter = which == 0 ? "" : names[which - 1];
-                    btnPage.setText(pageFilter.isEmpty() ? "页面：全部（点这里选择）" : "页面：" + pageFilter);
+                    pageFilter = which == 0 ? "" : RecFormat.aliasOfRaw(raws[which - 1]);
+                    btnPage.setText(pageFilter.isEmpty() ? "页面：全部（点这里选择，长按条目可命名）" : "页面：" + pageFilter);
                     applyFilter();
                 })
-                .show();
+                .create();
+        dlg.show();
+        dlg.getListView().setOnItemLongClickListener((parent, view, pos, id) -> {
+            if (pos > 0 && pos - 1 < raws.length) {
+                dlg.dismiss();
+                renamePage(raws[pos - 1]);
+            }
+            return true;
+        });
     }
 
     // ------------------------------------------------------------ 过滤 / 排序
@@ -330,6 +383,26 @@ public class RecordsActivity extends Activity {
 
     // ------------------------------------------------------------ 导出 / 清空
 
+    /** 导出顺序：选了某个页面就是当前列表顺序；选“全部页面”就按页面名分组（组内保持当前排序）。 */
+    private List<Snap.Item> exportOrder() {
+        ArrayList<Snap.Item> out = new ArrayList<>(shown);
+        if (pageFilter.isEmpty()) {
+            final java.util.LinkedHashMap<String, Integer> rank = new java.util.LinkedHashMap<>();
+            for (Snap.Item it : out) {
+                String p = RecFormat.pageOf(it.o);
+                if (!rank.containsKey(p)) rank.put(p, rank.size());
+            }
+            Collections.sort(out, (a, b) -> Integer.compare(rank.get(RecFormat.pageOf(a.o)), rank.get(RecFormat.pageOf(b.o)))); // 稳定排序
+        }
+        return out;
+    }
+
+    private int countPage(String page) {
+        int n = 0;
+        for (Snap.Item it : shown) if (page.equals(RecFormat.pageOf(it.o))) n++;
+        return n;
+    }
+
     private void export(int req) {
         if (shown.isEmpty()) {
             Toast.makeText(this, "没有可导出的内容", Toast.LENGTH_SHORT).show();
@@ -353,7 +426,15 @@ public class RecordsActivity extends Activity {
             if (!infoBase.isEmpty()) sb.append(infoBase);
             sb.append('\n');
             RecFormat.Dedup dd = new RecFormat.Dedup(); // 同一份栈 / 签名只完整写一次
-            for (Snap.Item it : shown) sb.append(RecFormat.full(it, dd)).append("\n==========================================\n\n");
+            String curPage = null;
+            for (Snap.Item it : exportOrder()) {
+                String pg = RecFormat.pageOf(it.o);
+                if (pageFilter.isEmpty() && !pg.equals(curPage)) {
+                    curPage = pg;
+                    sb.append("\n████ 页面：").append(pg).append("（").append(countPage(pg)).append(" 条）████\n\n");
+                }
+                sb.append(RecFormat.full(it, dd)).append("\n==========================================\n\n");
+            }
             content = sb.toString();
         } else {
             try {
@@ -373,7 +454,10 @@ public class RecordsActivity extends Activity {
                 fo.put("totalRecords", all.size());
                 o.put("filter", fo);
                 JSONArray arr = new JSONArray();
-                for (Snap.Item it : shown) arr.put(it.o);
+                for (Snap.Item it : exportOrder()) {
+                    it.o.put("pageLabel", RecFormat.pageOf(it.o));
+                    arr.put(it.o);
+                }
                 o.put("records", arr);
                 content = o.toString(2);
             } catch (Throwable t) {
