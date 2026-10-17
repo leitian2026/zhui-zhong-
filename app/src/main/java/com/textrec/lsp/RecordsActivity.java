@@ -1,24 +1,28 @@
 package com.textrec.lsp;
 
 import android.app.Activity;
-import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.graphics.Color;
+import android.content.res.ColorStateList;
 import android.graphics.Typeface;
 import android.net.Uri;
 import android.os.Bundle;
 import android.text.Editable;
 import android.text.InputType;
+import android.text.TextUtils;
 import android.text.TextWatcher;
+import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.BaseAdapter;
-import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
+import android.widget.ImageView;
 import android.widget.LinearLayout;
 import android.widget.ListView;
+import android.widget.PopupMenu;
+import android.widget.ProgressBar;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -37,26 +41,47 @@ import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.regex.Pattern;
 
-/** 记录列表：一个位置一行，可搜索（文字 / 类名 / 栈帧 / 页面），可排序，可导出 txt 和 JSON。 */
+/**
+ * 记录列表：一个位置一张卡片。顶部是搜索框，下面一排筛选芯片（类型 / 页面 / 分类 / 排序 / 仅屏幕上 / 隐藏公共控件），
+ * 导出和清空收在顶栏图标里。每个芯片点开都有说明。
+ */
 public class RecordsActivity extends Activity {
     private static final int REQ_TXT = 2001, REQ_JSON = 2002, REQ_HTML = 2003, REQ_HOOK = 2004;
-    private static final String[] SORTS = {"最近", "次数", "首次"};
+    private static final String[] SORTS = {"最近更新", "次数最多", "最早出现"};
+    private static final String[] SORT_DESC = {"最近一次出现的排前面", "出现 / 绘制次数多的排前面", "最早被记录到的排前面"};
     private static final String[] KINDS = {"全部", "TextView", "自绘", "Compose", "图标", "方法追踪", "仅设置", "状态变化"};
     private static final String[] KIND_KEYS = {"", "TEXTVIEW", "CANVAS", "COMPOSE", "ICON", "TRACE", "TEXTSET", "STATE"};
+    private static final String[] KIND_DESC = {
+            "所有类型的记录",
+            "用 TextView 显示的文字（最常见）",
+            "直接用 Canvas.drawText 画出来的文字",
+            "Jetpack Compose 里的文字",
+            "ImageView 图片和按钮（需在首页打开“图标和按钮图片”）",
+            "你在首页“方法追踪”里指定的方法",
+            "被设置过、但从未显示出来的文字",
+            "透明度 / 可见性 / 选中态的变化（需在首页打开“状态变化”）"};
+    private static final String[] CAT_DESC = {
+            "控件放在哪个特殊容器里，如底部栏、顶部 Tab 项",
+            "设置这段文字的代码属于哪个功能包，如 feed.bottombar",
+            "控件本身的类名，如 TextView、DmtTextView",
+            "控件中心点所在区域：顶部栏 / 底部栏 / 右侧栏 / 左下信息区 / 内容区 / 不在屏幕上"};
 
     private ListView lv;
     private EditText etSearch;
-    private TextView tvInfo;
-    private Button btnSort, btnKind, btnPage, btnCat;
+    private ImageView btnClearSearch;
+    private Ui.Bar bar;
+    private ProgressBar progress;
+    private TextView chType, chPage, chCat, chSort, chScreen, chCommon;
+    private TextView tvLegend, tvBanner, emptyTitle, emptyDesc, emptyBtn;
     /** 分类筛选（空 = 不限）：0 所属容器  1 代码模块  2 控件类  3 屏幕位置，几项同时选是“且”。 */
     private final String[] catVal = {"", "", "", ""};
     private int scrW, scrH;
     private Object scrKey;
-    private CheckBox cbLean, cbCommon;
+    private boolean onlyOnScreen = true;
+    private boolean hideCommon = true;
     private int hiddenCommon;
     /** 页面筛选：空 = 全部页面；否则只看（并只导出）这个页面的记录 */
     private String pageFilter = "";
-    private CheckBox cbOnScreen;
     private final List<Snap.Item> all = new ArrayList<>();
     private final List<Snap.Item> shown = new ArrayList<>();
     private volatile String infoBase = "";
@@ -73,87 +98,101 @@ public class RecordsActivity extends Activity {
         super.onCreate(b);
         setTitle("记录");
         loadAlias();
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(8);
-        root.setPadding(pad, pad, pad, pad);
-
-        LinearLayout bar = new LinearLayout(this);
-        bar.setOrientation(LinearLayout.HORIZONTAL);
-        bar.addView(btn("刷新", v -> refresh()), w1());
-        btnSort = btn("排序:" + SORTS[0], v -> {
-            sortMode = (sortMode + 1) % SORTS.length;
-            btnSort.setText("排序:" + SORTS[sortMode]);
-            applyFilter();
-        });
-        bar.addView(btnSort, w1());
-        btnKind = btn("类型:" + KINDS[kindMode], v -> {
-            kindMode = (kindMode + 1) % KINDS.length;
-            btnKind.setText("类型:" + KINDS[kindMode]);
-            applyFilter();
-        });
-        bar.addView(btnKind, w1());
-        root.addView(bar);
-
-        LinearLayout bar2 = new LinearLayout(this);
-        bar2.setOrientation(LinearLayout.HORIZONTAL);
-        bar2.addView(btn("导出hook清单", v -> export(REQ_HOOK)), w1());
-        bar2.addView(btn("导出txt", v -> export(REQ_TXT)), w1());
-        bar2.addView(btn("导出JSON", v -> export(REQ_JSON)), w1());
-        root.addView(bar2);
-
-        LinearLayout bar2b = new LinearLayout(this);
-        bar2b.setOrientation(LinearLayout.HORIZONTAL);
-        bar2b.addView(btn("导出HTML(含图标)", v -> export(REQ_HTML)), w1());
-        bar2b.addView(btn("清空", v -> confirmClear()), w1());
-        root.addView(bar2b);
-
-        btnPage = btn("页面：全部（点这里选择，长按条目可命名）", v -> choosePage());
-        root.addView(btnPage);
-
-        btnCat = btn("分类：不限（容器 / 模块 / 控件类 / 位置）", v -> chooseCat());
-        root.addView(btnCat);
-
-        // 默认只看此刻在屏幕上的文字：预加载的、已离开页面的不显示；自绘/Compose 可见性未知，照常显示
-        cbOnScreen = new CheckBox(this);
-        cbOnScreen.setText("只看屏幕上的文字（● 在屏幕上   ○ 不在   ? 未知）");
-        cbOnScreen.setTextSize(13);
-        cbOnScreen.setChecked(true);
-        cbOnScreen.setOnClickListener(v -> applyFilter());
-        root.addView(cbOnScreen);
-
-        cbCommon = new CheckBox(this);
-        cbCommon.setText("隐藏公共控件（多个页面里位置和文字都相同的，如底部栏）");
-        cbCommon.setTextSize(13);
-        cbCommon.setChecked(true);
-        cbCommon.setOnClickListener(v -> applyFilter());
-        root.addView(cbCommon);
-
-        cbLean = new CheckBox(this);
-        cbLean.setText("精简导出（不写绘制栈、颜色栈）");
-        cbLean.setTextSize(13);
-        cbLean.setChecked(true);
-        cbLean.setOnClickListener(v -> RecFormat.LEAN = cbLean.isChecked());
-        root.addView(cbLean);
         RecFormat.LEAN = true;
 
+        LinearLayout root = Ui.vertical(this);
+        root.setBackgroundColor(Ui.col(this, R.color.bg));
+
+        // ---- 顶栏：返回 / 标题 + 条数 / 刷新 导出 更多
+        bar = Ui.topBar(this, "记录", "", true);
+        bar.actions.addView(Ui.iconBtn(this, R.drawable.ic_refresh, "刷新（重新读取目标 App 的记录）", v -> refresh()));
+        bar.actions.addView(Ui.iconBtn(this, R.drawable.ic_export, "导出", v -> showExport()));
+        bar.actions.addView(Ui.iconBtn(this, R.drawable.ic_more, "更多", v -> showMenu(v)));
+        root.addView(bar.root);
+
+        progress = new ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal);
+        progress.setIndeterminate(true);
+        progress.setIndeterminateTintList(ColorStateList.valueOf(Ui.col(this, R.color.primary)));
+        progress.setVisibility(View.INVISIBLE);
+        root.addView(progress, new LinearLayout.LayoutParams(-1, Ui.dp(this, 3)));
+
+        // ---- 搜索框
+        LinearLayout sbox = Ui.horizontal(this);
+        sbox.setBackground(Ui.rect(Ui.col(this, R.color.surface), Ui.dp(this, 14), Ui.col(this, R.color.outline), Ui.dp(this, 1)));
+        sbox.setPadding(Ui.dp(this, 14), 0, Ui.dp(this, 4), 0);
+        ImageView si = new ImageView(this);
+        si.setImageResource(R.drawable.ic_search);
+        si.setColorFilter(Ui.col(this, R.color.text_hint));
+        sbox.addView(si, new LinearLayout.LayoutParams(Ui.dp(this, 20), Ui.dp(this, 20)));
         etSearch = new EditText(this);
-        etSearch.setHint("搜索：文字 / 类名 / 栈帧 / 页面（空格分隔多个词；re: 开头按正则）");
-        etSearch.setTextSize(13);
+        etSearch.setBackground(null);
+        etSearch.setHint("搜索：文字 / 类名 / 栈帧 / 页面");
+        etSearch.setTextSize(14.5f);
+        etSearch.setTextColor(Ui.col(this, R.color.text));
+        etSearch.setHintTextColor(Ui.col(this, R.color.text_hint));
         etSearch.setSingleLine(true);
+        etSearch.setPadding(Ui.dp(this, 10), Ui.dp(this, 12), Ui.dp(this, 10), Ui.dp(this, 12));
         etSearch.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
         etSearch.addTextChangedListener(new TextWatcher() {
             public void beforeTextChanged(CharSequence s, int a, int c, int d) {}
             public void onTextChanged(CharSequence s, int a, int c, int d) {}
-            public void afterTextChanged(Editable s) { applyFilter(); }
+            public void afterTextChanged(Editable s) {
+                btnClearSearch.setVisibility(s.length() > 0 ? View.VISIBLE : View.GONE);
+                applyFilter();
+            }
         });
-        root.addView(etSearch);
+        sbox.addView(etSearch, new LinearLayout.LayoutParams(0, -2, 1f));
+        btnClearSearch = Ui.iconBtn(this, R.drawable.ic_close, "清除搜索", v -> etSearch.setText(""));
+        btnClearSearch.setVisibility(View.GONE);
+        sbox.addView(btnClearSearch, new LinearLayout.LayoutParams(Ui.dp(this, 40), Ui.dp(this, 40)));
+        root.addView(sbox, Ui.lpM(this, -1, -2, 16, 2, 16, 10));
 
-        tvInfo = new TextView(this);
-        tvInfo.setTextSize(11);
-        root.addView(tvInfo);
+        // ---- 筛选芯片（横向滑动）
+        HorizontalScrollView hs = new HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        LinearLayout chips = Ui.horizontal(this);
+        chips.setPadding(Ui.dp(this, 16), 0, Ui.dp(this, 8), 0);
+        chType = Ui.chip(this, "", false, v -> chooseKind());
+        chPage = Ui.chip(this, "", false, v -> choosePage());
+        chCat = Ui.chip(this, "", false, v -> chooseCat());
+        chSort = Ui.chip(this, "", false, v -> chooseSort());
+        chScreen = Ui.chip(this, "", false, v -> {
+            onlyOnScreen = !onlyOnScreen;
+            toast(onlyOnScreen ? "只显示此刻在屏幕上的内容" : "连不在屏幕上的（预加载 / 已离开页面的）也显示");
+            updateChips();
+            applyFilter();
+        });
+        chCommon = Ui.chip(this, "", false, v -> {
+            hideCommon = !hideCommon;
+            toast(hideCommon ? "已隐藏在多个页面里都一样的控件（如底部栏）" : "显示所有控件，包括多个页面里都一样的");
+            updateChips();
+            applyFilter();
+        });
+        for (TextView c : new TextView[]{chType, chPage, chCat, chSort, chScreen, chCommon}) {
+            chips.addView(c, Ui.lpM(this, -2, -2, 0, 0, 8, 0));
+        }
+        hs.addView(chips);
+        root.addView(hs);
 
+        tvLegend = Ui.tv(this, "", 11.5f, R.color.text_hint, false);
+        tvLegend.setPadding(Ui.dp(this, 20), Ui.dp(this, 8), Ui.dp(this, 20), Ui.dp(this, 4));
+        root.addView(tvLegend);
+
+        tvBanner = Ui.note(this, "", false);
+        tvBanner.setMaxLines(2);
+        tvBanner.setEllipsize(TextUtils.TruncateAt.END);
+        tvBanner.setVisibility(View.GONE);
+        tvBanner.setOnClickListener(v -> tvBanner.setMaxLines(tvBanner.getMaxLines() == 2 ? Integer.MAX_VALUE : 2));
+        root.addView(tvBanner, Ui.lpM(this, -1, -2, 16, 2, 16, 6));
+
+        // ---- 列表 + 空状态
+        FrameLayout area = new FrameLayout(this);
         lv = new ListView(this);
+        lv.setDivider(null);
+        lv.setDividerHeight(0);
+        lv.setClipToPadding(false);
+        lv.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 20));
+        lv.setSelector(android.R.color.transparent);
         adapter = new BaseAdapter() {
             @Override public int getCount() { return shown.size(); }
             @Override public Object getItem(int i) { return shown.get(i); }
@@ -166,8 +205,33 @@ public class RecordsActivity extends Activity {
             Snap.current = shown.get(pos);
             startActivity(new Intent(this, DetailActivity.class));
         });
-        root.addView(lv, new LinearLayout.LayoutParams(-1, 0, 1f));
+        lv.setOnItemLongClickListener((p, v, pos, id) -> {
+            if (pos < 0 || pos >= shown.size()) return true;
+            renamePage(RecFormat.rawPageOf(shown.get(pos).o));
+            return true;
+        });
+        area.addView(lv, new FrameLayout.LayoutParams(-1, -1));
+
+        LinearLayout empty = Ui.vertical(this);
+        empty.setGravity(Gravity.CENTER_HORIZONTAL);
+        empty.setPadding(Ui.dp(this, 32), Ui.dp(this, 56), Ui.dp(this, 32), 0);
+        emptyTitle = Ui.tv(this, "", 17, R.color.text, true);
+        emptyTitle.setGravity(Gravity.CENTER);
+        empty.addView(emptyTitle);
+        emptyDesc = Ui.tv(this, "", 13.5f, R.color.text_sub, false);
+        emptyDesc.setGravity(Gravity.CENTER);
+        emptyDesc.setLineSpacing(0, 1.2f);
+        emptyDesc.setPadding(0, Ui.dp(this, 8), 0, Ui.dp(this, 16));
+        empty.addView(emptyDesc);
+        emptyBtn = Ui.button(this, "清除所有筛选", Ui.TONAL, v -> clearFilters());
+        empty.addView(emptyBtn, new LinearLayout.LayoutParams(-2, -2));
+        area.addView(empty, new FrameLayout.LayoutParams(-1, -1));
+        lv.setEmptyView(empty);
+        root.addView(area, new LinearLayout.LayoutParams(-1, 0, 1f));
+
         setContentView(root);
+        updateChips();
+        updateEmpty();
     }
 
     /** 每次回到本页自动读取一次；没有后台轮询。 */
@@ -177,11 +241,16 @@ public class RecordsActivity extends Activity {
         refresh();
     }
 
+    private void toast(String s) {
+        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+    }
+
     // ------------------------------------------------------------ 加载
 
     private void refresh() {
         if (!loading.compareAndSet(false, true)) return;
-        tvInfo.setText("正在读取…（首次会弹出 root 授权）");
+        progress.setVisibility(View.VISIBLE);
+        updateEmpty();
         final SharedPreferences sp = getSharedPreferences(Actions.PREFS, MODE_PRIVATE);
         final List<String> pkgs = Actions.pkgs(sp);
         new Thread(() -> {
@@ -214,6 +283,7 @@ public class RecordsActivity extends Activity {
             runOnUiThread(() -> {
                 loading.set(false);
                 if (isFinishing() || isDestroyed()) return;
+                progress.setVisibility(View.INVISIBLE);
                 all.clear();
                 all.addAll(items);
                 infoBase = ib.toString();
@@ -303,73 +373,92 @@ public class RecordsActivity extends Activity {
         return sb.toString();
     }
 
-    private void updateCatButton() {
-        String s = catSummary();
-        btnCat.setText(s.isEmpty() ? "分类：不限（容器 / 模块 / 控件类 / 位置）" : "分类：" + s);
+    private int catCount() {
+        int n = 0;
+        for (String s : catVal) if (!s.isEmpty()) n++;
+        return n;
     }
 
-    private void chooseCat() {
-        final String[] labels = new String[RecFormat.CAT_DIMS.length + 1];
-        for (int d = 0; d < RecFormat.CAT_DIMS.length; d++) {
-            labels[d] = RecFormat.CAT_DIMS[d] + "：" + (catVal[d].isEmpty() ? "不限" : catVal[d]);
+    // ------------------------------------------------------------ 筛选芯片 / 清除
+
+    private void updateChips() {
+        Ui.setChip(chType, kindMode != 0, "类型：" + KINDS[kindMode] + " ▾");
+        String pg = pageFilter.isEmpty() ? "全部" : pageFilter;
+        Ui.setChip(chPage, !pageFilter.isEmpty(), "页面：" + pg + " ▾");
+        int n = catCount();
+        Ui.setChip(chCat, n > 0, n == 0 ? "分类 ▾" : "分类（" + n + "）▾");
+        Ui.setChip(chSort, false, "排序：" + SORTS[sortMode] + " ▾");
+        Ui.setChip(chScreen, onlyOnScreen, (onlyOnScreen ? "✓ " : "") + "仅屏幕上");
+        Ui.setChip(chCommon, hideCommon, (hideCommon ? "✓ " : "") + "隐藏公共控件");
+    }
+
+    private void clearFilters() {
+        etSearch.setText("");
+        pageFilter = "";
+        java.util.Arrays.fill(catVal, "");
+        kindMode = 0;
+        onlyOnScreen = false;
+        hideCommon = false;
+        updateChips();
+        applyFilter();
+    }
+
+    private void updateEmpty() {
+        if (loading.get()) {
+            emptyTitle.setText("正在读取…");
+            emptyDesc.setText("首次读取会弹出 root 授权，请点“允许”。");
+            emptyBtn.setVisibility(View.GONE);
+        } else if (all.isEmpty()) {
+            emptyTitle.setText("还没有记录");
+            emptyDesc.setText("请确认：\n① 已在 LSPosed 启用本模块并勾选目标 App\n② 在首页点过「应用并重新记录」\n③ 已强杀目标 App 并重新打开、操作过\n然后点右上角刷新");
+            emptyBtn.setVisibility(View.GONE);
+        } else {
+            emptyTitle.setText("没有符合条件的记录");
+            emptyDesc.setText("共有 " + all.size() + " 条记录被当前的筛选条件挡住了。");
+            emptyBtn.setVisibility(View.VISIBLE);
         }
-        labels[RecFormat.CAT_DIMS.length] = "清除全部分类";
-        new AlertDialog.Builder(this)
-                .setTitle("按哪一项分类（几项同时选 = 同时满足）")
-                .setItems(labels, (dlg, which) -> {
-                    if (which == RecFormat.CAT_DIMS.length) {
-                        java.util.Arrays.fill(catVal, "");
-                        updateCatButton();
-                        applyFilter();
-                    } else {
-                        chooseCatValue(which);
-                    }
-                })
-                .show();
     }
 
-    /** 列出这一项的所有取值和条数。条数按“去掉这一项分类、其余筛选都生效”来数，所以能一层层缩小。 */
-    private void chooseCatValue(final int dim) {
-        ensureScreen();
-        final String keep = catVal[dim];
-        catVal[dim] = "";
-        applyFilter(); // 此时 shown = 不含这一项分类筛选的结果
+    // ------------------------------------------------------------ 弹窗：类型 / 排序
+
+    private void chooseKind() {
         final java.util.HashMap<String, Integer> cnt = new java.util.HashMap<>();
-        for (Snap.Item it : shown) {
-            String v = RecFormat.catOf(dim, it.o, scrW, scrH);
-            Integer n = cnt.get(v);
-            cnt.put(v, n == null ? 1 : n + 1);
+        for (Snap.Item it : all) {
+            String k = it.o.optString("kind");
+            Integer n = cnt.get(k);
+            cnt.put(k, n == null ? 1 : n + 1);
         }
-        catVal[dim] = keep;
-        applyFilter(); // 还原
-        if (cnt.isEmpty()) {
-            Toast.makeText(this, "当前筛选下没有记录", Toast.LENGTH_SHORT).show();
-            return;
+        final Ui.Dlg d = new Ui.Dlg(this, "记录类型", "按记录的来源类型筛选。数字是该类型的记录总数。");
+        LinearLayout body = Ui.vertical(this);
+        for (int i = 0; i < KINDS.length; i++) {
+            final int idx = i;
+            Integer n = KIND_KEYS[i].isEmpty() ? Integer.valueOf(all.size()) : cnt.get(KIND_KEYS[i]);
+            body.addView(Ui.optionRow(this, KINDS[i], KIND_DESC[i], String.valueOf(n == null ? 0 : n), i == kindMode, v -> {
+                d.dismiss();
+                kindMode = idx;
+                updateChips();
+                applyFilter();
+            }));
         }
-        final ArrayList<String> vals = new ArrayList<>(cnt.keySet());
-        Collections.sort(vals, new Comparator<String>() {
-            @Override
-            public int compare(String a, String b) {
-                int c = Integer.compare(cnt.get(b), cnt.get(a));
-                return c != 0 ? c : a.compareTo(b);
-            }
-        });
-        int total = 0;
-        for (int n : cnt.values()) total += n;
-        final String[] labels = new String[vals.size() + 1];
-        labels[0] = "不限（" + total + " 条）";
-        for (int i = 0; i < vals.size(); i++) labels[i + 1] = vals.get(i) + "（" + cnt.get(vals.get(i)) + " 条）";
-        new AlertDialog.Builder(this)
-                .setTitle(RecFormat.CAT_DIMS[dim])
-                .setItems(labels, (dlg, which) -> {
-                    catVal[dim] = which == 0 ? "" : vals.get(which - 1);
-                    updateCatButton();
-                    applyFilter();
-                })
-                .show();
+        d.body(body, true).button("取消", false, null).show();
     }
 
-    // ------------------------------------------------------------ 页面别名
+    private void chooseSort() {
+        final Ui.Dlg d = new Ui.Dlg(this, "排序方式", null);
+        LinearLayout body = Ui.vertical(this);
+        for (int i = 0; i < SORTS.length; i++) {
+            final int idx = i;
+            body.addView(Ui.optionRow(this, SORTS[i], SORT_DESC[i], null, i == sortMode, v -> {
+                d.dismiss();
+                sortMode = idx;
+                updateChips();
+                applyFilter();
+            }));
+        }
+        d.body(body, false).show();
+    }
+
+    // ------------------------------------------------------------ 弹窗：页面
 
     private void loadAlias() {
         RecFormat.ALIAS.clear();
@@ -390,28 +479,24 @@ public class RecordsActivity extends Activity {
     }
 
     private void renamePage(final String raw) {
-        final EditText et = new EditText(this);
-        et.setSingleLine(true);
+        final EditText et = Ui.field(this, "起个好认的名字，如：消息（留空 = 用原名）", false, false);
         et.setText(RecFormat.aliasOfRaw(raw).equals(raw) ? "" : RecFormat.aliasOfRaw(raw));
-        et.setHint("起个名字，如：消息（留空=用原名）");
-        new AlertDialog.Builder(this)
-                .setTitle("给 " + raw + " 命名")
-                .setMessage("多个页面起同一个名字，会合成一类。")
-                .setView(et)
-                .setPositiveButton("确定", (d, w) -> {
+        et.setSelection(et.getText().length());
+        new Ui.Dlg(this, "给页面命名", raw + "\n多个页面起同一个名字，会合成一类。")
+                .body(et, false)
+                .keyboard()
+                .button("取消", false, null)
+                .button("确定", true, () -> {
                     String n = et.getText().toString().trim();
                     if (n.isEmpty()) RecFormat.ALIAS.remove(raw);
                     else RecFormat.ALIAS.put(raw, n);
                     saveAlias();
                     pageFilter = ""; // 名字变了，旧筛选可能失效
-                    btnPage.setText("页面：全部（点这里选择，长按条目可命名）");
+                    updateChips();
                     applyFilter();
                 })
-                .setNegativeButton("取消", null)
                 .show();
     }
-
-    // ------------------------------------------------------------ 页面选择
 
     private void choosePage() {
         final java.util.LinkedHashMap<String, Integer> cnt = new java.util.LinkedHashMap<>(); // 原始页面名 → 条数
@@ -421,36 +506,113 @@ public class RecordsActivity extends Activity {
             cnt.put(p, n == null ? 1 : n + 1);
         }
         if (cnt.isEmpty()) {
-            Toast.makeText(this, "还没有记录，先刷新", Toast.LENGTH_SHORT).show();
+            toast("还没有记录，先刷新");
             return;
         }
-        final String[] raws = new String[cnt.size()];
-        final String[] labels = new String[cnt.size() + 1];
-        labels[0] = "全部页面（" + all.size() + " 条，导出时按页面分组）";
-        int i = 0;
+        final Ui.Dlg d = new Ui.Dlg(this, "选择页面",
+                "点页面名 = 只看（导出也只含）这个页面；点右边的铅笔 = 给它起个好认的名字，多个页面起同名会合成一类。");
+        LinearLayout body = Ui.vertical(this);
+        body.addView(Ui.optionRow(this, "全部页面", "导出时按页面分组", String.valueOf(all.size()), pageFilter.isEmpty(), v -> {
+            d.dismiss();
+            pageFilter = "";
+            updateChips();
+            applyFilter();
+        }));
         for (java.util.Map.Entry<String, Integer> e : cnt.entrySet()) {
-            raws[i] = e.getKey();
-            String nm = RecFormat.aliasOfRaw(e.getKey());
-            labels[i + 1] = nm + (nm.equals(e.getKey()) ? "" : "（" + e.getKey().replace("MainActivity > ", "") + "）")
-                    + "  " + e.getValue() + " 条";
-            i++;
+            final String raw = e.getKey();
+            final String nm = RecFormat.aliasOfRaw(raw);
+            String sub = nm.equals(raw) ? null : raw.replace("MainActivity > ", "");
+            LinearLayout row = Ui.optionRow(this, nm, sub, String.valueOf(e.getValue()), nm.equals(pageFilter), v -> {
+                d.dismiss();
+                pageFilter = nm;
+                updateChips();
+                applyFilter();
+            });
+            ImageView pen = Ui.iconBtn(this, R.drawable.ic_edit, "给这个页面命名", v -> {
+                d.dismiss();
+                renamePage(raw);
+            });
+            pen.setColorFilter(Ui.col(this, R.color.text_hint));
+            pen.setLayoutParams(new LinearLayout.LayoutParams(Ui.dp(this, 42), Ui.dp(this, 42)));
+            row.addView(pen);
+            body.addView(row);
         }
-        final AlertDialog dlg = new AlertDialog.Builder(this)
-                .setTitle("选择页面（点选=只看/只导出；长按=命名）")
-                .setItems(labels, (d, which) -> {
-                    pageFilter = which == 0 ? "" : RecFormat.aliasOfRaw(raws[which - 1]);
-                    btnPage.setText(pageFilter.isEmpty() ? "页面：全部（点这里选择，长按条目可命名）" : "页面：" + pageFilter);
+        d.body(body, true).button("取消", false, null).show();
+    }
+
+    // ------------------------------------------------------------ 弹窗：分类
+
+    private void chooseCat() {
+        ensureScreen();
+        final Ui.Dlg d = new Ui.Dlg(this, "分类",
+                "几项同时选择 = 同时满足。进入某一项后，每个取值后面的数字是符合其余筛选的记录条数，所以能一层层缩小范围。");
+        LinearLayout body = Ui.vertical(this);
+        for (int i = 0; i < RecFormat.CAT_DIMS.length; i++) {
+            final int dim = i;
+            String cur = catVal[dim];
+            body.addView(Ui.optionRow(this, RecFormat.CAT_DIMS[dim], CAT_DESC[dim], cur.isEmpty() ? "不限" : cur, !cur.isEmpty(), v -> {
+                d.dismiss();
+                chooseCatValue(dim);
+            }));
+        }
+        d.body(body, true)
+                .button("清除全部", false, () -> {
+                    java.util.Arrays.fill(catVal, "");
+                    updateChips();
                     applyFilter();
                 })
-                .create();
-        dlg.show();
-        dlg.getListView().setOnItemLongClickListener((parent, view, pos, id) -> {
-            if (pos > 0 && pos - 1 < raws.length) {
-                dlg.dismiss();
-                renamePage(raws[pos - 1]);
+                .button("完成", true, null)
+                .show();
+    }
+
+    /** 列出这一项的所有取值和条数。条数按“去掉这一项分类、其余筛选都生效”来数，所以能一层层缩小。 */
+    private void chooseCatValue(final int dim) {
+        ensureScreen();
+        final String keep = catVal[dim];
+        catVal[dim] = "";
+        applyFilter(); // 此时 shown = 不含这一项分类筛选的结果
+        final java.util.HashMap<String, Integer> cnt = new java.util.HashMap<>();
+        for (Snap.Item it : shown) {
+            String v = RecFormat.catOf(dim, it.o, scrW, scrH);
+            Integer n = cnt.get(v);
+            cnt.put(v, n == null ? 1 : n + 1);
+        }
+        catVal[dim] = keep;
+        applyFilter(); // 还原
+        if (cnt.isEmpty()) {
+            toast("当前筛选下没有记录");
+            chooseCat();
+            return;
+        }
+        final ArrayList<String> vals = new ArrayList<>(cnt.keySet());
+        Collections.sort(vals, new Comparator<String>() {
+            @Override
+            public int compare(String a, String b) {
+                int c = Integer.compare(cnt.get(b), cnt.get(a));
+                return c != 0 ? c : a.compareTo(b);
             }
-            return true;
         });
+        int total = 0;
+        for (int n : cnt.values()) total += n;
+        final Ui.Dlg d = new Ui.Dlg(this, RecFormat.CAT_DIMS[dim], CAT_DESC[dim]);
+        LinearLayout body = Ui.vertical(this);
+        body.addView(Ui.optionRow(this, "不限", null, String.valueOf(total), keep.isEmpty(), v -> {
+            d.dismiss();
+            catVal[dim] = "";
+            updateChips();
+            applyFilter();
+            chooseCat();
+        }));
+        for (final String val : vals) {
+            body.addView(Ui.optionRow(this, val, null, String.valueOf(cnt.get(val)), val.equals(keep), v -> {
+                d.dismiss();
+                catVal[dim] = val;
+                updateChips();
+                applyFilter();
+                chooseCat();
+            }));
+        }
+        d.body(body, true).button("返回", false, this::chooseCat).show();
     }
 
     // ------------------------------------------------------------ 过滤 / 排序
@@ -470,11 +632,10 @@ public class RecordsActivity extends Activity {
             terms = q.split("\\s+");
         }
         String kindKey = KIND_KEYS[kindMode];
-        boolean onlyOnScreen = cbOnScreen.isChecked();
         int hidden = 0;
         StringBuilder hid = new StringBuilder();
         shown.clear();
-        final java.util.HashSet<String> common = cbCommon.isChecked() ? commonKeys() : null;
+        final java.util.HashSet<String> common = hideCommon ? commonKeys() : null;
         if (!catVal[3].isEmpty()) ensureScreen();
         int hiddenC = 0;
         for (Snap.Item it : all) {
@@ -516,61 +677,144 @@ public class RecordsActivity extends Activity {
                 return Long.compare(b.o.optLong("last"), a.o.optLong("last"));
             }
         });
-        tvInfo.setText(infoBase + "显示 " + shown.size() + " / 共 " + all.size() + " 条"
-                + (onlyOnScreen && hiddenOff > 0 ? "（已隐藏 " + hiddenOff + " 条不在屏幕上的）" : "")
-                + (hiddenCommon > 0 ? "（已隐藏公共控件 " + hiddenCommon + " 条）" : "") + bad);
+
+        // 顶栏：显示 N / 共 M 条
+        bar.sub.setText("显示 " + shown.size() + " / 共 " + all.size() + " 条" + bad);
+        bar.sub.setVisibility(View.VISIBLE);
+        // 图例 + 被隐藏的数量
+        StringBuilder lg = new StringBuilder("● 在屏幕上    ○ 不在屏幕上    ? 未知（自绘 / Compose）");
+        StringBuilder hd = new StringBuilder();
+        if (onlyOnScreen && hiddenOff > 0) hd.append("不在屏幕上 ").append(hiddenOff).append(" 条");
+        if (hideCommon && hiddenCommon > 0) hd.append(hd.length() > 0 ? "，" : "").append("公共控件 ").append(hiddenCommon).append(" 条");
+        if (hd.length() > 0) lg.append("\n已隐藏：").append(hd);
+        tvLegend.setText(lg);
+        // 读取概况 / 警告
+        String info = infoBase.trim();
+        if (info.isEmpty()) {
+            tvBanner.setVisibility(View.GONE);
+        } else {
+            boolean warn = info.contains("⚠") || info.contains("失败") || info.contains("没有记录") || info.contains("格式不对");
+            tvBanner.setText(info);
+            tvBanner.setTextColor(Ui.col(this, warn ? R.color.warn_text : R.color.text_sub));
+            tvBanner.setBackground(Ui.rect(Ui.col(this, warn ? R.color.warn_bg : R.color.surface_alt), Ui.dp(this, 10), 0, 0));
+            tvBanner.setVisibility(View.VISIBLE);
+        }
+        updateEmpty();
         adapter.notifyDataSetChanged();
     }
 
-    // ------------------------------------------------------------ 列表行
+    // ------------------------------------------------------------ 列表行（卡片）
+
+    private static final class VH {
+        TextView vis, kind, id, count, text, meta, meta2, set, draw;
+        LinearLayout thumbs, code;
+    }
+
+    private View newRow() {
+        FrameLayout outer = new FrameLayout(this);
+        outer.setPadding(Ui.dp(this, 14), Ui.dp(this, 4), Ui.dp(this, 14), Ui.dp(this, 4));
+        LinearLayout card = Ui.vertical(this);
+        card.setPadding(Ui.dp(this, 14), Ui.dp(this, 12), Ui.dp(this, 14), Ui.dp(this, 12));
+        card.setBackground(Ui.ripple(this,
+                Ui.rect(Ui.col(this, R.color.surface), Ui.dp(this, 16), Ui.col(this, R.color.outline), Ui.dp(this, 1)),
+                Ui.dp(this, 16), false));
+        VH h = new VH();
+
+        LinearLayout top = Ui.horizontal(this);
+        h.vis = Ui.tv(this, "", 13, R.color.text, true);
+        top.addView(h.vis, Ui.lpM(this, -2, -2, 0, 0, 8, 0));
+        h.kind = Ui.badge(this, "", 0xFF4C6FFF);
+        top.addView(h.kind);
+        h.id = Ui.tv(this, "", 12, R.color.text_hint, false);
+        top.addView(h.id, Ui.lpM(this, -2, -2, 8, 0, 0, 0));
+        top.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1f));
+        h.count = Ui.tv(this, "", 12.5f, R.color.text_sub, false);
+        top.addView(h.count);
+        card.addView(top);
+
+        h.text = Ui.tv(this, "", 16, R.color.text, true);
+        h.text.setMaxLines(2);
+        h.text.setEllipsize(TextUtils.TruncateAt.END);
+        h.text.setPadding(0, Ui.dp(this, 8), 0, 0);
+        card.addView(h.text);
+
+        h.thumbs = Ui.horizontal(this);
+        card.addView(h.thumbs);
+
+        h.meta = Ui.tv(this, "", 12.5f, R.color.text_sub, false);
+        h.meta.setSingleLine(true);
+        h.meta.setEllipsize(TextUtils.TruncateAt.END);
+        h.meta.setPadding(0, Ui.dp(this, 6), 0, 0);
+        card.addView(h.meta);
+        h.meta2 = Ui.tv(this, "", 12, R.color.text_hint, false);
+        h.meta2.setSingleLine(true);
+        h.meta2.setEllipsize(TextUtils.TruncateAt.END);
+        card.addView(h.meta2);
+
+        h.code = Ui.vertical(this);
+        h.code.setBackground(Ui.rect(Ui.col(this, R.color.code_bg), Ui.dp(this, 8), 0, 0));
+        h.code.setPadding(Ui.dp(this, 10), Ui.dp(this, 7), Ui.dp(this, 10), Ui.dp(this, 7));
+        h.set = Ui.tv(this, "", 11, R.color.text_sub, false);
+        h.set.setTypeface(Typeface.MONOSPACE);
+        h.set.setSingleLine(true);
+        h.set.setEllipsize(TextUtils.TruncateAt.START);
+        h.code.addView(h.set);
+        h.draw = Ui.tv(this, "", 11, R.color.text_sub, false);
+        h.draw.setTypeface(Typeface.MONOSPACE);
+        h.draw.setSingleLine(true);
+        h.draw.setEllipsize(TextUtils.TruncateAt.START);
+        h.code.addView(h.draw);
+        card.addView(h.code, Ui.lpM(this, -1, -2, 0, 8, 0, 0));
+
+        outer.addView(card, new FrameLayout.LayoutParams(-1, -2));
+        outer.setTag(h);
+        return outer;
+    }
 
     private View row(Snap.Item it, View cv) {
-        LinearLayout row;
-        TextView t1, t2, t3;
-        LinearLayout th;
-        if (cv instanceof LinearLayout && cv.getTag() != null) {
-            row = (LinearLayout) cv;
-            t1 = (TextView) row.getChildAt(0);
-            th = (LinearLayout) row.getChildAt(1);
-            t2 = (TextView) row.getChildAt(2);
-            t3 = (TextView) row.getChildAt(3);
-        } else {
-            row = new LinearLayout(this);
-            row.setOrientation(LinearLayout.VERTICAL);
-            row.setPadding(dp(6), dp(8), dp(6), dp(8));
-            t1 = new TextView(this);
-            t1.setTextSize(14);
-            t1.setTypeface(Typeface.DEFAULT_BOLD);
-            t2 = new TextView(this);
-            t2.setTextSize(12);
-            t3 = new TextView(this);
-            t3.setTextSize(11);
-            t3.setTypeface(Typeface.MONOSPACE);
-            t3.setTextColor(Color.GRAY);
-            th = new LinearLayout(this);
-            th.setOrientation(LinearLayout.HORIZONTAL);
-            row.addView(t1);
-            row.addView(th);
-            row.addView(t2);
-            row.addView(t3);
-            row.setTag("row");
-        }
+        View v = cv != null && cv.getTag() instanceof VH ? cv : newRow();
+        VH h = (VH) v.getTag();
         JSONObject r = it.o;
-        th.removeAllViews();
+        String kind = r.optString("kind");
+
+        String vis = r.optString("vis");
+        h.vis.setText(RecFormat.visMark(r));
+        h.vis.setTextColor(Ui.col(this, "yes".equals(vis) ? R.color.good : "no".equals(vis) ? R.color.text_hint : R.color.warn_text));
+        Ui.setBadge(h.kind, RecFormat.kindLabel(kind), Ui.kindColor(kind));
+        h.id.setText("#" + r.optInt("id"));
+        h.count.setText("×" + r.optInt("drawCount"));
+
+        String samples = RecFormat.samplesLine(r, 18, 4);
+        if (samples.length() <= 2) {
+            h.text.setText("（没有文字）");
+            h.text.setTextColor(Ui.col(this, R.color.text_hint));
+        } else {
+            h.text.setText(samples);
+            h.text.setTextColor(Ui.col(this, R.color.text));
+        }
+
+        h.thumbs.removeAllViews();
         JSONArray ta = r.optJSONArray("thumbs");
         if (ta == null || ta.length() == 0) {
-            th.setVisibility(View.GONE);
+            h.thumbs.setVisibility(View.GONE);
         } else {
-            th.setVisibility(View.VISIBLE);
-            for (int k = 0; k < ta.length(); k++) th.addView(thumbView(this, ta.optString(k), dp(44)));
+            h.thumbs.setVisibility(View.VISIBLE);
+            for (int k = 0; k < ta.length(); k++) h.thumbs.addView(thumbView(this, ta.optString(k), Ui.dp(this, 40)));
         }
-        t1.setText(RecFormat.visMark(r) + " #" + r.optInt("id") + " [" + RecFormat.kindLabel(r.optString("kind")) + "] "
-                + RecFormat.samplesLine(r, 10, 4) + " ×" + r.optInt("drawCount"));
+
+        h.meta.setText("页面 " + RecFormat.pageOf(r) + "  ·  容器 " + RecFormat.containerOf(r));
         String id = r.optString("viewId");
-        t2.setText(RecFormat.simple(r.optString("view")) + (id.isEmpty() ? "" : " id=" + id)
-                + "   页面 " + RecFormat.pageOf(r) + "   容器 " + RecFormat.containerOf(r));
-        t3.setText("设: " + topFrame(r.optJSONObject("setStack")) + "\n画: " + topFrame(r.optJSONObject("drawStack")));
-        return row;
+        h.meta2.setText(RecFormat.simple(r.optString("view")) + (id.isEmpty() ? "" : "  id=" + id));
+
+        String setF = topFrame(r.optJSONObject("setStack"));
+        String drawF = topFrame(r.optJSONObject("drawStack"));
+        boolean hasSet = !"(无)".equals(setF), hasDraw = !"(无)".equals(drawF);
+        h.code.setVisibility(hasSet || hasDraw ? View.VISIBLE : View.GONE);
+        h.set.setVisibility(hasSet ? View.VISIBLE : View.GONE);
+        h.set.setText("设置  " + setF);
+        h.draw.setVisibility(hasDraw ? View.VISIBLE : View.GONE);
+        h.draw.setText(("TRACE".equals(kind) ? "调用  " : "绘制  ") + drawF);
+        return v;
     }
 
     private static final android.util.LruCache<String, android.graphics.Bitmap> THUMBS = new android.util.LruCache<>(300);
@@ -590,19 +834,19 @@ public class RecordsActivity extends Activity {
     /** 缩略图控件：灰底，白色图标也看得见。 */
     static android.widget.ImageView thumbView(android.content.Context ctx, String b64, int sizePx) {
         android.widget.ImageView iv = new android.widget.ImageView(ctx);
-        iv.setBackgroundColor(0xFF9E9E9E);
+        iv.setBackground(Ui.rect(0xFF9E9E9E, sizePx / 6f, 0, 0));
         iv.setScaleType(android.widget.ImageView.ScaleType.FIT_CENTER);
+        iv.setPadding(sizePx / 12, sizePx / 12, sizePx / 12, sizePx / 12);
         android.graphics.Bitmap b = thumbBitmap(b64);
         if (b != null) iv.setImageBitmap(b);
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(sizePx, sizePx);
         lp.rightMargin = sizePx / 8;
-        lp.topMargin = sizePx / 10;
-        lp.bottomMargin = sizePx / 10;
+        lp.topMargin = sizePx / 5;
         iv.setLayoutParams(lp);
         return iv;
     }
 
-    private static String topFrame(JSONObject s) {
+    static String topFrame(JSONObject s) {
         if (s == null) return "(无)";
         JSONArray f = s.optJSONArray("frames");
         if (f == null || f.length() == 0) return "(无)";
@@ -610,7 +854,95 @@ public class RecordsActivity extends Activity {
         return t.length() > 90 ? "…" + t.substring(t.length() - 90) : t;
     }
 
-    // ------------------------------------------------------------ 导出 / 清空
+    // ------------------------------------------------------------ 菜单 / 帮助 / 清空
+
+    private void showMenu(View anchor) {
+        PopupMenu pm = new PopupMenu(this, anchor);
+        pm.getMenu().add(0, 1, 0, "这些筛选是什么意思");
+        pm.getMenu().add(0, 2, 1, "清空所有记录…");
+        pm.setOnMenuItemClickListener(item -> {
+            if (item.getItemId() == 1) showHelp();
+            else confirmClear();
+            return true;
+        });
+        pm.show();
+    }
+
+    private void helpItem(LinearLayout body, String title, String desc) {
+        TextView t = Ui.tv(this, title, 14.5f, R.color.text, true);
+        t.setPadding(0, Ui.dp(this, 10), 0, 0);
+        body.addView(t);
+        TextView d = Ui.tv(this, desc, 13, R.color.text_sub, false);
+        d.setLineSpacing(0, 1.15f);
+        d.setPadding(0, Ui.dp(this, 2), 0, 0);
+        body.addView(d);
+    }
+
+    private void showHelp() {
+        LinearLayout body = Ui.vertical(this);
+        helpItem(body, "● ○ ?", "● 此刻真的在屏幕上；○ 不在屏幕上（预加载的、已经离开的页面）；? 自绘 / Compose 没有 View 可查，无法判断。");
+        helpItem(body, "仅屏幕上", "只显示 ● 和 ?，把 ○ 藏起来。想看全部就关掉。");
+        helpItem(body, "隐藏公共控件", "在两个以上页面里位置和文字都一样的控件（底部栏、顶部栏等）。隐藏后更容易看到当前页面独有的内容。");
+        helpItem(body, "类型 / 页面", "类型 = 记录是怎么来的（TextView、Compose、图标…）。页面 = 记录发生在哪个页面，可以给页面起名字。");
+        helpItem(body, "分类", "按所属容器、代码模块、控件类、屏幕位置缩小范围，几项同时选 = 同时满足。");
+        helpItem(body, "搜索", "多个词用空格分隔，都要命中；以 re: 开头按正则匹配。搜的范围包括文字、类名、栈帧、页面。");
+        helpItem(body, "长按列表里的一张卡片", "给它所在的页面起名字。");
+        new Ui.Dlg(this, "筛选说明", null).body(body, true).button("知道了", true, null).show();
+    }
+
+    private void confirmClear() {
+        new Ui.Dlg(this, "清空所有记录？", "会清空目标 App 里已记录的全部内容（包括内存里的），并立即重新开始记录。此操作不能撤销。")
+                .button("取消", false, null)
+                .button("清空", true, () -> {
+                    final SharedPreferences sp = getSharedPreferences(Actions.PREFS, MODE_PRIVATE);
+                    final RecConfig c = Actions.loadCfg(sp);
+                    c.epoch = System.currentTimeMillis(); // epoch 变了，目标进程会清空内存里的记录
+                    sp.edit().putString("cfg", c.toText()).apply();
+                    final List<String> pkgs = Actions.pkgs(sp);
+                    new Thread(() -> {
+                        Actions.push(pkgs, c, true);
+                        runOnUiThread(this::refresh);
+                    }).start();
+                })
+                .show();
+    }
+
+    // ------------------------------------------------------------ 导出
+
+    private void showExport() {
+        if (shown.isEmpty()) {
+            toast("当前没有可导出的记录");
+            return;
+        }
+        final Ui.Dlg d = new Ui.Dlg(this, "导出", "导出当前筛选后的 " + shown.size() + " 条记录（先在列表里筛好再导出）");
+        LinearLayout body = Ui.vertical(this);
+        body.addView(Ui.actionRow(this, R.drawable.ic_code, "hook 清单（txt）",
+                "每个控件只写它是什么和可以 hook 的方法，最适合直接拿去写模块", true, v -> {
+                    d.dismiss();
+                    export(REQ_HOOK);
+                }));
+        body.addView(Ui.actionRow(this, R.drawable.ic_file, "完整记录（txt）",
+                "含设置栈、绘制栈等全部细节，适合发给别人分析", false, v -> {
+                    d.dismiss();
+                    export(REQ_TXT);
+                }));
+        body.addView(Ui.actionRow(this, R.drawable.ic_list, "数据文件（JSON）",
+                "字段固定，含图标缩略图，适合程序读取", false, v -> {
+                    d.dismiss();
+                    export(REQ_JSON);
+                }));
+        body.addView(Ui.actionRow(this, R.drawable.ic_image, "网页（HTML，含图标）",
+                "用浏览器打开，直接看到每个图标长什么样", false, v -> {
+                    d.dismiss();
+                    export(REQ_HTML);
+                }));
+        body.addView(Ui.divider(this), Ui.lpM(this, -1, Ui.dp(this, 1), 0, 8, 0, 0));
+        Ui.Sw lean = Ui.switchRow(this, "精简模式（仅完整 txt）", "不写绘制栈和文字颜色栈，文件小很多");
+        lean.sw.setChecked(RecFormat.LEAN);
+        lean.sw.setOnCheckedChangeListener((bv, on) -> RecFormat.LEAN = on);
+        body.addView(lean.row);
+        d.body(body, true).button("取消", false, null).show();
+    }
 
     /** 导出顺序：选了某个页面就是当前列表顺序；选“全部页面”就按页面名分组（组内保持当前排序）。 */
     private List<Snap.Item> exportOrder() {
@@ -654,8 +986,8 @@ public class RecordsActivity extends Activity {
         sb.append('\n');
         sb.append("筛选：类型=").append(KINDS[kindMode]).append("  页面=").append(pageFilter.isEmpty() ? "全部" : pageFilter)
                 .append(catSummary().isEmpty() ? "" : "  分类=" + catSummary())
-                .append("  只看屏幕上=").append(cbOnScreen.isChecked() ? "是" : "否");
-        if (cbCommon.isChecked()) sb.append("  已隐藏公共控件=").append(hiddenCommon);
+                .append("  只看屏幕上=").append(onlyOnScreen ? "是" : "否");
+        if (hideCommon) sb.append("  已隐藏公共控件=").append(hiddenCommon);
         sb.append('\n');
         if (!infoBase.isEmpty()) sb.append(infoBase);
         sb.append("说明：[稳定]=类名和方法名都没混淆；[混淆]=只对记录时的这个版本有效，换版本重新记录一次；栈N=离设置/绘制点第几层，越小越精确。\n");
@@ -711,7 +1043,7 @@ public class RecordsActivity extends Activity {
 
     private void export(int req) {
         if (shown.isEmpty()) {
-            Toast.makeText(this, "没有可导出的内容", Toast.LENGTH_SHORT).show();
+            toast("没有可导出的内容");
             return;
         }
         String content;
@@ -719,15 +1051,15 @@ public class RecordsActivity extends Activity {
             StringBuilder sb = new StringBuilder();
             sb.append("TextRec 导出  ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
                     .append("  共 ").append(shown.size()).append(" 条\n");
-            sb.append("筛选：只看屏幕上=").append(cbOnScreen.isChecked() ? "是" : "否");
-            if (cbOnScreen.isChecked()) {
+            sb.append("筛选：只看屏幕上=").append(onlyOnScreen ? "是" : "否");
+            if (onlyOnScreen) {
                 sb.append("（已隐藏 ").append(hiddenOff).append(" 条不在屏幕上的")
                         .append(hiddenOff > 0 ? "：" + hiddenIds.trim() : "").append("）");
             }
             sb.append("  类型=").append(KINDS[kindMode]);
             sb.append("  页面=").append(pageFilter.isEmpty() ? "全部" : pageFilter);
             if (!catSummary().isEmpty()) sb.append("  分类=").append(catSummary());
-            if (cbCommon.isChecked()) sb.append("  已隐藏公共控件=").append(hiddenCommon);
+            if (hideCommon) sb.append("  已隐藏公共控件=").append(hiddenCommon);
             sb.append(RecFormat.LEAN ? "  精简导出" : "");
             String qs = etSearch.getText().toString().trim();
             if (!qs.isEmpty()) sb.append("  搜索=「").append(qs).append("」");
@@ -758,7 +1090,7 @@ public class RecordsActivity extends Activity {
                 for (String s : infoBase.split("\n")) if (!s.trim().isEmpty()) inf.put(s);
                 o.put("info", inf);
                 JSONObject fo = new JSONObject();
-                fo.put("onlyOnScreen", cbOnScreen.isChecked());
+                fo.put("onlyOnScreen", onlyOnScreen);
                 fo.put("hiddenOffScreen", hiddenOff);
                 fo.put("hiddenIds", hiddenIds.trim());
                 fo.put("kind", KINDS[kindMode]);
@@ -806,41 +1138,5 @@ public class RecordsActivity extends Activity {
             final String m = msg;
             runOnUiThread(() -> Toast.makeText(this, m, Toast.LENGTH_LONG).show());
         }).start();
-    }
-
-    private void confirmClear() {
-        new AlertDialog.Builder(this)
-                .setMessage("清空目标 App 里的所有记录（包括内存里的），并重新开始记录？")
-                .setNegativeButton("取消", null)
-                .setPositiveButton("清空", (d, w) -> {
-                    final SharedPreferences sp = getSharedPreferences(Actions.PREFS, MODE_PRIVATE);
-                    final RecConfig c = Actions.loadCfg(sp);
-                    c.epoch = System.currentTimeMillis(); // epoch 变了，目标进程会清空内存里的记录
-                    sp.edit().putString("cfg", c.toText()).apply();
-                    final List<String> pkgs = Actions.pkgs(sp);
-                    new Thread(() -> {
-                        Actions.push(pkgs, c, true);
-                        runOnUiThread(this::refresh);
-                    }).start();
-                })
-                .show();
-    }
-
-    // ------------------------------------------------------------ 小工具
-
-    private Button btn(String t, View.OnClickListener l) {
-        Button b = new Button(this);
-        b.setText(t);
-        b.setTextSize(13);
-        b.setOnClickListener(l);
-        return b;
-    }
-
-    private LinearLayout.LayoutParams w1() {
-        return new LinearLayout.LayoutParams(0, -2, 1f);
-    }
-
-    private int dp(int v) {
-        return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
     }
 }
