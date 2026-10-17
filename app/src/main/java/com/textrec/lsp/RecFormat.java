@@ -434,6 +434,73 @@ final class RecFormat {
         return header(it) + "\n" + setColumn(it, dd) + (skipDraw ? "" : "\n" + drawColumn(it, dd));
     }
 
+    // ------------------------------------------------------------ hook 清单（给接入模块用）
+
+    private static void appendHooks(StringBuilder sb, String label, java.util.List<String> sigs) {
+        java.util.ArrayList<String> ok = new java.util.ArrayList<>();
+        for (String s : sigs) {
+            // 解析失败的、基础设施帧（消息分发 / LiveData / 异步包装）、通用控件方法（另有兜底行）都不列
+            if (unresolved(s) || s.endsWith(Stacks.TAG_INFRA) || s.endsWith(Stacks.TAG_WIDGET)) continue;
+            ok.add(s);
+        }
+        java.util.Collections.sort(ok, new java.util.Comparator<String>() {
+            @Override
+            public int compare(String a, String b) {
+                return Integer.compare(layerOf(a), layerOf(b));
+            }
+        });
+        java.util.ArrayList<String> pick = new java.util.ArrayList<>();
+        boolean hasStable = false;
+        for (int i = 0; i < ok.size() && i < 3; i++) {
+            pick.add(ok.get(i));
+            if (ok.get(i).endsWith(Stacks.TAG_STABLE)) hasStable = true;
+        }
+        if (!hasStable) { // 最近的稳定帧（类和方法都没混淆，换版本也在）再多给一个
+            for (int i = 3; i < ok.size(); i++) {
+                if (ok.get(i).endsWith(Stacks.TAG_STABLE) && layerOf(ok.get(i)) <= 12) {
+                    pick.add(ok.get(i));
+                    break;
+                }
+            }
+        }
+        if (pick.isEmpty()) return;
+        sb.append("  ").append(label).append("（近→远）:\n");
+        for (String s : pick) {
+            sb.append("    ").append(clean(s)).append("   [").append(s.endsWith(Stacks.TAG_STABLE) ? "稳定" : "混淆")
+                    .append("，栈").append(layerOf(s)).append("]\n");
+        }
+    }
+
+    /** hook 清单里的一条：这个控件是什么 + 可以 hook 哪里。没有任何可用 hook 返回 null。 */
+    static String hookEntry(Snap.Item it) {
+        JSONObject r = it.o;
+        String kind = r.optString("kind");
+        StringBuilder body = new StringBuilder();
+        JSONObject ss = r.optJSONObject("setStack");
+        appendHooks(body, "设置侧", sigList(ss));
+        boolean drawSide = "CANVAS".equals(kind) || "COMPOSE".equals(kind) || "TRACE".equals(kind) || ss == null;
+        if (drawSide) appendHooks(body, "TRACE".equals(kind) ? "调用侧" : "绘制侧", sigList(r.optJSONObject("drawStack")));
+        StringBuilder rec = new StringBuilder();
+        appendRecommend(rec, r);
+        for (String line : rec.toString().split("\n")) { // 系统方法兜底（不会被混淆，但要按类 / id 过滤）
+            if (line.startsWith("备选[")) body.append("  ").append(line).append('\n');
+        }
+        if (body.length() == 0) return null;
+        StringBuilder sb = new StringBuilder();
+        sb.append('#').append(r.optInt("id")).append(" [").append(kindLabel(kind)).append("] ")
+                .append(samplesLine(r, 14, 6)).append("  ×").append(r.optInt("drawCount")).append('\n');
+        String id = r.optString("viewId");
+        sb.append("  控件: ").append(simple(r.optString("view"))).append(id.isEmpty() ? "" : "  id=" + id);
+        JSONArray ids = r.optJSONArray("ids");
+        if (ids != null && ids.length() > 1) sb.append("（同一段代码设置了 ").append(ids.length()).append(" 个控件）");
+        String tc = r.optString("textColor");
+        if (!tc.isEmpty()) sb.append("  颜色 ").append(tc);
+        sb.append('\n');
+        if (r.optJSONArray("thumbs") != null) sb.append("  图标图片: 见记录页缩略图 / 导出HTML\n");
+        sb.append(body);
+        return sb.toString();
+    }
+
     /** 精简导出：不写绘制栈和文字颜色设置栈（颜色值本身还在）。由记录页的复选框控制。 */
     static volatile boolean LEAN = true;
 
