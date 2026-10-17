@@ -60,6 +60,8 @@ final class Rec {
     final String viewClass;
     final String viewId;
     final String activity;
+    /** 记录时所处的页面（Activity > Fragment），见 Recorder.pageName */
+    final String page;
     final String[] parents;
     final SetStack set;          // 可能为 null：自绘 / Compose / 设置发生在记录之前
     final Stacks.Stk draw;
@@ -119,7 +121,7 @@ final class Rec {
         }
     }
 
-    Rec(int id, String key, String kind, String viewClass, String viewId, String activity, String[] parents,
+    Rec(int id, String key, String kind, String viewClass, String viewId, String activity, String page, String[] parents,
         SetStack set, Stacks.Stk draw, String drawThread, String text, long shape) {
         this.id = id;
         this.key = key;
@@ -127,6 +129,7 @@ final class Rec {
         this.viewClass = viewClass;
         this.viewId = viewId;
         this.activity = activity;
+        this.page = page == null ? "" : page;
         this.parents = parents;
         this.set = set;
         this.draw = draw;
