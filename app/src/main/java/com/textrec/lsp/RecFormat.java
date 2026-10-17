@@ -196,7 +196,7 @@ final class RecFormat {
             sb.append("画布内坐标(最近一次，不是屏幕坐标): (").append(pos.optDouble(0)).append(", ").append(pos.optDouble(1)).append(")\n");
         }
         String tc = r.optString("textColor");
-        if (!tc.isEmpty()) sb.append("文字颜色(最近一次被设置): ").append(tc).append("   设置位置见左栏末尾\n");
+        if (!tc.isEmpty()) sb.append("文字颜色(最近一次被设置): ").append(tc).append(LEAN ? "\n" : "   设置位置见左栏末尾\n");
         return sb.toString();
     }
 
@@ -402,9 +402,9 @@ final class RecFormat {
                 : "STATE".equals(kind) ? "设置栈（谁改了 alpha/visibility/selected）" : "设置栈 setText";
         String s = column(title, r.optJSONObject("setStack"), r.optString("setNote"), dd, id);
         JSONObject cs = r.optJSONObject("colorStack");
-        if (cs != null) {
+        if (cs != null && !LEAN) {
             s += "\n" + column("文字颜色设置栈 setTextColor（颜色 " + r.optString("textColor") + "）", cs, "", dd, id);
-        } else if (!r.optString("textColor").isEmpty()) {
+        } else if (!LEAN && !r.optString("textColor").isEmpty()) {
             s += "\n【文字颜色】" + r.optString("textColor") + "（设置栈被限流，没抓到）\n";
         }
         return s;
@@ -426,8 +426,15 @@ final class RecFormat {
 
     /** 导出整份文件用：重复的栈和签名只写一次。 */
     static String full(Snap.Item it, Dedup dd) {
-        return header(it) + "\n" + setColumn(it, dd) + "\n" + drawColumn(it, dd);
+        if (!LEAN) return header(it) + "\n" + setColumn(it, dd) + "\n" + drawColumn(it, dd);
+        // 精简：文字 / 图标 / 状态变化都有“设置栈”，绘制栈是 onDraw 的噪声，不写；自绘、Compose、方法追踪没有设置栈，绘制栈照写
+        String k = it.o.optString("kind");
+        boolean skipDraw = "TEXTVIEW".equals(k) || "ICON".equals(k) || "STATE".equals(k) || "TEXTSET".equals(k);
+        return header(it) + "\n" + setColumn(it, dd) + (skipDraw ? "" : "\n" + drawColumn(it, dd));
     }
+
+    /** 精简导出：不写绘制栈和文字颜色设置栈（颜色值本身还在）。由记录页的复选框控制。 */
+    static volatile boolean LEAN = true;
 
     /** 只要可 hook 的签名（设置侧、绘制侧各一段） */
     static String sigsOnly(Snap.Item it) {
