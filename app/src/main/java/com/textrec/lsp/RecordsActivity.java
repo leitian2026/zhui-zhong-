@@ -511,8 +511,10 @@ public class RecordsActivity extends Activity {
         StringBuilder entries = new StringBuilder();
         int skipped = 0, written = 0;
         String curPage = null;
+        final java.util.HashMap<String, java.util.List<Integer>> use = new java.util.HashMap<>();
+        for (Snap.Item it : exportOrder()) RecFormat.collectHooks(it, use);
         for (Snap.Item it : exportOrder()) {
-            String e = RecFormat.hookEntry(it);
+            String e = RecFormat.hookEntry(it, use);
             if (e == null) {
                 skipped++;
                 continue;
@@ -535,6 +537,7 @@ public class RecordsActivity extends Activity {
         sb.append('\n');
         if (!infoBase.isEmpty()) sb.append(infoBase);
         sb.append("说明：[稳定]=类名和方法名都没混淆；[混淆]=只对记录时的这个版本有效，换版本重新记录一次；栈N=离设置/绘制点第几层，越小越精确。\n");
+        sb.append("⚠ 共用×N = 同一个 hook 出现在 N 条记录里，说明它是通用入口，hook 后要靠参数 / 文字 / id 再区分。\n");
         sb.append("“系统方法”是兜底，不会被混淆，但同类控件都会进来，必须按 View 类 / id（/文字）过滤。\n");
         sb.append(entries);
         return sb.toString();
