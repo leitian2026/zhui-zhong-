@@ -67,6 +67,7 @@ final class Snap {
                 .append(r.optString("view")).append('\n')
                 .append(r.optString("viewId")).append('\n')
                 .append(r.optString("activity")).append('\n')
+                .append(r.optString("page")).append('\n')
                 .append(r.optString("firstText")).append('\n')
                 .append(r.optString("lastText")).append('\n');
         JSONArray ps = r.optJSONArray("parents");
