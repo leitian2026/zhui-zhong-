@@ -118,6 +118,7 @@ final class Store {
     }
 
     SetProxy setProxy(long key) {
+        key ^= Recorder.pageHash; // 换页面后重新抓栈、另建记录
         SetProxy p = setProxies.get(key);
         if (p != null) return p;
         if (setProxies.size() > PROXY_CAP) setProxies.clear();
@@ -127,6 +128,7 @@ final class Store {
     }
 
     DrawProxy drawProxy(long key) {
+        key ^= Recorder.pageHash;
         DrawProxy p = drawProxies.get(key);
         if (p != null) return p;
         if (drawProxies.size() > PROXY_CAP) drawProxies.clear();
@@ -185,7 +187,7 @@ final class Store {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.7");
+        root.put("module", "TextRec 1.8");
         root.put("pkg", pkg);
         root.put("process", proc);
         root.put("appVersion", appVersion);
@@ -268,6 +270,7 @@ final class Store {
         j.put("ids", new JSONArray(r.idList()));
         j.put("idsFull", r.idsFull());
         j.put("activity", r.activity);
+        j.put("page", r.page);
         j.put("parents", new JSONArray(Arrays.asList(r.parents)));
         j.put("drawCount", r.drawCount.get());
         j.put("setCount", r.set == null ? 0 : r.set.count.get());
