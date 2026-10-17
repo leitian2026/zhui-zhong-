@@ -434,6 +434,100 @@ final class RecFormat {
         return header(it) + "\n" + setColumn(it, dd) + (skipDraw ? "" : "\n" + drawColumn(it, dd));
     }
 
+    // ------------------------------------------------------------ 分类（几万条记录里快速定位）
+
+    static final String[] CAT_DIMS = {"所属容器", "代码模块", "控件类", "屏幕位置"};
+
+    private static boolean genericClass(String cn) {
+        if (cn.startsWith("android.") || cn.startsWith("androidx.constraintlayout.") || cn.startsWith("androidx.recyclerview.")
+                || cn.startsWith("androidx.coordinatorlayout.") || cn.startsWith("androidx.viewpager")) return true;
+        return simple(cn).matches("((Frame|Linear|Relative|Constraint|Coordinator|Scroll|Horizontal)?Layout|(View)?Group|View|ViewStub)");
+    }
+
+    /** 离控件最近的、不是普通布局的祖先类（如 MainBottomTabContainer、HomeTopTabItemViewNew、PublishButton）。 */
+    static String containerOf(JSONObject r) {
+        JSONArray ps = r.optJSONArray("parents");
+        if (ps != null) {
+            for (int i = 0; i < ps.length(); i++) {
+                String p = ps.optString(i);
+                int h = p.indexOf('#');
+                String cn = h >= 0 ? p.substring(0, h) : p;
+                if (!cn.isEmpty() && !genericClass(cn)) return simple(cn);
+            }
+        }
+        return "(无业务容器)";
+    }
+
+    private static String modulePkg(String cn) {
+        String pre = "com.ss.android.ugc.aweme.";
+        boolean own = cn.startsWith(pre);
+        String[] seg = (own ? cn.substring(pre.length()) : cn).split("\\.");
+        int n = seg.length - 1; // 去掉最后一段类名，剩下的是包名
+        if (n <= 0) return own ? "aweme(根)" : cn;
+        StringBuilder sb = new StringBuilder();
+        int take = Math.min(own ? 2 : 3, n);
+        for (int i = 0; i < take; i++) sb.append(i > 0 ? "." : "").append(seg[i]);
+        return sb.toString();
+    }
+
+    private static String moduleFromStack(JSONObject st) {
+        String best = null;
+        int bl = 99;
+        for (String s : sigList(st)) {
+            if (unresolved(s) || s.endsWith(Stacks.TAG_INFRA)) continue;
+            String c = clean(s);
+            int h = c.indexOf('#');
+            String cn = h >= 0 ? c.substring(0, h) : c;
+            // 框架库和混淆壳（X. / Y.）不算业务模块
+            if (cn.startsWith("X.") || cn.startsWith("Y.") || cn.startsWith("android.") || cn.startsWith("java.")
+                    || cn.startsWith("kotlin.") || cn.startsWith("androidx.") || cn.startsWith("com.airbnb.")
+                    || cn.startsWith("com.facebook.") || cn.startsWith("org.greenrobot.")) continue;
+            int l = layerOf(s);
+            if (l < bl) {
+                bl = l;
+                best = cn;
+            }
+        }
+        return best == null ? null : modulePkg(best);
+    }
+
+    /** 谁设置/绘制的：离设置点最近的一个业务类所在的包（前 2 段），如 homepage.tab、feed.bottombar。 */
+    static String moduleOf(JSONObject r) {
+        String m = moduleFromStack(r.optJSONObject("setStack"));
+        if (m == null) m = moduleFromStack(r.optJSONObject("drawStack"));
+        return m == null ? "(无App栈)" : m;
+    }
+
+    /** 屏幕位置：按记录里第一个控件的中心点，在 sw×sh 的窗口里落在哪一块。 */
+    static String zoneOf(JSONObject r, int sw, int sh) {
+        JSONArray sc = r.optJSONArray("screen");
+        if (sc == null || sc.length() == 0) sc = r.optJSONArray("screenSetOnly");
+        JSONObject so = sc == null || sc.length() == 0 ? null : sc.optJSONObject(0);
+        JSONArray rc = so == null ? null : so.optJSONArray("rect");
+        if (rc == null || rc.length() < 4) return "不在屏幕上";
+        int cx = (rc.optInt(0) + rc.optInt(2)) / 2, cy = (rc.optInt(1) + rc.optInt(3)) / 2;
+        if (sh > 0 && cy < sh * 0.14) return "顶部栏";
+        if (sh > 0 && cy > sh * 0.90) return "底部栏";
+        if (sw > 0 && cx > sw * 0.86) return "右侧栏";
+        if (sh > 0 && cy > sh * 0.76) return "左下信息区";
+        return "内容区";
+    }
+
+    /** dim: 0 所属容器  1 代码模块  2 控件类  3 屏幕位置 */
+    static String catOf(int dim, JSONObject r, int sw, int sh) {
+        switch (dim) {
+            case 0:
+                return containerOf(r);
+            case 1:
+                return moduleOf(r);
+            case 2:
+                String v = simple(r.optString("view"));
+                return v.isEmpty() ? "(自绘/Compose)" : v;
+            default:
+                return zoneOf(r, sw, sh);
+        }
+    }
+
     // ------------------------------------------------------------ hook 清单（给接入模块用）
 
     /** 挑要写进清单的帧：最近的 3 个；其中没有稳定帧时，再补最近的一个稳定帧。 */
