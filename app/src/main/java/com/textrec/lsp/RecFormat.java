@@ -436,7 +436,8 @@ final class RecFormat {
 
     // ------------------------------------------------------------ hook 清单（给接入模块用）
 
-    private static void appendHooks(StringBuilder sb, String label, java.util.List<String> sigs) {
+    /** 挑要写进清单的帧：最近的 3 个；其中没有稳定帧时，再补最近的一个稳定帧。 */
+    private static java.util.List<String> pickHooks(java.util.List<String> sigs) {
         java.util.ArrayList<String> ok = new java.util.ArrayList<>();
         for (String s : sigs) {
             // 解析失败的、基础设施帧（消息分发 / LiveData / 异步包装）、通用控件方法（另有兜底行）都不列
@@ -455,7 +456,7 @@ final class RecFormat {
             pick.add(ok.get(i));
             if (ok.get(i).endsWith(Stacks.TAG_STABLE)) hasStable = true;
         }
-        if (!hasStable) { // 最近的稳定帧（类和方法都没混淆，换版本也在）再多给一个
+        if (!hasStable) {
             for (int i = 3; i < ok.size(); i++) {
                 if (ok.get(i).endsWith(Stacks.TAG_STABLE) && layerOf(ok.get(i)) <= 12) {
                     pick.add(ok.get(i));
@@ -463,36 +464,74 @@ final class RecFormat {
                 }
             }
         }
+        return pick;
+    }
+
+    private static boolean showDrawSide(JSONObject r) {
+        String kind = r.optString("kind");
+        return "CANVAS".equals(kind) || "COMPOSE".equals(kind) || "TRACE".equals(kind) || r.optJSONObject("setStack") == null;
+    }
+
+    /** 清单第一遍：统计每个 hook 被哪些记录用到。同一个 hook 被 3 个以上控件共用，就不能单独定位其中一个。 */
+    static void collectHooks(Snap.Item it, java.util.Map<String, java.util.List<Integer>> use) {
+        JSONObject r = it.o;
+        java.util.ArrayList<String> all = new java.util.ArrayList<>(pickHooks(sigList(r.optJSONObject("setStack"))));
+        if (showDrawSide(r)) all.addAll(pickHooks(sigList(r.optJSONObject("drawStack"))));
+        java.util.HashSet<String> seen = new java.util.HashSet<>();
+        for (String s : all) {
+            String c = clean(s);
+            if (!seen.add(c)) continue;
+            java.util.List<Integer> l = use.get(c);
+            if (l == null) {
+                l = new java.util.ArrayList<>();
+                use.put(c, l);
+            }
+            l.add(r.optInt("id"));
+        }
+    }
+
+    private static void appendHooks(StringBuilder sb, String label, java.util.List<String> sigs,
+                                    java.util.Map<String, java.util.List<Integer>> use) {
+        java.util.List<String> pick = pickHooks(sigs);
         if (pick.isEmpty()) return;
         sb.append("  ").append(label).append("（近→远）:\n");
         for (String s : pick) {
-            sb.append("    ").append(clean(s)).append("   [").append(s.endsWith(Stacks.TAG_STABLE) ? "稳定" : "混淆")
-                    .append("，栈").append(layerOf(s)).append("]\n");
+            String c = clean(s);
+            sb.append("    ").append(c).append("   [").append(s.endsWith(Stacks.TAG_STABLE) ? "稳定" : "混淆")
+                    .append("，栈").append(layerOf(s)).append("]");
+            if (c.endsWith("#run():void")) sb.append("   ⚠ 通用 Runnable.run，多半被很多任务共用");
+            java.util.List<Integer> u = use == null ? null : use.get(c);
+            if (u != null && u.size() >= 3) {
+                sb.append("   ⚠ 共用×").append(u.size()).append("（#");
+                for (int i = 0; i < u.size() && i < 5; i++) sb.append(i > 0 ? ",#" : "").append(u.get(i));
+                sb.append(u.size() > 5 ? "…" : "").append("）：不能单独定位，要按参数 / 文字 / id 过滤");
+            }
+            sb.append('\n');
         }
     }
 
     /** hook 清单里的一条：这个控件是什么 + 可以 hook 哪里。没有任何可用 hook 返回 null。 */
-    static String hookEntry(Snap.Item it) {
+    static String hookEntry(Snap.Item it, java.util.Map<String, java.util.List<Integer>> use) {
         JSONObject r = it.o;
         String kind = r.optString("kind");
         StringBuilder body = new StringBuilder();
-        JSONObject ss = r.optJSONObject("setStack");
-        appendHooks(body, "设置侧", sigList(ss));
-        boolean drawSide = "CANVAS".equals(kind) || "COMPOSE".equals(kind) || "TRACE".equals(kind) || ss == null;
-        if (drawSide) appendHooks(body, "TRACE".equals(kind) ? "调用侧" : "绘制侧", sigList(r.optJSONObject("drawStack")));
+        appendHooks(body, "设置侧", sigList(r.optJSONObject("setStack")), use);
+        if (showDrawSide(r)) {
+            appendHooks(body, "TRACE".equals(kind) ? "调用侧" : "绘制侧", sigList(r.optJSONObject("drawStack")), use);
+        }
+        boolean hasApp = body.length() > 0;
         StringBuilder rec = new StringBuilder();
         appendRecommend(rec, r);
         for (String line : rec.toString().split("\n")) { // 系统方法兜底（不会被混淆，但要按类 / id 过滤）
             if (line.startsWith("备选[")) body.append("  ").append(line).append('\n');
         }
         if (body.length() == 0) return null;
+        if (!hasApp) body.append("  ⚠ 没抓到 App 里的设置位置（设置发生在开始记录之前，或被限流），只有系统方法兜底；清空后重新进入这个页面再记一次\n");
         StringBuilder sb = new StringBuilder();
         sb.append('#').append(r.optInt("id")).append(" [").append(kindLabel(kind)).append("] ")
                 .append(samplesLine(r, 14, 6)).append("  ×").append(r.optInt("drawCount")).append('\n');
         String id = r.optString("viewId");
         sb.append("  控件: ").append(simple(r.optString("view"))).append(id.isEmpty() ? "" : "  id=" + id);
-        JSONArray ids = r.optJSONArray("ids");
-        if (ids != null && ids.length() > 1) sb.append("（同一段代码设置了 ").append(ids.length()).append(" 个控件）");
         String tc = r.optString("textColor");
         if (!tc.isEmpty()) sb.append("  颜色 ").append(tc);
         sb.append('\n');
