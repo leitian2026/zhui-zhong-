@@ -108,6 +108,17 @@ public class MainActivity extends Activity {
         btnReset.setOnClickListener(v -> save(true, true));
         root.addView(btnReset);
 
+        Button btnLean = new Button(this);
+        btnLean.setText("一键精简（只记文字）并清空重录");
+        btnLean.setOnClickListener(v -> {
+            cbIcons.setChecked(false);
+            cbSetOnly.setChecked(false);
+            cbState.setChecked(false);
+            etDepth.setText("12");
+            save(true, true);
+        });
+        root.addView(btnLean);
+
         Button btnView = new Button(this);
         btnView.setText("查看记录");
         btnView.setOnClickListener(v -> {
