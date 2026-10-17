@@ -10,6 +10,7 @@ import android.graphics.drawable.BitmapDrawable;
 import android.graphics.drawable.Drawable;
 import android.os.Build;
 import android.os.FileObserver;
+import android.os.Looper;
 import android.os.SystemClock;
 import android.view.View;
 import android.view.ViewGroup;
@@ -632,6 +633,7 @@ final class Recorder {
         if (r == null) return;
         r.touch(desc, shape);
         r.trackView(v);
+        noteIcon(r, v);
         ICON_VIEWS.put(v, Boolean.TRUE);
     }
 
@@ -1085,6 +1087,71 @@ final class Recorder {
 
     // ------------------------------------------------------------ 图标
 
+    /**
+     * 给图标记录截一张小图，让人看得出是哪个图标。只在主线程做（View.draw 不能在别的线程调），
+     * 同一条记录每 0.8 秒最多一次，只处理 ImageView（其他控件里可能带文字，画它会触发文字记录的 hook）。
+     * 优先用 View.draw 软件渲染（带着着色 / 选中态，所见即所得）；画不进去（硬件 Bitmap 等）退回 BitmapDrawable 直接缩放。
+     */
+    private static void noteIcon(Rec r, View v) {
+        if (r == null || !(v instanceof ImageView)) return;
+        if (Looper.myLooper() != Looper.getMainLooper()) return;
+        if (!r.thumbDue(SystemClock.elapsedRealtime(), 800)) return;
+        try {
+            long[] h = new long[1];
+            String b = iconThumb((ImageView) v, h);
+            if (b != null) r.addThumb(h[0], b);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static String iconThumb(ImageView v, long[] hashOut) {
+        int w = v.getWidth(), h = v.getHeight();
+        if (w > 0 && h > 0 && v.getVisibility() == View.VISIBLE) {
+            try {
+                float s = Math.min(1f, 64f / Math.max(w, h));
+                Bitmap bmp = Bitmap.createBitmap(Math.max(1, Math.round(w * s)), Math.max(1, Math.round(h * s)),
+                        Bitmap.Config.ARGB_8888);
+                Canvas cv = new Canvas(bmp);
+                cv.scale(s, s);
+                v.draw(cv);
+                String out = encodeThumb(bmp, hashOut);
+                if (out != null) return out;
+            } catch (Throwable ignored) {
+                // 硬件 Bitmap 画不进软件画布等：走下面的 BitmapDrawable
+            }
+        }
+        Drawable d = v.getDrawable();
+        if (!(d instanceof BitmapDrawable)) return null;
+        Bitmap src = ((BitmapDrawable) d).getBitmap();
+        if (src == null || src.isRecycled() || src.getWidth() <= 0 || src.getHeight() <= 0) return null;
+        if (Build.VERSION.SDK_INT >= 26 && src.getConfig() == Bitmap.Config.HARDWARE) {
+            src = src.copy(Bitmap.Config.ARGB_8888, false);
+            if (src == null) return null;
+        }
+        float s = Math.min(1f, 64f / Math.max(src.getWidth(), src.getHeight()));
+        Bitmap out = s >= 1f ? src : Bitmap.createScaledBitmap(src, Math.max(1, Math.round(src.getWidth() * s)),
+                Math.max(1, Math.round(src.getHeight() * s)), true);
+        return encodeThumb(out, hashOut);
+    }
+
+    /** 全透明（什么都没画出来）返回 null；hashOut[0] = 像素哈希，用来去重。 */
+    private static String encodeThumb(Bitmap b, long[] hashOut) {
+        int w = b.getWidth(), h = b.getHeight();
+        int[] px = new int[w * h];
+        b.getPixels(px, 0, w, 0, 0, w, h);
+        boolean any = false;
+        long hv = SEED;
+        for (int p : px) {
+            if ((p >>> 24) != 0) any = true;
+            hv = mix(hv, p);
+        }
+        if (!any) return null;
+        hashOut[0] = hv;
+        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+        b.compress(Bitmap.CompressFormat.PNG, 100, bo);
+        return android.util.Base64.encodeToString(bo.toByteArray(), android.util.Base64.NO_WRAP);
+    }
+
     private static void onIconSet(XC_MethodHook.MethodHookParam p) {
         if (!(p.thisObject instanceof View)) return;
         View v = (View) p.thisObject;
@@ -1115,6 +1182,7 @@ final class Recorder {
             if (r.set != null) ICON_SET.put(v, r.set);
             r.tick();
             r.trackView(v);
+            noteIcon(r, v);
             store.markDirty();
             return;
         }
@@ -1136,6 +1204,7 @@ final class Recorder {
         if (r != null) {
             r.touch(desc, shape);
             r.trackView(v);
+            noteIcon(r, v);
         }
         store.markDirty();
     }
