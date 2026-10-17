@@ -70,6 +70,17 @@
   alpha 按 0.1 一档去重，动画不会刷出几十个变体。
 - **方法追踪带 `this`**：变体里加上调用对象，View 显示为 `类#id「文字」`，追 `View#setAlpha` 这类系统方法时能看出是哪个 View。
 
+## 1.10：页面按名称分类，导出可选页面或按页面分组
+
+- 页面选择框里：点选 = 只看 / 只导出这个页面；长按 = 给页面命名（如“消息”）。多个页面起同一个名字会合成一类，名字保存在模块里。
+- 内置了 MessagesFragment3=消息、FeedRecommendFragment=推荐、FeedFollowFragment=关注，其余自己命名。
+- 选“全部页面”导出时，txt 里按页面分组，每组有“████ 页面：xxx ████”标题；JSON 每条记录带 pageLabel。
+
+## 1.9：页面标签只取真正的页面
+
+- 内部组件 Fragment（名字不带 Fragment，或就叫 "Fragment"，如 WidgetManager）不再改页面标签。
+- 容器 Fragment 显示出来时，标签落到它里面此刻可见的子页面上，不再停在 MainFragment 这类容器名。
+
 ## 1.8：按页面分别记录，导出可选页面
 
 - 每条记录带“页面”（Activity > Fragment）。同一个控件换了页面再出现，另记一条，不再互相覆盖；不需要为换页面去清空。
