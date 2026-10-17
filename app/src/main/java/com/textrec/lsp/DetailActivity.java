@@ -42,6 +42,13 @@ public class DetailActivity extends Activity {
         sv.addView(body);
         root.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1f));
 
+        org.json.JSONArray ta = it.o.optJSONArray("thumbs");
+        if (ta != null && ta.length() > 0) {
+            LinearLayout tr = new LinearLayout(this);
+            tr.setOrientation(LinearLayout.HORIZONTAL);
+            for (int k = 0; k < ta.length(); k++) tr.addView(RecordsActivity.thumbView(this, ta.optString(k), dp(96)));
+            body.addView(tr);
+        }
         TextView head = mono(RecFormat.header(it), 12);
         body.addView(head);
 
