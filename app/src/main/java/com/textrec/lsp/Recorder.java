@@ -12,6 +12,7 @@ import android.os.Build;
 import android.os.FileObserver;
 import android.os.Looper;
 import android.os.SystemClock;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.widget.ImageView;
@@ -66,6 +67,10 @@ final class Recorder {
      */
     static volatile String pageName = "";
     static volatile long pageHash = 0;
+    /** pageName 的小写，页面白名单用它做包含判断（页面切换时才更新，热路径不用再 toLowerCase）。 */
+    static volatile String pageLower = "";
+    /** 采集端过滤条件（配置变了在 reload 里重新解析）。 */
+    static volatile Gate gate = Gate.EMPTY;
     private static volatile String pageActivity = "";
     private static final AtomicBoolean FRAGMENT_HOOKED = new AtomicBoolean();
 
@@ -74,6 +79,7 @@ final class Recorder {
         if (name.equals(pageName)) return;
         pageName = name;
         pageHash = name.hashCode() * 0x9E3779B97F4A7C15L;
+        pageLower = name.toLowerCase(Locale.ROOT);
         store.markDirty();
     }
 
@@ -224,6 +230,9 @@ final class Recorder {
     private static final Object TRACE_LOCK = new Object();
     private static volatile Set<String> traceActive = Collections.emptySet();
     private static final Set<String> traceHooked = new HashSet<>();
+    /** 「类#*」追踪的整个类（类名集合）和每一行 @选项（key 是「类#方法」）。 */
+    private static volatile Set<String> traceWild = Collections.emptySet();
+    private static volatile Map<String, RecConfig.TraceOpt> traceOpts = Collections.emptyMap();
     private static final Map<String, String> traceMsg = new ConcurrentHashMap<>();
     private static final Map<String, Integer> traceTries = new ConcurrentHashMap<>();
     private static final ExecutorService HOOKER = Executors.newSingleThreadExecutor(r -> {
@@ -276,6 +285,8 @@ final class Recorder {
             cfg = c;
             KeywordFilter kf = new KeywordFilter(c);
             filter = kf;
+            gate = new Gate(c);
+            if (c.windowMs > 0) ensureTouchHook(); // 触发窗口要靠触摸时间戳，只在用到时才装这个钩子
             store.configure(c);
             store.setWarn(kf.warn);
             if (appliedEpoch != c.epoch) {
@@ -682,6 +693,7 @@ final class Recorder {
         if (!(p.thisObject instanceof View) || p.args == null || p.args.length < 1) return;
         View v = (View) p.thisObject;
         if (!isTracked(v)) return;
+        if (!allowAll(v)) return;
         String m = p.method.getName();
         Object a0 = p.args[0];
         long vb;
@@ -800,6 +812,12 @@ final class Recorder {
 
     private static void applyTraceTargets(RecConfig c) {
         HashSet<String> want = new HashSet<>(RecConfig.splitTargets(c.traceMethods));
+        HashSet<String> wild = new HashSet<>();
+        for (String t : want) {
+            if (t.endsWith("#*") && t.length() > 2) wild.add(t.substring(0, t.length() - 2));
+        }
+        traceWild = wild;
+        traceOpts = RecConfig.traceOpts(c.traceMethods);
         traceActive = want;
         if (want.isEmpty()) {
             traceMsg.clear();
@@ -860,6 +878,37 @@ final class Recorder {
                 }
                 continue;
             }
+            if (mn.equals("*")) {
+                // 类#*：这个类自己声明的所有方法和构造方法（跳过抽象 / native / 合成方法）。配合排除名单使用，调用很多，只在找钩子时用
+                int cnt = 0;
+                try {
+                    for (Method dm : k.getDeclaredMethods()) {
+                        int mod = dm.getModifiers();
+                        if (dm.isSynthetic() || java.lang.reflect.Modifier.isAbstract(mod)
+                                || java.lang.reflect.Modifier.isNative(mod)) continue;
+                        try {
+                            XposedBridge.hookMethod(dm, TRACE_HOOK);
+                            cnt++;
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                    for (Constructor<?> ct : k.getDeclaredConstructors()) {
+                        try {
+                            XposedBridge.hookMethod(ct, TRACE_HOOK);
+                            cnt++;
+                        } catch (Throwable ignored) {
+                        }
+                    }
+                } catch (Throwable e) {
+                    traceMsg.put(t, "hook 失败: " + e);
+                    markHooked(t);
+                    continue;
+                }
+                markHooked(t);
+                if (cnt == 0) traceMsg.put(t, "这个类里没有可 hook 的方法");
+                else traceMsg.remove(t);
+                continue;
+            }
             try {
                 Set<?> hooked = mn.equals("<init>")
                         ? XposedBridge.hookAllConstructors(k, TRACE_HOOK)
@@ -894,23 +943,91 @@ final class Recorder {
         String cn = m.getDeclaringClass().getName();
         String mn = m instanceof Constructor ? "<init>" : m.getName();
         String tkey = cn + "#" + mn;
-        if (!traceActive.contains(tkey)) return;
+        boolean wild = false;
+        if (!traceActive.contains(tkey)) {
+            if (!traceWild.contains(cn)) return;
+            wild = true; // 「类#*」整类追踪命中的方法
+        }
+        // ---- 采集端过滤：全部在抓栈之前判断，被挡掉的调用不抓栈、不建记录，只在 Store 里累加挡掉的次数
+        Gate g = gate;
+        if (g.excluded(cn, mn)) {
+            store.blkExclude.incrementAndGet();
+            return;
+        }
+        if (g.hasThreads && !g.threadOk(Thread.currentThread().getName())) {
+            store.blkThread.incrementAndGet();
+            return;
+        }
+        if (g.hasPages && !g.pageOk(pageLower)) {
+            store.blkPage.incrementAndGet();
+            return;
+        }
+        if (g.windowMs > 0 && !windowOk(g.windowMs)) {
+            store.blkWindow.incrementAndGet();
+            return;
+        }
+        RecConfig.TraceOpt opt = traceOpts.get(tkey);
+        if (opt == null && wild) opt = traceOpts.get(cn + "#*");
         boolean[] busy = BUSY.get();
         if (busy[0]) return; // 摘要里调 toString 可能又触发被追踪的方法
         busy[0] = true;
         try {
+            String text = null;
+            if (g.hasValues) { // 值匹配：参数或返回值里没有目标值就不记
+                text = summarizeCall(p);
+                if (!g.valueOk(text)) {
+                    store.blkValue.incrementAndGet();
+                    return;
+                }
+            }
             Store.DrawProxy dp = store.drawProxy(mix(mix(SEED, tkey.hashCode()), 9));
             int n = dp.n.incrementAndGet();
             Rec r = dp.rec;
+            // 持续型自动降频：同一位置调用很多次、并且持续很久（进度条刷新之类），之后只计数不抓栈
+            if (c.quietCount > 0) {
+                long nowMs = SystemClock.uptimeMillis();
+                if (dp.firstAt == 0) dp.firstAt = nowMs;
+                if (!dp.quiet && n > c.quietCount && nowMs - dp.firstAt >= c.quietSpanMs) dp.quiet = true;
+            }
+            if (dp.quiet) {
+                if (r != null) r.tick();
+                store.quietCnt.incrementAndGet();
+                return;
+            }
             if (n > 3000 && n % 10 != 0) { // 高频方法：只计数，每 10 次取一次样
                 if (r != null) r.tick();
                 return;
             }
-            String text = summarizeCall(p);
+            // 这一行写了 @count：已经有记录就只计数，连参数摘要都不拼
+            if (opt != null && opt.countOnly && r != null && text == null) {
+                r.tick();
+                store.markDirty();
+                return;
+            }
+            if (text == null) text = summarizeCall(p);
             long shape = text.hashCode();
-            boolean want = r == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
+            // @count / @args：不抓栈。第一次建一条没有调用栈的记录，之后 @count 只计数，@args 继续记参数 / 返回值变体
+            if (opt != null && (opt.countOnly || opt.argsOnly)) {
+                if (r == null) {
+                    Rec first = obtain(Rec.TRACE, cn, mn, null, EMPTY, null, text, shape, c);
+                    if (first != null) {
+                        dp.rec = first;
+                        r = first;
+                    }
+                    if (r != null) r.touch(text, shape);
+                } else if (opt.countOnly) {
+                    r.tick();
+                } else {
+                    r.touch(text, shape);
+                }
+                store.markDirty();
+                return;
+            }
+            int depth = opt != null && opt.depth > 0 ? opt.depth : c.stackDepth;
+            int every = opt != null && opt.every > 0 ? opt.every : c.sampleEvery;
+            boolean want = r == null || n <= c.perKeyStacks || n % every == 0;
             if (want && store.allowStack(c.stacksPerSec)) {
-                Stacks.Stk d = Stacks.build(Stacks.capture(true), c.stackDepth, false);
+                Stacks.Stk d = Stacks.build(Stacks.capture(true), depth, false);
                 Rec nr = obtain(Rec.TRACE, cn, mn, null, d, null, text, shape, c);
                 if (nr != null) {
                     dp.rec = nr;
@@ -979,6 +1096,7 @@ final class Recorder {
         maybeReload();
         RecConfig c = cfg;
         if (!c.enabled || !c.traceSet) return;
+        if (!allowAll(v)) return;
         if (text == null || text.isEmpty() || !filter.accept(text)) {
             VIEW_SET.remove(v); // 不让它和更早的设置栈错误配对
             return;
@@ -1068,6 +1186,7 @@ final class Recorder {
         RecConfig c = cfg;
         if (!c.enabled || !c.traceColor) return;
         TextView v = (TextView) p.thisObject;
+        if (!allowAll(v)) return;
         int color = v.getCurrentTextColor();
         String cls = v.getClass().getName();
         long key = mix(mix(mix(SEED, cls.hashCode()), v.getId()), 11);
@@ -1159,6 +1278,7 @@ final class Recorder {
         maybeReload();
         RecConfig c = cfg;
         if (!c.enabled || !c.traceIcons) return;
+        if (!allowAll(v)) return;
 
         Object[] a = p.args;
         String m = p.method.getName();
@@ -1255,6 +1375,7 @@ final class Recorder {
         if (a == null || a.length < 1) return;
 
         TextView v = CUR.get();
+        if (!allowAll(v)) return; // 自绘 / Compose 没有 View：设了控件白名单时一律不记
         String text = null;
         if (v != null) {
             // TextView 的绘制是按行/按段调用的，这里直接取整段文字，关键字和归并都更准
@@ -1470,6 +1591,71 @@ final class Recorder {
         if (setOnly) store.setOnlyCount.incrementAndGet();
         SigResolver.resolveRec(nr, v == null ? null : v.getClass().getClassLoader());
         return nr;
+    }
+
+    // ------------------------------------------------------------ 采集端过滤
+
+    /** 最近一次触摸（Activity.dispatchTouchEvent）的时间，触发窗口用它判断“这次调用是不是紧跟在一次操作之后”。 */
+    static volatile long lastTouchAt;
+    private static final AtomicBoolean TOUCH_HOOKED = new AtomicBoolean();
+
+    private static boolean windowOk(int windowMs) {
+        return SystemClock.uptimeMillis() - lastTouchAt <= windowMs;
+    }
+
+    /**
+     * 只在配置了触发窗口时才装。钩子里只写一个时间戳，什么都不做；按下、移动、抬起都会刷新，所以拖动进度条的整个过程都在窗口内。
+     * 限制：只覆盖经过 Activity.dispatchTouchEvent 的触摸；Dialog / PopupWindow 里的触摸、
+     * 以及重写了 dispatchTouchEvent 却不调用 super 的 Activity 看不到。
+     */
+    private static void ensureTouchHook() {
+        if (TOUCH_HOOKED.get()) return;
+        try {
+            Method m = Activity.class.getDeclaredMethod("dispatchTouchEvent", MotionEvent.class);
+            if (!TOUCH_HOOKED.compareAndSet(false, true)) return;
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam p) {
+                    lastTouchAt = SystemClock.uptimeMillis();
+                }
+            });
+        } catch (Throwable t) {
+            TOUCH_HOOKED.set(false);
+            XposedBridge.log("[TextRec] hook Activity.dispatchTouchEvent failed: " + t);
+        }
+    }
+
+    /**
+     * 文字 / 图标 / 颜色 / 状态 / 绘制这几类记录的统一闸门：触发窗口（需勾选“也用于文字…”）、线程、页面、控件。
+     * v 为 null 表示这次记录没有 View（自绘 / Compose）：设了控件白名单就不记。
+     * 全部没设时 anyAll 为 false，直接放行，几乎没有开销。
+     */
+    private static boolean allowAll(View v) {
+        Gate g = gate;
+        if (!g.anyAll) return true;
+        if (g.windowAll && !windowOk(g.windowMs)) {
+            store.blkWindow.incrementAndGet();
+            return false;
+        }
+        if (g.hasThreads && !g.threadOk(Thread.currentThread().getName())) {
+            store.blkThread.incrementAndGet();
+            return false;
+        }
+        if (g.hasPages && !g.pageOk(pageLower)) {
+            store.blkPage.incrementAndGet();
+            return false;
+        }
+        if (g.hasViews) {
+            if (v == null) {
+                store.blkView.incrementAndGet();
+                return false;
+            }
+            if (!g.viewMatch(v.getClass().getName()) && !g.viewMatch(idName(v))) {
+                store.blkView.incrementAndGet();
+                return false;
+            }
+        }
+        return true;
     }
 
     // ------------------------------------------------------------ 小工具
