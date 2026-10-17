@@ -6,7 +6,9 @@ import java.io.FileInputStream;
 import java.io.StringReader;
 import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Properties;
 
 /** 配置：模块界面写出，目标 App 里的 Hook 读取。两边共用同一个类。 */
@@ -34,6 +36,25 @@ public final class RecConfig {
     public int maxSetOnly = 500;
     /** 方法追踪：每行 类#方法，记录每次调用的参数/返回值和调用栈（只读）。// 开头为注释 */
     public String traceMethods = "";
+    // ---- 采集端过滤（默认全部不过滤；被挡掉的调用不抓栈、不建记录，只计数）----
+    /** 触发窗口：最近一次触摸后多少毫秒内才记录；0 = 不限制。默认只管方法追踪。 */
+    public int windowMs = 0;
+    /** 触发窗口也用于文字 / 图标 / 颜色 / 状态 / 绘制记录 */
+    public boolean windowAll = false;
+    /** 排除名单（每行或逗号分隔）：类#方法、类#*（整个类）、#方法（任何类里的这个方法）、类名或包名前缀 */
+    public String excludeList = "";
+    /** 线程白名单：线程名包含任意一个词才记（如 main、LegoHandler）；空 = 不限 */
+    public String threadFilter = "";
+    /** 页面白名单：页面标签包含任意一个词才记（不区分大小写）；空 = 不限 */
+    public String pageFilter = "";
+    /** 控件白名单：View 类名或 id 包含任意一个词才记（文字 / 图标 / 状态 / 绘制）；空 = 不限 */
+    public String viewFilter = "";
+    /** 值匹配：方法追踪的参数或返回值里包含其中任意一个值才记；时长会自动展开成多种写法；空 = 不限 */
+    public String valueFilter = "";
+    /** 持续型自动降频：同一位置调用超过这个次数、且持续超过 quietSpanMs，之后只计数不抓栈；0 = 关 */
+    public int quietCount = 0;
+    public int quietSpanMs = 3000;
+
     /** 每条记录里保存的调用栈最大帧数 */
     public int stackDepth = 12;
     /** 同一个“位置”前几次要抓栈 */
@@ -66,11 +87,78 @@ public final class RecConfig {
         for (String p : s.split("[\\n\\r]+")) {
             String t = p.trim();
             if (t.isEmpty() || t.startsWith("//")) continue;
+            int at = optStart(t);
+            if (at > 0) t = t.substring(0, at).trim(); // 去掉行尾的 @选项
             int i = t.indexOf('(');
             if (i > 0) t = t.substring(0, i).trim();
             if (!t.isEmpty() && !out.contains(t)) out.add(t);
         }
         return out;
+    }
+
+    /** 方法追踪每一行可以带的选项。 */
+    static final class TraceOpt {
+        /** 只计数：不记参数变体、不抓栈 */
+        boolean countOnly;
+        /** 只记参数 / 返回值变体：不抓栈 */
+        boolean argsOnly;
+        /** 这一行单独的栈深度，0 = 用全局的 */
+        int depth;
+        /** 这一行单独的抽样间隔，0 = 用全局的 */
+        int every;
+    }
+
+    /** 行里第一个“空白 + @”的空白位置；没有返回 -1。 */
+    private static int optStart(String t) {
+        for (int i = 1; i < t.length(); i++) {
+            if (t.charAt(i) == '@' && Character.isWhitespace(t.charAt(i - 1))) return i - 1;
+        }
+        return -1;
+    }
+
+    /**
+     * 方法追踪行尾的选项：「类#方法 @count」「类#方法 @args」「类#方法 @stack=4 @every=10」，
+     * 选项之间用空格、逗号或 @ 分隔。key 是去掉选项和参数括号后的「类#方法」。
+     */
+    static Map<String, TraceOpt> traceOpts(String s) {
+        HashMap<String, TraceOpt> out = new HashMap<>();
+        if (s == null) return out;
+        for (String p : s.split("[\\n\\r]+")) {
+            String t = p.trim();
+            if (t.isEmpty() || t.startsWith("//")) continue;
+            int at = optStart(t);
+            if (at < 0) continue;
+            String opts = t.substring(at).trim();
+            String target = t.substring(0, at).trim();
+            int i = target.indexOf('(');
+            if (i > 0) target = target.substring(0, i).trim();
+            if (target.isEmpty()) continue;
+            TraceOpt o = new TraceOpt();
+            for (String w : opts.split("[@,\\s]+")) {
+                if (w.isEmpty()) continue;
+                if (w.equals("count")) {
+                    o.countOnly = true;
+                } else if (w.equals("args")) {
+                    o.argsOnly = true;
+                } else if (w.startsWith("stack=") || w.startsWith("depth=")) {
+                    int v = intOf(w.substring(w.indexOf('=') + 1));
+                    if (v > 0) o.depth = clamp(v, 1, 60);
+                } else if (w.startsWith("every=")) {
+                    int v = intOf(w.substring(w.indexOf('=') + 1));
+                    if (v > 0) o.every = clamp(v, 1, 100000);
+                }
+            }
+            out.put(target, o);
+        }
+        return out;
+    }
+
+    private static int intOf(String s) {
+        try {
+            return Integer.parseInt(s.trim());
+        } catch (Throwable t) {
+            return 0;
+        }
     }
 
     static List<String> splitLines(String s) {
@@ -89,6 +177,10 @@ public final class RecConfig {
                 + " color=" + traceColor + " icons=" + traceIcons + " auto=" + autoParams
                 + " setOnly=" + traceSetOnly + "/" + maxSetOnly + " state=" + traceState
                 + " traces=" + splitTargets(traceMethods).size()
+                + " window=" + windowMs + (windowAll ? "/all" : "") + " quiet=" + quietCount + "/" + quietSpanMs
+                + " thr=" + splitLines(threadFilter).size() + " page=" + splitLines(pageFilter).size()
+                + " view=" + splitLines(viewFilter).size() + " excl=" + splitLines(excludeList).size()
+                + " val=" + splitLines(valueFilter).size()
                 + " depth=" + stackDepth + " perKey=" + perKeyStacks + " sample=" + sampleEvery
                 + " perSec=" + stacksPerSec + " max=" + maxRecords + " flush=" + flushSec;
     }
@@ -110,6 +202,15 @@ public final class RecConfig {
             p.setProperty("traceState", String.valueOf(traceState));
             p.setProperty("maxSetOnly", String.valueOf(maxSetOnly));
             p.setProperty("traceMethods", traceMethods);
+            p.setProperty("windowMs", String.valueOf(windowMs));
+            p.setProperty("windowAll", String.valueOf(windowAll));
+            p.setProperty("excludeList", excludeList);
+            p.setProperty("threadFilter", threadFilter);
+            p.setProperty("pageFilter", pageFilter);
+            p.setProperty("viewFilter", viewFilter);
+            p.setProperty("valueFilter", valueFilter);
+            p.setProperty("quietCount", String.valueOf(quietCount));
+            p.setProperty("quietSpanMs", String.valueOf(quietSpanMs));
             p.setProperty("stackDepth", String.valueOf(stackDepth));
             p.setProperty("perKeyStacks", String.valueOf(perKeyStacks));
             p.setProperty("sampleEvery", String.valueOf(sampleEvery));
@@ -173,6 +274,15 @@ public final class RecConfig {
         }
         c.maxSetOnly = clamp(num(p, "maxSetOnly", c.maxSetOnly), 10, 5000);
         c.traceMethods = p.getProperty("traceMethods", c.traceMethods);
+        c.windowMs = clamp(num(p, "windowMs", c.windowMs), 0, 600000);
+        c.windowAll = bool(p, "windowAll", c.windowAll);
+        c.excludeList = p.getProperty("excludeList", c.excludeList);
+        c.threadFilter = p.getProperty("threadFilter", c.threadFilter);
+        c.pageFilter = p.getProperty("pageFilter", c.pageFilter);
+        c.viewFilter = p.getProperty("viewFilter", c.viewFilter);
+        c.valueFilter = p.getProperty("valueFilter", c.valueFilter);
+        c.quietCount = clamp(num(p, "quietCount", c.quietCount), 0, 10000000);
+        c.quietSpanMs = clamp(num(p, "quietSpanMs", c.quietSpanMs), 100, 3600000);
         c.stackDepth = clamp(num(p, "stackDepth", c.stackDepth), 1, 60);
         c.perKeyStacks = clamp(num(p, "perKeyStacks", c.perKeyStacks), 1, 50);
         c.sampleEvery = clamp(num(p, "sampleEvery", c.sampleEvery), 10, 100000);
