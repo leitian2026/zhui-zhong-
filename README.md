@@ -187,6 +187,43 @@
 - **清空只清记录**：不再清掉“View → 设置栈 / 文字颜色栈”的对应，重画后的记录仍然带设置栈。
 - 图标记录里带“屏幕扫描”且没有设置栈的，说明设置发生在模块启动之前（冷启动、没被抓到）。
 
+## 命令（记录页 → 顶栏「更多」→「粘贴命令…」）
+一行文本 = 一套筛选条件。任何人/任何 AI 只要照着下面这张表拼一行、让用户粘贴进那个输入框、点「执行」，
+不需要知道代码怎么写、不需要来问开发者。执行时**先清空当前所有筛选，再按这行命令重新设置**，
+所以同一行命令什么时候粘贴、粘贴几次，结果都一样。
+
+格式：空格分隔多个 `key=value`；不带 `=` 的词当搜索词（和搜索框一样，多个词要同时命中文字才算中）。
+无法识别的 key，或 value 在当前数据里根本不存在，会被忽略并在执行后用一行 toast 报出来，不会让整条命令失败。
+
+`container=` `module=` `view=` `page=` 四个是开放词表（取决于目标 App 实际有什么类名/包名/页面），
+**大小写不敏感、子串匹配**：比如抓到的容器叫 `CommentItemView`，写 `container=comment` 也能命中；
+如果子串能匹配到好几种，取第一个命中的，想精确一点就把词写得更完整。
+
+下面这些是封闭词表，必须完全照抄（小写，不认中文，不认全角括号）：
+
+| key | 取值 | 对应的是 |
+|---|---|---|
+| `kind=` | `TEXTVIEW` `CANVAS` `COMPOSE` `ICON` `TRACE` `TEXTSET` `STATE` `all` | 记录类型（和导出 JSON 里 `kind` 字段原始值完全一致，大小写不敏感；`all`=不限） |
+| `zone=` | `top` `bottom` `right` `bottomleft` `content` `offscreen` | 屏幕位置：顶部栏/底部栏/右侧栏/左下信息区/内容区/不在屏幕上 |
+| `hook=` | `biz` `widget` `obf` `none` | hook可靠度：有稳定业务帧可直接hook / 只有通用控件帧（要按View过滤）/ 只有混淆帧 / 无可用帧 |
+| `freq=` | `once` `low` `mid` `high` | 调用频次：仅一次 / 2~10次 / 11~50次 / 50次以上（多半是列表项） |
+| `reuse=` | `local` `cross` `global` | 复用范围：仅本页面 / 跨2~3个页面 / 4个以上页面的全局公共入口 |
+| `shape=` | `empty` `duration` `number` `fixed` `dynamic` | 内容形态：空文字 / 时长mm:ss / 纯数字计数 / 固定文案 / 多种动态文案 |
+| `fresh=` | `new` `recent` `old` | 新鲜度：这批里2秒内更新的 / 15秒内 / 更早的历史记录 |
+| `onscreen=` | `1` `0` | 仅看屏幕上的（对应首页「仅屏幕上」开关） |
+| `hidecommon=` | `1` `0` | 隐藏公共控件（跨页面长得一样的，如底部栏） |
+| `sort=` | `recent` `count` `first` | 排序：最近更新 / 次数最多 / 最早出现 |
+| `q=` | 任意文字 | 显式指定一个搜索词（等价于直接写一个不带 `=` 的词） |
+
+例：想找抖音评论面板里能直接 hook 的高频文字：
+```
+container=comment zone=content hook=biz freq=high
+```
+想找某个按钮上写死没变过的图标：
+```
+kind=ICON shape=fixed hidecommon=1
+```
+
 ## 导出
 - txt：给人看。
 - JSON：字段固定（`schema:1`，每条记录含 kind/view/viewId/activity/parents/drawCount/setCount/setStack/drawStack/sigs；1.3 新增字段 paints/pos/textColor/colorStack/drawNote 均为追加，不影响旧字段），
