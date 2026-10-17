@@ -950,11 +950,11 @@ final class Recorder {
         }
         // ---- 采集端过滤：全部在抓栈之前判断，被挡掉的调用不抓栈、不建记录，只在 Store 里累加挡掉的次数
         Gate g = gate;
-        if (g.excluded(cn, mn)) {
+        if (g.excluded(cn, mn) || (g.excludeInfra && Stacks.isGenericInfra(cn))) {
             store.blkExclude.incrementAndGet();
             return;
         }
-        if (g.hasThreads && !g.threadOk(Thread.currentThread().getName())) {
+        if (g.hasThreads && !g.threadOk(Thread.currentThread().getName(), Looper.myLooper() == Looper.getMainLooper())) {
             store.blkThread.incrementAndGet();
             return;
         }
@@ -1637,7 +1637,7 @@ final class Recorder {
             store.blkWindow.incrementAndGet();
             return false;
         }
-        if (g.hasThreads && !g.threadOk(Thread.currentThread().getName())) {
+        if (g.hasThreads && !g.threadOk(Thread.currentThread().getName(), Looper.myLooper() == Looper.getMainLooper())) {
             store.blkThread.incrementAndGet();
             return false;
         }
