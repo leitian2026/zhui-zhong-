@@ -20,6 +20,15 @@ import java.util.regex.Pattern;
 public class MainActivity extends Activity {
     private EditText etPkgs, etKeywords, etDepth, etPerKey, etSample, etPerSec, etMax, etMaxSetOnly, etTrace;
     private Switch swEnabled, swTraceOnly, swRegex, swSet, swDraw, swColor, swIcons, swAuto, swSetOnly, swState;
+    // 采集过滤
+    private EditText etWindow, etQuietCount, etQuietSpan, etThread, etPageF, etViewF, etExclude, etValue;
+    private Switch swWindowAll;
+    /** 「找钩子」预设里的排除名单：几乎所有功能都会经过的通用基础设施，当钩子点没有意义。 */
+    private static final String DEFAULT_EXCLUDE =
+            "com.ss.android.ugc.aweme.kiwi.observer.QAsyncObserver#onChanged\n"
+                    + "androidx.lifecycle.LiveData#considerNotify\n"
+                    + "com.ss.android.ugc.bytex.\n"
+                    + "com.bytedance.qmi.";
     private Ui.Seg segRange;
     private LinearLayout kwBox, advBody;
     private TextView advHeader, rangeDesc, tvStatus, btnPush, btnReset, btnApplyOnly;
@@ -45,6 +54,7 @@ public class MainActivity extends Activity {
         buildTargetCard(root);
         buildContentCard(root);
         buildRangeCard(root);
+        buildFilterCard(root);
         buildAdvancedCard(root);
 
         // ---- 底部固定操作栏
@@ -230,6 +240,106 @@ public class MainActivity extends Activity {
                 : "记录屏幕上出现的所有文字。会拖慢目标 App，只建议调试时使用。");
     }
 
+    /**
+     * 采集过滤：在目标 App 里、抓栈之前就判断，不符合的调用不记（也不抓栈，更省资源）。全部留空 = 不过滤。
+     * 每个条件挡掉了多少次，会写在记录页顶部，记录不够时看是不是被哪个条件挡掉了。
+     */
+    private void buildFilterCard(LinearLayout root) {
+        root.addView(Ui.section(this, "采集过滤（挡掉不相关的）",
+                "在目标 App 里、抓调用栈之前就判断，不符合的不记，也更省资源。全部留空 = 不过滤。记录页顶部会写每个条件挡掉了多少次。"));
+
+        LinearLayout presets = new LinearLayout(this);
+        presets.setOrientation(LinearLayout.HORIZONTAL);
+        presets.setGravity(Gravity.CENTER_VERTICAL);
+        presets.addView(Ui.tv(this, "快速选择", 12.5f, R.color.text_hint, false), Ui.lpM(this, -2, -2, 4, 0, 10, 0));
+        presets.addView(Ui.chip(this, "找钩子（最窄）", false, v -> {
+            swTraceOnly.setChecked(true); // 只记方法追踪（会顺带展开「高级」，方法清单在那里）
+            etWindow.setText("1500");
+            swWindowAll.setChecked(false);
+            etQuietCount.setText("50");
+            etQuietSpan.setText("3000");
+            etExclude.setText(DEFAULT_EXCLUDE);
+            etThread.setText("");
+            etPageF.setText("");
+            etViewF.setText("");
+            toast("已选「找钩子」：只记方法追踪，触摸后 1.5 秒内才记；点底部按钮后生效");
+        }), Ui.lpM(this, -2, -2, 0, 0, 8, 0));
+        presets.addView(Ui.chip(this, "清除过滤", false, v -> {
+            etWindow.setText("0");
+            swWindowAll.setChecked(false);
+            etQuietCount.setText("0");
+            etQuietSpan.setText("3000");
+            etExclude.setText("");
+            etThread.setText("");
+            etPageF.setText("");
+            etViewF.setText("");
+            etValue.setText("");
+            toast("已清除全部采集过滤，点底部按钮后生效");
+        }));
+        root.addView(presets, Ui.lpM(this, -1, -2, 0, 0, 0, 8));
+
+        LinearLayout card = Ui.card(this);
+        etWindow = numberRowIn(card, "触发窗口（毫秒）",
+                "最近一次触摸后这么久以内才记录，0 = 不限。适合“做一次操作看一组记录”（双击、拖进度条），背景刷新基本都会被挡掉。方法追踪默认受它管。");
+        Ui.Sw wa = Ui.switchRow(this, "触发窗口也用于文字 / 图标 / 状态", "默认只管方法追踪；打开后文字、颜色、图标、状态变化、绘制记录也只在触摸后的窗口内记");
+        swWindowAll = wa.sw;
+        card.addView(wa.row);
+        card.addView(Ui.divider(this));
+        etThread = textRowIn(card, "线程白名单",
+                "线程名包含其中任意一个词才记，逗号或换行分隔，如 main 或 LegoHandler。留空 = 不限。界面更新在 main，点赞这类后台逻辑在别的线程。", "main", false);
+        card.addView(Ui.divider(this));
+        etPageF = textRowIn(card, "页面白名单",
+                "页面标签（如 MainActivity > FeedItemFragment）包含其中任意一个词才记，不区分大小写。留空 = 不限。", "FeedItemFragment", false);
+        card.addView(Ui.divider(this));
+        etViewF = textRowIn(card, "控件白名单",
+                "只对文字 / 图标 / 状态 / 绘制记录生效：View 类名或 id 包含其中任意一个词才记。自绘和 Compose 没有 View，设了这一项就不记。留空 = 不限。", "DiggLayout", false);
+        card.addView(Ui.divider(this));
+        etExclude = textRowIn(card, "排除名单",
+                "只对方法追踪生效，每行一项：类#方法、类#*（整个类）、#方法（任何类里的这个方法）、或类名 / 包名前缀。配合「类#*」整类追踪，把吵闹的方法排掉。",
+                "androidx.lifecycle.LiveData#considerNotify", true);
+        card.addView(Ui.divider(this));
+        etValue = textRowIn(card, "值匹配",
+                "只对方法追踪生效：参数或返回值里包含其中任意一个值才记。时长会自动展开成多种写法，填 01:37 会同时匹配 97、97000。参数摘要里字符串只保留前 60 到 80 个字符，藏在大对象深处的值匹配不到。",
+                "01:37", false);
+        card.addView(Ui.divider(this));
+        etQuietCount = numberRowIn(card, "持续型自动降频：次数",
+                "同一位置被调用超过这个次数、并且持续超过下面的时间，之后只计数不抓栈（进度条刷新之类）。0 = 关");
+        etQuietSpan = numberRowIn(card, "持续型自动降频：持续时间（毫秒）", "默认 3000");
+        root.addView(card);
+    }
+
+    private EditText numberRowIn(LinearLayout parent, String title, String desc) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, Ui.dp(this, 8), 0, Ui.dp(this, 8));
+        LinearLayout left = Ui.vertical(this);
+        left.addView(Ui.tv(this, title, 14.5f, R.color.text, false));
+        TextView d = Ui.tv(this, desc, 12, R.color.text_sub, false);
+        d.setLineSpacing(0, 1.1f);
+        d.setPadding(0, Ui.dp(this, 2), 0, 0);
+        left.addView(d);
+        row.addView(left, new LinearLayout.LayoutParams(0, -2, 1f));
+        EditText e = Ui.field(this, "", false, true);
+        row.addView(e, Ui.lpM(this, Ui.dp(this, 84), -2, 12, 0, 0, 0));
+        parent.addView(row);
+        return e;
+    }
+
+    private EditText textRowIn(LinearLayout parent, String title, String desc, String hint, boolean multi) {
+        LinearLayout col = Ui.vertical(this);
+        col.setPadding(0, Ui.dp(this, 8), 0, Ui.dp(this, 8));
+        col.addView(Ui.tv(this, title, 14.5f, R.color.text, false));
+        TextView d = Ui.tv(this, desc, 12, R.color.text_sub, false);
+        d.setLineSpacing(0, 1.1f);
+        d.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 6));
+        col.addView(d);
+        EditText e = Ui.field(this, hint, multi, false);
+        col.addView(e);
+        parent.addView(col);
+        return e;
+    }
+
     private void buildAdvancedCard(LinearLayout root) {
         root.addView(Ui.section(this, "高级", null));
         LinearLayout card = Ui.card(this);
@@ -265,7 +375,9 @@ public class MainActivity extends Activity {
         advBody.addView(Ui.divider(this), Ui.lpM(this, -1, Ui.dp(this, 1), 0, 8, 0, 12));
         advBody.addView(Ui.tv(this, "方法追踪（只读）", 14.5f, R.color.text, true));
         TextView td = Ui.tv(this, "每行写一个「类名#方法名」，记录它每次被调用时的参数、返回值和调用者。"
-                + "构造方法写 类#<init>；以 // 开头的行是注释。不要追踪每秒调用上千次的方法。", 12.5f, R.color.text_sub, false);
+                + "构造方法写 类#<init>；写 类#* 追踪整个类（调用很多，配合上面的排除名单和触发窗口）；以 // 开头的行是注释。"
+                + "行尾可加选项（空格分隔）：@count 只计数；@args 只记参数 / 返回值、不抓栈；@stack=4 这一行单独的栈深度；@every=10 这一行单独的抽样间隔。"
+                + "不要追踪每秒调用上千次的方法，除非加 @count。", 12.5f, R.color.text_sub, false);
         td.setLineSpacing(0, 1.1f);
         td.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 8));
         advBody.addView(td);
@@ -320,6 +432,15 @@ public class MainActivity extends Activity {
         swSetOnly.setChecked(c.traceSetOnly);
         swState.setChecked(c.traceState);
         etTrace.setText(c.traceMethods);
+        etWindow.setText(String.valueOf(c.windowMs));
+        swWindowAll.setChecked(c.windowAll);
+        etThread.setText(c.threadFilter);
+        etPageF.setText(c.pageFilter);
+        etViewF.setText(c.viewFilter);
+        etExclude.setText(c.excludeList);
+        etValue.setText(c.valueFilter);
+        etQuietCount.setText(String.valueOf(c.quietCount));
+        etQuietSpan.setText(String.valueOf(c.quietSpanMs));
         segRange.select(c.keywordMode ? 1 : 0);
         etKeywords.setText(c.keywords);
         swRegex.setChecked(c.regex);
@@ -346,6 +467,15 @@ public class MainActivity extends Activity {
         c.traceSetOnly = swSetOnly.isChecked();
         c.traceState = swState.isChecked();
         c.traceMethods = etTrace.getText().toString();
+        c.windowMs = RecConfig.clamp(parse(etWindow, 0), 0, 600000);
+        c.windowAll = swWindowAll.isChecked();
+        c.threadFilter = etThread.getText().toString();
+        c.pageFilter = etPageF.getText().toString();
+        c.viewFilter = etViewF.getText().toString();
+        c.excludeList = etExclude.getText().toString();
+        c.valueFilter = etValue.getText().toString();
+        c.quietCount = RecConfig.clamp(parse(etQuietCount, 0), 0, 10000000);
+        c.quietSpanMs = RecConfig.clamp(parse(etQuietSpan, 3000), 100, 3600000);
         c.keywordMode = segRange.sel == 1;
         c.keywords = etKeywords.getText().toString();
         c.regex = swRegex.isChecked();
