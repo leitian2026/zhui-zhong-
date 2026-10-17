@@ -345,6 +345,36 @@ final class Rec {
         return out;
     }
 
+    /** 图标缩略图（base64 PNG，最长边 ≤64px）：同一个位置最近出现过的 3 种不同样子（如点赞前后）。 */
+    private static final int MAX_THUMBS = 3;
+    private final LinkedHashMap<Long, String> thumbs = new LinkedHashMap<>();
+    private volatile long lastThumbAt;
+
+    /** 限频：同一条记录两次截图至少隔 gapMs。 */
+    boolean thumbDue(long now, long gapMs) {
+        if (now - lastThumbAt < gapMs) return false;
+        lastThumbAt = now;
+        return true;
+    }
+
+    void addThumb(long hash, String b64) {
+        synchronized (thumbs) {
+            if (thumbs.containsKey(hash)) return;
+            if (thumbs.size() >= MAX_THUMBS) {
+                java.util.Iterator<Long> it = thumbs.keySet().iterator();
+                it.next();
+                it.remove(); // 顶掉最旧的
+            }
+            thumbs.put(hash, b64);
+        }
+    }
+
+    List<String> thumbList() {
+        synchronized (thumbs) {
+            return new ArrayList<>(thumbs.values());
+        }
+    }
+
     List<String> sampleList() {
         synchronized (samples) {
             return new ArrayList<>(samples.values());
