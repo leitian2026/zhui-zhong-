@@ -11,7 +11,12 @@ import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
-/** 配置：模块界面写出，目标 App 里的 Hook 读取。两边共用同一个类。 */
+/**
+ * 配置：模块界面写出，目标 App 里的 Hook 读取。两边共用同一个类。
+ * {@link #toText()} / {@link #fromText(String)} 是标准 Java Properties 格式（key=value，一行一个），
+ * 字段名就是下面这些 public 字段的名字，完整列表和含义见仓库 README「采集配置」一节——
+ * 首页顶栏「粘贴配置」接受的就是这段文本，直接 Properties.load() 解析，没写的字段用 new RecConfig() 的默认值。
+ */
 public final class RecConfig {
     public boolean enabled = true;
     /** false = 全量记录（默认）；true = 只记录命中关键字的文字 */
