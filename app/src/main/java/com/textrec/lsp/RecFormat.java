@@ -36,11 +36,35 @@ final class RecFormat {
     }
 
     /** 记录所属页面：优先 Activity > Fragment，旧快照没有 page 字段就退回 Activity 简名。 */
-    static String pageOf(JSONObject r) {
+    static String rawPageOf(JSONObject r) {
         String p = r.optString("page");
         if (!p.isEmpty()) return p;
         String a = r.optString("activity");
         return a.isEmpty() ? "(启动中)" : simple(a);
+    }
+
+    /** 用户自己起的页面名（原始页面名 → 显示名），由 RecordsActivity 读写；多个原始名可以起同一个名字，合成一类。 */
+    static final java.util.HashMap<String, String> ALIAS = new java.util.HashMap<>();
+    /** 内置的常见页面名（按 Fragment 简名）。只放把握大的，其余让用户自己改。 */
+    private static final java.util.HashMap<String, String> DEFAULT_ALIAS = new java.util.HashMap<>();
+    static {
+        DEFAULT_ALIAS.put("MessagesFragment3", "消息");
+        DEFAULT_ALIAS.put("FeedRecommendFragment", "推荐");
+        DEFAULT_ALIAS.put("FeedFollowFragment", "关注");
+    }
+
+    static String aliasOfRaw(String raw) {
+        String a = ALIAS.get(raw);
+        if (a != null && !a.isEmpty()) return a;
+        int i = raw.lastIndexOf(" > ");
+        String leaf = i >= 0 ? raw.substring(i + 3) : raw;
+        a = DEFAULT_ALIAS.get(leaf);
+        return a == null ? raw : a;
+    }
+
+    /** 显示用的页面名（按名称分类用它）：有别名用别名，没有就是原始页面名。 */
+    static String pageOf(JSONObject r) {
+        return aliasOfRaw(rawPageOf(r));
     }
 
     static String simple(String cls) {
@@ -94,7 +118,9 @@ final class RecFormat {
         sb.append("View: ").append(r.optString("view")).append(idTxt).append('\n');
         String act = r.optString("activity");
         String pg = r.optString("page");
-        sb.append("页面: ").append(!pg.isEmpty() ? pg : act.isEmpty() ? "(启动中，尚无 Activity)" : act).append('\n');
+        String rawPg = !pg.isEmpty() ? pg : act.isEmpty() ? "(启动中，尚无 Activity)" : act;
+        String label = pageOf(r);
+        sb.append("页面: ").append(label).append(label.equals(rawPg) ? "" : "（" + rawPg + "）").append('\n');
         JSONArray ps = r.optJSONArray("parents");
         if (ps != null && ps.length() > 0) {
             sb.append("父级: ");
