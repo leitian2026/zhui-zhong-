@@ -413,7 +413,7 @@ public class RecordsActivity extends Activity {
         StringBuilder sb = new StringBuilder();
         for (int d = 0; d < catVal.length; d++) {
             if (catVal[d].isEmpty()) continue;
-            sb.append(sb.length() > 0 ? "；" : "").append(RecFormat.CAT_DIMS[d]).append('=').append(catVal[d]);
+            sb.append(sb.length() > 0 ? "；" : "").append(RecFormat.CAT_DIMS[d]).append('=').append(RecFormat.catLabel(d, catVal[d]));
         }
         return sb.toString();
     }
@@ -595,7 +595,7 @@ public class RecordsActivity extends Activity {
         for (int i = 0; i < RecFormat.CAT_DIMS.length; i++) {
             final int dim = i;
             String cur = catVal[dim];
-            body.addView(Ui.optionRow(this, RecFormat.CAT_DIMS[dim], CAT_DESC[dim], cur.isEmpty() ? "不限" : cur, !cur.isEmpty(), v -> {
+            body.addView(Ui.optionRow(this, RecFormat.CAT_DIMS[dim], CAT_DESC[dim], cur.isEmpty() ? "不限" : RecFormat.catLabel(dim, cur), !cur.isEmpty(), v -> {
                 d.dismiss();
                 chooseCatValue(dim);
             }));
@@ -650,7 +650,7 @@ public class RecordsActivity extends Activity {
             chooseCat();
         }));
         for (final String val : vals) {
-            body.addView(Ui.optionRow(this, val, null, String.valueOf(cnt.get(val)), val.equals(keep), v -> {
+            body.addView(Ui.optionRow(this, RecFormat.catLabel(dim, val), null, String.valueOf(cnt.get(val)), val.equals(keep), v -> {
                 d.dismiss();
                 catVal[dim] = val;
                 updateChips();
@@ -906,13 +906,165 @@ public class RecordsActivity extends Activity {
     private void showMenu(View anchor) {
         PopupMenu pm = new PopupMenu(this, anchor);
         pm.getMenu().add(0, 1, 0, "这些筛选是什么意思");
-        pm.getMenu().add(0, 2, 1, "清空所有记录…");
+        pm.getMenu().add(0, 3, 1, "粘贴命令…");
+        pm.getMenu().add(0, 2, 2, "清空所有记录…");
         pm.setOnMenuItemClickListener(item -> {
             if (item.getItemId() == 1) showHelp();
+            else if (item.getItemId() == 3) showCmd();
             else confirmClear();
             return true;
         });
         pm.show();
+    }
+
+    // ------------------------------------------------------------ 命令行（一行文本=一套筛选，见 README「命令」一节）
+
+    private static final String[] ZONE_CODES = {"top", "bottom", "right", "bottomleft", "content", "offscreen"};
+    private static final String[] HOOK_CODES = {"biz", "widget", "obf", "none"};
+    private static final String[] FREQ_CODES = {"once", "low", "mid", "high"};
+    private static final String[] REUSE_CODES = {"local", "cross", "global"};
+    private static final String[] SHAPE_CODES = {"empty", "duration", "number", "fixed", "dynamic"};
+    private static final String[] FRESH_CODES = {"new", "recent", "old"};
+
+    private void showCmd() {
+        LinearLayout body = Ui.vertical(this);
+        helpItem(body, "命令格式", "一行里空格分隔多个 key=value；没有 = 的词当搜索词（和原搜索框一样，多个词要同时命中）。"
+                + "执行会先清空当前所有筛选，再按这行命令重新设置，所以同一行命令每次粘贴结果都一样，不受之前点过什么影响。"
+                + "完整 key/value 表见仓库 README「命令」一节，任何 AI 读那一节就能照着拼命令，不需要来问我。");
+        final EditText et = Ui.field(this, "kind=ICON container=CommentItemView hook=biz", true, false);
+        body.addView(et);
+        new Ui.Dlg(this, "粘贴命令", null).keyboard()
+                .body(body, true)
+                .button("取消", false, null)
+                .button("执行", true, () -> runCmd(et.getText().toString()))
+                .show();
+    }
+
+    /** 在 dim 维度里找一个取值，使其忽略大小写后包含 val；完全相等优先。扫 all，不考虑命令里其它 token 的效果。 */
+    private String resolveFree(int dim, String val) {
+        ensureScreen();
+        ensureAgg();
+        String vl = val.toLowerCase(Locale.ROOT);
+        String best = null;
+        for (Snap.Item it : all) {
+            String v = dim < 0 ? RecFormat.pageOf(it.o) : RecFormat.catOf(dim, it.o, scrW, scrH, reuseGroups, maxLast);
+            if (v == null || v.isEmpty()) continue;
+            if (v.equalsIgnoreCase(val)) return v;
+            if (best == null && v.toLowerCase(Locale.ROOT).contains(vl)) best = v;
+        }
+        return best;
+    }
+
+    private boolean applyEnum(int dim, String val, String[] codes) {
+        String vl = val.toLowerCase(Locale.ROOT);
+        for (String c : codes) {
+            if (c.equals(vl)) {
+                catVal[dim] = c;
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private void runCmd(String line) {
+        ensureScreen();
+        ensureAgg();
+        etSearch.setText("");
+        pageFilter = "";
+        java.util.Arrays.fill(catVal, "");
+        kindMode = 0;
+        onlyOnScreen = false;
+        hideCommon = false;
+        java.util.ArrayList<String> words = new java.util.ArrayList<>();
+        java.util.ArrayList<String> ignored = new java.util.ArrayList<>();
+        for (String tok : line.trim().split("\\s+")) {
+            if (tok.isEmpty()) continue;
+            int eq = tok.indexOf('=');
+            if (eq <= 0) {
+                words.add(tok);
+                continue;
+            }
+            String key = tok.substring(0, eq).trim().toLowerCase(Locale.ROOT);
+            String val = tok.substring(eq + 1).trim();
+            if (val.isEmpty()) continue;
+            boolean ok = true;
+            switch (key) {
+                case "q":
+                    words.add(val);
+                    break;
+                case "page": {
+                    String r = resolveFree(-1, val);
+                    if (r == null) ok = false; else pageFilter = r;
+                    break;
+                }
+                case "container": {
+                    String r = resolveFree(0, val);
+                    if (r == null) ok = false; else catVal[0] = r;
+                    break;
+                }
+                case "module": {
+                    String r = resolveFree(1, val);
+                    if (r == null) ok = false; else catVal[1] = r;
+                    break;
+                }
+                case "view": {
+                    String r = resolveFree(2, val);
+                    if (r == null) ok = false; else catVal[2] = r;
+                    break;
+                }
+                case "zone":
+                    ok = applyEnum(3, val, ZONE_CODES);
+                    break;
+                case "kind": {
+                    if (val.equalsIgnoreCase("all")) {
+                        kindMode = 0;
+                    } else {
+                        int idx = -1;
+                        for (int i = 1; i < KIND_KEYS.length; i++) {
+                            if (KIND_KEYS[i].equalsIgnoreCase(val)) { idx = i; break; }
+                        }
+                        if (idx < 0) ok = false; else kindMode = idx;
+                    }
+                    break;
+                }
+                case "hook":
+                    ok = applyEnum(5, val, HOOK_CODES);
+                    break;
+                case "freq":
+                    ok = applyEnum(6, val, FREQ_CODES);
+                    break;
+                case "reuse":
+                    ok = applyEnum(7, val, REUSE_CODES);
+                    break;
+                case "shape":
+                    ok = applyEnum(8, val, SHAPE_CODES);
+                    break;
+                case "fresh":
+                    ok = applyEnum(9, val, FRESH_CODES);
+                    break;
+                case "onscreen":
+                    onlyOnScreen = val.equals("1") || val.equalsIgnoreCase("true");
+                    break;
+                case "hidecommon":
+                    hideCommon = val.equals("1") || val.equalsIgnoreCase("true");
+                    break;
+                case "sort": {
+                    String v = val.toLowerCase(Locale.ROOT);
+                    if (v.startsWith("recent")) sortMode = 0;
+                    else if (v.startsWith("count")) sortMode = 1;
+                    else if (v.startsWith("first")) sortMode = 2;
+                    else ok = false;
+                    break;
+                }
+                default:
+                    ok = false;
+            }
+            if (!ok) ignored.add(tok);
+        }
+        etSearch.setText(String.join(" ", words));
+        updateChips();
+        applyFilter();
+        if (!ignored.isEmpty()) toast("忽略（没认出来或没匹配到数据）：" + String.join(" ", ignored));
     }
 
     private void helpItem(LinearLayout body, String title, String desc) {
