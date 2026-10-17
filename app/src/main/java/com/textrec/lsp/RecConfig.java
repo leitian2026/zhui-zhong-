@@ -16,6 +16,8 @@ public final class RecConfig {
     public boolean keywordMode = false;
     public String keywords = "";
     public boolean regex = false;
+    /** 只记方法追踪：文字 / 图标 / 颜色 / 状态变化全部不记，记录里只有「方法追踪」填的那些方法。读配置时会把其他记录项强制关掉。 */
+    public boolean traceOnly = false;
     public boolean traceSet = true;
     public boolean traceDraw = true;
     /** 记录文字颜色：画笔颜色（所有文字）+ TextView 的 setTextColor 设置位置 */
@@ -98,6 +100,7 @@ public final class RecConfig {
             p.setProperty("keywordMode", String.valueOf(keywordMode));
             p.setProperty("keywords", keywords);
             p.setProperty("regex", String.valueOf(regex));
+            p.setProperty("traceOnly", String.valueOf(traceOnly));
             p.setProperty("traceSet", String.valueOf(traceSet));
             p.setProperty("traceDraw", String.valueOf(traceDraw));
             p.setProperty("traceColor", String.valueOf(traceColor));
@@ -158,6 +161,16 @@ public final class RecConfig {
         c.autoParams = bool(p, "autoParams", c.autoParams);
         c.traceSetOnly = bool(p, "traceSetOnly", c.traceSetOnly);
         c.traceState = bool(p, "traceState", c.traceState);
+        c.traceOnly = bool(p, "traceOnly", c.traceOnly);
+        if (c.traceOnly) { // 只记方法追踪：其余记录项一律关掉（目标 App 里的各个 Hook 本来就按这些开关早退）
+            c.traceSet = false;
+            c.traceDraw = false;
+            c.traceColor = false;
+            c.traceIcons = false;
+            c.autoParams = false;
+            c.traceSetOnly = false;
+            c.traceState = false;
+        }
         c.maxSetOnly = clamp(num(p, "maxSetOnly", c.maxSetOnly), 10, 5000);
         c.traceMethods = p.getProperty("traceMethods", c.traceMethods);
         c.stackDepth = clamp(num(p, "stackDepth", c.stackDepth), 1, 60);
