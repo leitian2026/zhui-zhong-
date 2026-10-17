@@ -32,6 +32,9 @@ final class Store {
     static final class DrawProxy {
         final AtomicInteger n = new AtomicInteger();
         volatile Rec rec;
+        /** 持续型自动降频：第一次被计数的时间（uptimeMillis），以及是否已降频成只计数 */
+        volatile long firstAt;
+        volatile boolean quiet;
     }
 
     private static final int PROXY_CAP = 50000;
@@ -49,6 +52,14 @@ final class Store {
     /** TEXTSET 记录数（单独限额）及因限额丢弃的数量 */
     final AtomicInteger setOnlyCount = new AtomicInteger();
     final AtomicLong droppedSetOnly = new AtomicLong();
+    /** 采集端过滤：各个开关各挡掉了多少次调用（挡掉的不抓栈、不建记录），以及持续型降频后只计数的次数 */
+    final AtomicLong blkWindow = new AtomicLong();
+    final AtomicLong blkThread = new AtomicLong();
+    final AtomicLong blkPage = new AtomicLong();
+    final AtomicLong blkView = new AtomicLong();
+    final AtomicLong blkExclude = new AtomicLong();
+    final AtomicLong blkValue = new AtomicLong();
+    final AtomicLong quietCnt = new AtomicLong();
 
     volatile String appVersion = "";
     private volatile String warn = "";
@@ -100,6 +111,13 @@ final class Store {
         droppedCap.set(0);
         setOnlyCount.set(0);
         droppedSetOnly.set(0);
+        blkWindow.set(0);
+        blkThread.set(0);
+        blkPage.set(0);
+        blkView.set(0);
+        blkExclude.set(0);
+        blkValue.set(0);
+        quietCnt.set(0);
         markDirty();
     }
 
@@ -187,7 +205,7 @@ final class Store {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.15");
+        root.put("module", "TextRec 1.18");
         root.put("pkg", pkg);
         root.put("process", proc);
         root.put("appVersion", appVersion);
@@ -211,6 +229,15 @@ final class Store {
         cj.put("traceState", c.traceState);
         cj.put("maxSetOnly", c.maxSetOnly);
         cj.put("traceMethods", c.traceMethods);
+        cj.put("windowMs", c.windowMs);
+        cj.put("windowAll", c.windowAll);
+        cj.put("excludeList", c.excludeList);
+        cj.put("threadFilter", c.threadFilter);
+        cj.put("pageFilter", c.pageFilter);
+        cj.put("viewFilter", c.viewFilter);
+        cj.put("valueFilter", c.valueFilter);
+        cj.put("quietCount", c.quietCount);
+        cj.put("quietSpanMs", c.quietSpanMs);
         root.put("config", cj);
 
         ArrayList<Rec> list = new ArrayList<>(recs.values());
@@ -239,6 +266,13 @@ final class Store {
         st.put("droppedByRateLimit", droppedRate.get());
         st.put("droppedByRecordCap", droppedCap.get());
         st.put("droppedBySetOnlyCap", droppedSetOnly.get());
+        st.put("blockedByWindow", blkWindow.get());
+        st.put("blockedByThread", blkThread.get());
+        st.put("blockedByPage", blkPage.get());
+        st.put("blockedByView", blkView.get());
+        st.put("blockedByExclude", blkExclude.get());
+        st.put("blockedByValue", blkValue.get());
+        st.put("quietCounted", quietCnt.get());
         root.put("stats", st);
         root.put("records", arr);
         return root.toString();
