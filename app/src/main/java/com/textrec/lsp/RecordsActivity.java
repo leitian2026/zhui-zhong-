@@ -47,7 +47,9 @@ public class RecordsActivity extends Activity {
     private ListView lv;
     private EditText etSearch;
     private TextView tvInfo;
-    private Button btnSort, btnKind;
+    private Button btnSort, btnKind, btnPage;
+    /** 页面筛选：空 = 全部页面；否则只看（并只导出）这个页面的记录 */
+    private String pageFilter = "";
     private CheckBox cbOnScreen;
     private final List<Snap.Item> all = new ArrayList<>();
     private final List<Snap.Item> shown = new ArrayList<>();
@@ -92,6 +94,9 @@ public class RecordsActivity extends Activity {
         bar2.addView(btn("导出JSON", v -> export(REQ_JSON)), w1());
         bar2.addView(btn("清空", v -> confirmClear()), w1());
         root.addView(bar2);
+
+        btnPage = btn("页面：全部（点这里选择）", v -> choosePage());
+        root.addView(btnPage);
 
         // 默认只看此刻在屏幕上的文字：预加载的、已离开页面的不显示；自绘/Compose 可见性未知，照常显示
         cbOnScreen = new CheckBox(this);
@@ -186,6 +191,38 @@ public class RecordsActivity extends Activity {
         }).start();
     }
 
+    // ------------------------------------------------------------ 页面选择
+
+    private void choosePage() {
+        final java.util.LinkedHashMap<String, Integer> cnt = new java.util.LinkedHashMap<>();
+        for (Snap.Item it : all) {
+            String p = RecFormat.pageOf(it.o);
+            Integer n = cnt.get(p);
+            cnt.put(p, n == null ? 1 : n + 1);
+        }
+        if (cnt.isEmpty()) {
+            Toast.makeText(this, "还没有记录，先刷新", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final String[] names = new String[cnt.size()];
+        final String[] labels = new String[cnt.size() + 1];
+        labels[0] = "全部页面（" + all.size() + " 条）";
+        int i = 0;
+        for (java.util.Map.Entry<String, Integer> e : cnt.entrySet()) {
+            names[i] = e.getKey();
+            labels[i + 1] = e.getKey() + "（" + e.getValue() + " 条）";
+            i++;
+        }
+        new AlertDialog.Builder(this)
+                .setTitle("选择页面（导出也只导出所选页面）")
+                .setItems(labels, (d, which) -> {
+                    pageFilter = which == 0 ? "" : names[which - 1];
+                    btnPage.setText(pageFilter.isEmpty() ? "页面：全部（点这里选择）" : "页面：" + pageFilter);
+                    applyFilter();
+                })
+                .show();
+    }
+
     // ------------------------------------------------------------ 过滤 / 排序
 
     private void applyFilter() {
@@ -209,6 +246,7 @@ public class RecordsActivity extends Activity {
         shown.clear();
         for (Snap.Item it : all) {
             if (!kindKey.isEmpty() && !kindKey.equals(it.o.optString("kind"))) continue;
+            if (!pageFilter.isEmpty() && !pageFilter.equals(RecFormat.pageOf(it.o))) continue;
             // 选了“仅设置”类型就是要看它们（它们本来就不在屏幕上），不再套“只看屏幕上”
             if (onlyOnScreen && !"TEXTSET".equals(kindKey) && "no".equals(it.o.optString("vis"))) {
                 hidden++;
@@ -277,7 +315,7 @@ public class RecordsActivity extends Activity {
                 + RecFormat.samplesLine(r, 10, 4) + " ×" + r.optInt("drawCount"));
         String id = r.optString("viewId");
         t2.setText(RecFormat.simple(r.optString("view")) + (id.isEmpty() ? "" : " id=" + id)
-                + "   页面 " + RecFormat.simple(r.optString("activity")));
+                + "   页面 " + RecFormat.pageOf(r));
         t3.setText("设: " + topFrame(r.optJSONObject("setStack")) + "\n画: " + topFrame(r.optJSONObject("drawStack")));
         return row;
     }
@@ -308,6 +346,7 @@ public class RecordsActivity extends Activity {
                         .append(hiddenOff > 0 ? "：" + hiddenIds.trim() : "").append("）");
             }
             sb.append("  类型=").append(KINDS[kindMode]);
+            sb.append("  页面=").append(pageFilter.isEmpty() ? "全部" : pageFilter);
             String qs = etSearch.getText().toString().trim();
             if (!qs.isEmpty()) sb.append("  搜索=「").append(qs).append("」");
             sb.append("  （全部记录 ").append(all.size()).append(" 条）\n");
@@ -329,6 +368,7 @@ public class RecordsActivity extends Activity {
                 fo.put("hiddenOffScreen", hiddenOff);
                 fo.put("hiddenIds", hiddenIds.trim());
                 fo.put("kind", KINDS[kindMode]);
+                fo.put("page", pageFilter.isEmpty() ? "全部" : pageFilter);
                 fo.put("query", etSearch.getText().toString().trim());
                 fo.put("totalRecords", all.size());
                 o.put("filter", fo);
