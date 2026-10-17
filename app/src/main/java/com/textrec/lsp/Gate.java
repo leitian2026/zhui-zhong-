@@ -19,6 +19,12 @@ final class Gate {
     /** 触发窗口是否也用于文字 / 图标 / 颜色 / 状态 / 绘制记录（默认只管方法追踪）。 */
     final boolean windowAll;
     final boolean hasThreads, hasPages, hasViews, hasValues;
+    /** 排除通用基础设施（Stacks.isGenericInfra 那一批类）。 */
+    final boolean excludeInfra;
+    /** 线程：0 = 全部，1 = 只主线程，2 = 只后台线程。 */
+    private final int threadMode;
+    /** 值匹配里的“带时间”开关：参数或返回值里有形如 00:00 的文字就算命中。 */
+    private final boolean clockOnly;
     /** 文字 / 图标 / 状态 / 绘制这类记录要不要过一遍 allowAll（全空就直接放行，省一次调用）。 */
     final boolean anyAll;
 
@@ -52,10 +58,13 @@ final class Gate {
         }
         exPrefix = pre.toArray(new String[0]);
 
-        hasThreads = threads.length > 0;
+        excludeInfra = c.excludeInfra;
+        threadMode = c.threadMode;
+        clockOnly = c.valueClock;
+        hasThreads = threads.length > 0 || threadMode != 0;
         hasPages = pages.length > 0;
         hasViews = views.length > 0;
-        hasValues = values.length > 0;
+        hasValues = values.length > 0 || clockOnly;
         anyAll = windowAll || hasThreads || hasPages || hasViews;
     }
 
@@ -75,7 +84,11 @@ final class Gate {
         return !exMethod.isEmpty() && exMethod.contains(mn);
     }
 
-    boolean threadOk(String name) {
+    /** isMain：当前线程是不是主线程（Looper 判断，不看线程名）。 */
+    boolean threadOk(String name, boolean isMain) {
+        if (threadMode == 1 && !isMain) return false;
+        if (threadMode == 2 && isMain) return false;
+        if (threads.length == 0) return true;
         if (name == null) return false;
         for (String t : threads) if (name.contains(t)) return true;
         return false;
@@ -97,7 +110,17 @@ final class Gate {
 
     boolean valueOk(String text) {
         if (text == null) return false;
+        if (clockOnly && hasClock(text)) return true;
         for (String v : values) if (text.contains(v)) return true;
+        return false;
+    }
+
+    /** 有没有形如 0:00 / 00:00 / 1:37:05 的时间：冒号两边都是数字，且冒号后面至少两位数字。 */
+    static boolean hasClock(String s) {
+        for (int i = 1, n = s.length() - 2; i < n; i++) {
+            if (s.charAt(i) == ':' && Character.isDigit(s.charAt(i - 1))
+                    && Character.isDigit(s.charAt(i + 1)) && Character.isDigit(s.charAt(i + 2))) return true;
+        }
         return false;
     }
 
