@@ -187,7 +187,7 @@ final class Store {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.13");
+        root.put("module", "TextRec 1.14");
         root.put("pkg", pkg);
         root.put("process", proc);
         root.put("appVersion", appVersion);
