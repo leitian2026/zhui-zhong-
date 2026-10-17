@@ -87,12 +87,16 @@ final class Stacks {
         return TAG_STABLE;
     }
     /** 字节的构建把方法名改成 LJ / LIZ / LJIIIIZZ 这类；R8 会把名字缩成 a、b、aa… */
-    private static final Pattern OBF_METHOD = Pattern.compile("L[A-Z]{1,12}|[A-Za-z]");
+    private static final Pattern OBF_METHOD = Pattern.compile("L[A-Z]{1,24}|[A-Za-z]");
+    /** 两个字符的方法名里真实存在的（其余的如 qb / Ea / J9 / K9 当成 R8 缩出来的混淆名）。 */
+    private static final java.util.Set<String> SHORT_OK = new java.util.HashSet<>(java.util.Arrays.asList(
+            "on", "of", "to", "is", "id", "up", "un", "at", "by", "or"));
 
     /** 混淆名：类名 X.xxx、方法名 LJxxx、或类名只有 1~2 个字符。这类名字 App 一更新就会变。 */
     static boolean isObfuscated(String cn, String mn) {
         if (cn.startsWith("X.")) return true;
         if (mn != null && OBF_METHOD.matcher(mn).matches()) return true;
+        if (mn != null && mn.length() == 2 && !SHORT_OK.contains(mn.toLowerCase(java.util.Locale.ROOT))) return true;
         int i = cn.lastIndexOf('.');
         String simple = i >= 0 ? cn.substring(i + 1) : cn;
         int d = simple.indexOf('$');
