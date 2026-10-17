@@ -499,22 +499,27 @@ final class RecFormat {
         return m == null ? "(无App栈)" : m;
     }
 
-    /** 屏幕位置：按记录里第一个控件的中心点，在 sw×sh 的窗口里落在哪一块。 */
+    /** 屏幕位置的码（见文末「命令」一节；显示用中文走 catLabel）。 */
     static String zoneOf(JSONObject r, int sw, int sh) {
         JSONArray sc = r.optJSONArray("screen");
         if (sc == null || sc.length() == 0) sc = r.optJSONArray("screenSetOnly");
         JSONObject so = sc == null || sc.length() == 0 ? null : sc.optJSONObject(0);
         JSONArray rc = so == null ? null : so.optJSONArray("rect");
-        if (rc == null || rc.length() < 4) return "不在屏幕上";
+        if (rc == null || rc.length() < 4) return "offscreen";
         int cx = (rc.optInt(0) + rc.optInt(2)) / 2, cy = (rc.optInt(1) + rc.optInt(3)) / 2;
-        if (sh > 0 && cy < sh * 0.14) return "顶部栏";
-        if (sh > 0 && cy > sh * 0.90) return "底部栏";
-        if (sw > 0 && cx > sw * 0.86) return "右侧栏";
-        if (sh > 0 && cy > sh * 0.76) return "左下信息区";
-        return "内容区";
+        if (sh > 0 && cy < sh * 0.14) return "top";
+        if (sh > 0 && cy > sh * 0.90) return "bottom";
+        if (sw > 0 && cx > sw * 0.86) return "right";
+        if (sh > 0 && cy > sh * 0.76) return "bottomleft";
+        return "content";
     }
 
-    /** hook 可靠度：这条记录现在能不能直接拿去写 hook（看 setStack / drawStack 里有没有稳定帧）。 */
+    /** 记录类型的码：和 JSON 里 kind 字段原始值一一对应，只是转小写，谁都能照着导出的 JSON 推出来。 */
+    static String kindCode(String kind) {
+        return kind == null ? "" : kind.toLowerCase(java.util.Locale.ROOT);
+    }
+
+    /** hook 可靠度的码（见文末「命令」一节）。 */
     static String hookLevelOf(JSONObject r) {
         boolean biz = false, widget = false, obf = false;
         for (String s : sigList(r.optJSONObject("setStack"))) {
@@ -529,19 +534,19 @@ final class RecFormat {
             else if (s.endsWith(Stacks.TAG_WIDGET)) widget = true;
             else if (s.endsWith(Stacks.TAG_OBF)) obf = true;
         }
-        if (biz) return "可直接hook（有稳定业务帧）";
-        if (widget) return "能用但要按View过滤（只有通用控件帧）";
-        if (obf) return "暂时只有混淆帧（换版本会变）";
-        return "(无可用帧，只能系统方法兜底)";
+        if (biz) return "biz";
+        if (widget) return "widget";
+        if (obf) return "obf";
+        return "none";
     }
 
-    /** 调用/绘制频次档位：仅一次的多半是页面级固定文案，高频的多半是列表项的公共渲染点。 */
+    /** 调用/绘制频次档位的码。 */
     static String freqOf(JSONObject r) {
         int n = Math.max(r.optInt("drawCount"), r.optInt("setCount"));
-        if (n <= 1) return "仅一次";
-        if (n <= 10) return "低频（2~10次）";
-        if (n <= 50) return "中频（11~50次）";
-        return "高频（>50次，多半是列表项）";
+        if (n <= 1) return "once";
+        if (n <= 10) return "low";
+        if (n <= 50) return "mid";
+        return "high";
     }
 
     /** 离设置/绘制点最近的一个稳定帧（不含层数标签），用来在不同页面之间识别“同一段代码”。 */
@@ -560,24 +565,24 @@ final class RecFormat {
         return simple(r.optString("view")) + "@" + (top == null ? "(无稳定帧)" : top);
     }
 
-    /** 复用范围：reuseGroups 是 reuseKeyOf → 出现过的页面集合，由调用方扫一遍全部记录建好。 */
+    /** 复用范围的码：reuseGroups 是 reuseKeyOf → 出现过的页面集合，由调用方扫一遍全部记录建好。 */
     static String reuseOf(JSONObject r, java.util.Map<String, java.util.Set<String>> reuseGroups) {
-        if (reuseGroups == null) return "(未统计)";
+        if (reuseGroups == null) return "unknown";
         java.util.Set<String> pages = reuseGroups.get(reuseKeyOf(r));
         int n = pages == null ? 1 : pages.size();
-        if (n <= 1) return "仅本页面";
-        if (n <= 3) return "跨页面复用（" + n + "个页面）";
-        return "全局公共入口（" + n + "个以上页面）";
+        if (n <= 1) return "local";
+        if (n <= 3) return "cross";
+        return "global";
     }
 
-    /** 内容形态：这个位置出现过的文字大致是什么样子——找数值型目标（时长/计数）或判断是不是写死文案时有用。 */
+    /** 内容形态的码：找数值型目标（时长/计数）或判断是不是写死文案时有用。 */
     static String shapeOf(JSONObject r) {
         JSONArray ts = r.optJSONArray("texts");
         int n = ts == null ? 0 : ts.length();
         String last = r.optString("lastText");
         boolean hasLast = last != null && !last.isEmpty();
-        if (n == 0 && !hasLast) return "(空文字)";
-        if (hasLast && last.matches(".*\\d{1,2}:\\d{2}(:\\d{2})?.*")) return "时长格式（mm:ss）";
+        if (n == 0 && !hasLast) return "empty";
+        if (hasLast && last.matches(".*\\d{1,2}:\\d{2}(:\\d{2})?.*")) return "duration";
         boolean allNumericLike = true, any = false;
         int count = Math.max(n, hasLast ? 1 : 0);
         for (int i = 0; i < count; i++) {
@@ -586,19 +591,86 @@ final class RecFormat {
             any = true;
             if (!t.matches("[0-9.,%+\\-\\s万亿千百]+")) { allNumericLike = false; break; }
         }
-        if (any && allNumericLike) return "纯数字/计数";
-        if (n + r.optInt("textsMore") <= 1) return "固定文案（没变过）";
-        return "动态文案（多种内容）";
+        if (any && allNumericLike) return "number";
+        if (n + r.optInt("textsMore") <= 1) return "fixed";
+        return "dynamic";
     }
 
-    /** 新鲜度：相对这批记录里最晚一次更新时间（maxLast，由调用方算好传入），这条是不是这次新冒出来的。 */
+    /** 新鲜度的码：相对这批记录里最晚一次更新时间（maxLast，由调用方算好传入）。 */
     static String freshnessOf(JSONObject r, long maxLast) {
         long last = r.optLong("last");
-        if (maxLast <= 0 || last <= 0) return "(无时间)";
+        if (maxLast <= 0 || last <= 0) return "unknown";
         long gap = maxLast - last;
-        if (gap <= 2000) return "最新一批（2秒内）";
-        if (gap <= 15000) return "较新（15秒内）";
-        return "历史记录";
+        if (gap <= 2000) return "new";
+        if (gap <= 15000) return "recent";
+        return "old";
+    }
+
+    /**
+     * 把 catOf 返回的码翻成中文，只用于分类弹窗/导出里给人看；catVal 里存的、命令里写的永远是码，
+     * 不是这里翻出来的中文——中文带全角括号/标点，容易抄错，机器只认码。
+     */
+    static String catLabel(int dim, String code) {
+        switch (dim) {
+            case 3:
+                switch (code) {
+                    case "top": return "顶部栏";
+                    case "bottom": return "底部栏";
+                    case "right": return "右侧栏";
+                    case "bottomleft": return "左下信息区";
+                    case "content": return "内容区";
+                    default: return "不在屏幕上";
+                }
+            case 4:
+                switch (code) {
+                    case "textview": return "TextView";
+                    case "canvas": return "自绘";
+                    case "compose": return "Compose";
+                    case "icon": return "图标";
+                    case "trace": return "方法追踪";
+                    case "textset": return "仅设置";
+                    case "state": return "状态变化";
+                    default: return code;
+                }
+            case 5:
+                switch (code) {
+                    case "biz": return "可直接hook（有稳定业务帧）";
+                    case "widget": return "能用但要按View过滤（只有通用控件帧）";
+                    case "obf": return "暂时只有混淆帧（换版本会变）";
+                    default: return "无可用帧，只能系统方法兜底";
+                }
+            case 6:
+                switch (code) {
+                    case "once": return "仅一次";
+                    case "low": return "低频（2~10次）";
+                    case "mid": return "中频（11~50次）";
+                    default: return "高频（>50次，多半是列表项）";
+                }
+            case 7:
+                switch (code) {
+                    case "local": return "仅本页面";
+                    case "cross": return "跨页面复用（2~3个页面）";
+                    case "global": return "全局公共入口（4个以上页面）";
+                    default: return "未统计";
+                }
+            case 8:
+                switch (code) {
+                    case "empty": return "空文字";
+                    case "duration": return "时长格式（mm:ss）";
+                    case "number": return "纯数字/计数";
+                    case "fixed": return "固定文案（没变过）";
+                    default: return "动态文案（多种内容）";
+                }
+            case 9:
+                switch (code) {
+                    case "new": return "最新一批（2秒内）";
+                    case "recent": return "较新（15秒内）";
+                    case "old": return "历史记录";
+                    default: return "无时间";
+                }
+            default:
+                return code; // 容器 / 代码模块 / 控件类本身就是可读的类名、包名
+        }
     }
 
     /** dim: 0 所属容器 1 代码模块 2 控件类 3 屏幕位置 4 记录类型 5 hook可靠度 6 调用频次 7 复用范围 8 内容形态 9 新鲜度 */
@@ -615,7 +687,7 @@ final class RecFormat {
             case 3:
                 return zoneOf(r, sw, sh);
             case 4:
-                return kindLabel(r.optString("kind"));
+                return kindCode(r.optString("kind"));
             case 5:
                 return hookLevelOf(r);
             case 6:
