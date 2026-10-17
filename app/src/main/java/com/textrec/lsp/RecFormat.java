@@ -436,7 +436,8 @@ final class RecFormat {
 
     // ------------------------------------------------------------ 分类（几万条记录里快速定位）
 
-    static final String[] CAT_DIMS = {"所属容器", "代码模块", "控件类", "屏幕位置"};
+    static final String[] CAT_DIMS = {"所属容器", "代码模块", "控件类", "屏幕位置",
+            "记录类型", "hook可靠度", "调用频次", "复用范围", "内容形态", "新鲜度"};
 
     private static boolean genericClass(String cn) {
         if (cn.startsWith("android.") || cn.startsWith("androidx.constraintlayout.") || cn.startsWith("androidx.recyclerview.")
@@ -513,8 +514,96 @@ final class RecFormat {
         return "内容区";
     }
 
-    /** dim: 0 所属容器  1 代码模块  2 控件类  3 屏幕位置 */
-    static String catOf(int dim, JSONObject r, int sw, int sh) {
+    /** hook 可靠度：这条记录现在能不能直接拿去写 hook（看 setStack / drawStack 里有没有稳定帧）。 */
+    static String hookLevelOf(JSONObject r) {
+        boolean biz = false, widget = false, obf = false;
+        for (String s : sigList(r.optJSONObject("setStack"))) {
+            if (unresolved(s)) continue;
+            if (s.endsWith(Stacks.TAG_STABLE)) biz = true;
+            else if (s.endsWith(Stacks.TAG_WIDGET)) widget = true;
+            else if (s.endsWith(Stacks.TAG_OBF)) obf = true;
+        }
+        for (String s : sigList(r.optJSONObject("drawStack"))) {
+            if (unresolved(s)) continue;
+            if (s.endsWith(Stacks.TAG_STABLE)) biz = true;
+            else if (s.endsWith(Stacks.TAG_WIDGET)) widget = true;
+            else if (s.endsWith(Stacks.TAG_OBF)) obf = true;
+        }
+        if (biz) return "可直接hook（有稳定业务帧）";
+        if (widget) return "能用但要按View过滤（只有通用控件帧）";
+        if (obf) return "暂时只有混淆帧（换版本会变）";
+        return "(无可用帧，只能系统方法兜底)";
+    }
+
+    /** 调用/绘制频次档位：仅一次的多半是页面级固定文案，高频的多半是列表项的公共渲染点。 */
+    static String freqOf(JSONObject r) {
+        int n = Math.max(r.optInt("drawCount"), r.optInt("setCount"));
+        if (n <= 1) return "仅一次";
+        if (n <= 10) return "低频（2~10次）";
+        if (n <= 50) return "中频（11~50次）";
+        return "高频（>50次，多半是列表项）";
+    }
+
+    /** 离设置/绘制点最近的一个稳定帧（不含层数标签），用来在不同页面之间识别“同一段代码”。 */
+    private static String topStableFrame(JSONObject st) {
+        for (String s : sigList(st)) {
+            if (unresolved(s)) continue;
+            if (s.endsWith(Stacks.TAG_STABLE) || s.endsWith(Stacks.TAG_WIDGET)) return clean(s);
+        }
+        return null;
+    }
+
+    /** 复用范围用的 key：控件类 + 最近稳定帧，不含页面，相同 key 在不同页面出现即视为同一段代码被复用。 */
+    static String reuseKeyOf(JSONObject r) {
+        String top = topStableFrame(r.optJSONObject("setStack"));
+        if (top == null) top = topStableFrame(r.optJSONObject("drawStack"));
+        return simple(r.optString("view")) + "@" + (top == null ? "(无稳定帧)" : top);
+    }
+
+    /** 复用范围：reuseGroups 是 reuseKeyOf → 出现过的页面集合，由调用方扫一遍全部记录建好。 */
+    static String reuseOf(JSONObject r, java.util.Map<String, java.util.Set<String>> reuseGroups) {
+        if (reuseGroups == null) return "(未统计)";
+        java.util.Set<String> pages = reuseGroups.get(reuseKeyOf(r));
+        int n = pages == null ? 1 : pages.size();
+        if (n <= 1) return "仅本页面";
+        if (n <= 3) return "跨页面复用（" + n + "个页面）";
+        return "全局公共入口（" + n + "个以上页面）";
+    }
+
+    /** 内容形态：这个位置出现过的文字大致是什么样子——找数值型目标（时长/计数）或判断是不是写死文案时有用。 */
+    static String shapeOf(JSONObject r) {
+        JSONArray ts = r.optJSONArray("texts");
+        int n = ts == null ? 0 : ts.length();
+        String last = r.optString("lastText");
+        boolean hasLast = last != null && !last.isEmpty();
+        if (n == 0 && !hasLast) return "(空文字)";
+        if (hasLast && last.matches(".*\\d{1,2}:\\d{2}(:\\d{2})?.*")) return "时长格式（mm:ss）";
+        boolean allNumericLike = true, any = false;
+        int count = Math.max(n, hasLast ? 1 : 0);
+        for (int i = 0; i < count; i++) {
+            String t = i < n ? ts.optString(i) : last;
+            if (t == null || t.isEmpty()) continue;
+            any = true;
+            if (!t.matches("[0-9.,%+\\-\\s万亿千百]+")) { allNumericLike = false; break; }
+        }
+        if (any && allNumericLike) return "纯数字/计数";
+        if (n + r.optInt("textsMore") <= 1) return "固定文案（没变过）";
+        return "动态文案（多种内容）";
+    }
+
+    /** 新鲜度：相对这批记录里最晚一次更新时间（maxLast，由调用方算好传入），这条是不是这次新冒出来的。 */
+    static String freshnessOf(JSONObject r, long maxLast) {
+        long last = r.optLong("last");
+        if (maxLast <= 0 || last <= 0) return "(无时间)";
+        long gap = maxLast - last;
+        if (gap <= 2000) return "最新一批（2秒内）";
+        if (gap <= 15000) return "较新（15秒内）";
+        return "历史记录";
+    }
+
+    /** dim: 0 所属容器 1 代码模块 2 控件类 3 屏幕位置 4 记录类型 5 hook可靠度 6 调用频次 7 复用范围 8 内容形态 9 新鲜度 */
+    static String catOf(int dim, JSONObject r, int sw, int sh,
+                         java.util.Map<String, java.util.Set<String>> reuseGroups, long maxLast) {
         switch (dim) {
             case 0:
                 return containerOf(r);
@@ -523,8 +612,20 @@ final class RecFormat {
             case 2:
                 String v = simple(r.optString("view"));
                 return v.isEmpty() ? "(自绘/Compose)" : v;
-            default:
+            case 3:
                 return zoneOf(r, sw, sh);
+            case 4:
+                return kindLabel(r.optString("kind"));
+            case 5:
+                return hookLevelOf(r);
+            case 6:
+                return freqOf(r);
+            case 7:
+                return reuseOf(r, reuseGroups);
+            case 8:
+                return shapeOf(r);
+            default:
+                return freshnessOf(r, maxLast);
         }
     }
 
