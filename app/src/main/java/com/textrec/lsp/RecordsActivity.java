@@ -47,7 +47,11 @@ public class RecordsActivity extends Activity {
     private ListView lv;
     private EditText etSearch;
     private TextView tvInfo;
-    private Button btnSort, btnKind, btnPage;
+    private Button btnSort, btnKind, btnPage, btnCat;
+    /** 分类筛选（空 = 不限）：0 所属容器  1 代码模块  2 控件类  3 屏幕位置，几项同时选是“且”。 */
+    private final String[] catVal = {"", "", "", ""};
+    private int scrW, scrH;
+    private Object scrKey;
     private CheckBox cbLean, cbCommon;
     private int hiddenCommon;
     /** 页面筛选：空 = 全部页面；否则只看（并只导出）这个页面的记录 */
@@ -106,6 +110,9 @@ public class RecordsActivity extends Activity {
 
         btnPage = btn("页面：全部（点这里选择，长按条目可命名）", v -> choosePage());
         root.addView(btnPage);
+
+        btnCat = btn("分类：不限（容器 / 模块 / 控件类 / 位置）", v -> chooseCat());
+        root.addView(btnCat);
 
         // 默认只看此刻在屏幕上的文字：预加载的、已离开页面的不显示；自绘/Compose 可见性未知，照常显示
         cbOnScreen = new CheckBox(this);
@@ -250,6 +257,118 @@ public class RecordsActivity extends Activity {
         return out;
     }
 
+    // ------------------------------------------------------------ 分类
+
+    private boolean catMatch(JSONObject r) {
+        for (int d = 0; d < catVal.length; d++) {
+            if (!catVal[d].isEmpty() && !catVal[d].equals(RecFormat.catOf(d, r, scrW, scrH))) return false;
+        }
+        return true;
+    }
+
+    /** 屏幕尺寸取记录里出现过的最大坐标（和目标 App 窗口同一坐标系）；一条都没有就用本机屏幕。 */
+    private void ensureScreen() {
+        Object key = all.isEmpty() ? "" : all.size() + ":" + System.identityHashCode(all.get(0));
+        if (key.equals(scrKey)) return;
+        scrKey = key;
+        int w = 0, h = 0;
+        for (Snap.Item it : all) {
+            for (String k : new String[]{"screen", "screenSetOnly"}) {
+                JSONArray sc = it.o.optJSONArray(k);
+                if (sc == null) continue;
+                for (int i = 0; i < sc.length(); i++) {
+                    JSONObject so = sc.optJSONObject(i);
+                    JSONArray rc = so == null ? null : so.optJSONArray("rect");
+                    if (rc == null || rc.length() < 4) continue;
+                    w = Math.max(w, rc.optInt(2));
+                    h = Math.max(h, rc.optInt(3));
+                }
+            }
+        }
+        if (w <= 0 || h <= 0) {
+            android.util.DisplayMetrics dm = getResources().getDisplayMetrics();
+            w = dm.widthPixels;
+            h = dm.heightPixels;
+        }
+        scrW = w;
+        scrH = h;
+    }
+
+    private String catSummary() {
+        StringBuilder sb = new StringBuilder();
+        for (int d = 0; d < catVal.length; d++) {
+            if (catVal[d].isEmpty()) continue;
+            sb.append(sb.length() > 0 ? "；" : "").append(RecFormat.CAT_DIMS[d]).append('=').append(catVal[d]);
+        }
+        return sb.toString();
+    }
+
+    private void updateCatButton() {
+        String s = catSummary();
+        btnCat.setText(s.isEmpty() ? "分类：不限（容器 / 模块 / 控件类 / 位置）" : "分类：" + s);
+    }
+
+    private void chooseCat() {
+        final String[] labels = new String[RecFormat.CAT_DIMS.length + 1];
+        for (int d = 0; d < RecFormat.CAT_DIMS.length; d++) {
+            labels[d] = RecFormat.CAT_DIMS[d] + "：" + (catVal[d].isEmpty() ? "不限" : catVal[d]);
+        }
+        labels[RecFormat.CAT_DIMS.length] = "清除全部分类";
+        new AlertDialog.Builder(this)
+                .setTitle("按哪一项分类（几项同时选 = 同时满足）")
+                .setItems(labels, (dlg, which) -> {
+                    if (which == RecFormat.CAT_DIMS.length) {
+                        java.util.Arrays.fill(catVal, "");
+                        updateCatButton();
+                        applyFilter();
+                    } else {
+                        chooseCatValue(which);
+                    }
+                })
+                .show();
+    }
+
+    /** 列出这一项的所有取值和条数。条数按“去掉这一项分类、其余筛选都生效”来数，所以能一层层缩小。 */
+    private void chooseCatValue(final int dim) {
+        ensureScreen();
+        final String keep = catVal[dim];
+        catVal[dim] = "";
+        applyFilter(); // 此时 shown = 不含这一项分类筛选的结果
+        final java.util.HashMap<String, Integer> cnt = new java.util.HashMap<>();
+        for (Snap.Item it : shown) {
+            String v = RecFormat.catOf(dim, it.o, scrW, scrH);
+            Integer n = cnt.get(v);
+            cnt.put(v, n == null ? 1 : n + 1);
+        }
+        catVal[dim] = keep;
+        applyFilter(); // 还原
+        if (cnt.isEmpty()) {
+            Toast.makeText(this, "当前筛选下没有记录", Toast.LENGTH_SHORT).show();
+            return;
+        }
+        final ArrayList<String> vals = new ArrayList<>(cnt.keySet());
+        Collections.sort(vals, new Comparator<String>() {
+            @Override
+            public int compare(String a, String b) {
+                int c = Integer.compare(cnt.get(b), cnt.get(a));
+                return c != 0 ? c : a.compareTo(b);
+            }
+        });
+        int total = 0;
+        for (int n : cnt.values()) total += n;
+        final String[] labels = new String[vals.size() + 1];
+        labels[0] = "不限（" + total + " 条）";
+        for (int i = 0; i < vals.size(); i++) labels[i + 1] = vals.get(i) + "（" + cnt.get(vals.get(i)) + " 条）";
+        new AlertDialog.Builder(this)
+                .setTitle(RecFormat.CAT_DIMS[dim])
+                .setItems(labels, (dlg, which) -> {
+                    catVal[dim] = which == 0 ? "" : vals.get(which - 1);
+                    updateCatButton();
+                    applyFilter();
+                })
+                .show();
+    }
+
     // ------------------------------------------------------------ 页面别名
 
     private void loadAlias() {
@@ -356,6 +475,7 @@ public class RecordsActivity extends Activity {
         StringBuilder hid = new StringBuilder();
         shown.clear();
         final java.util.HashSet<String> common = cbCommon.isChecked() ? commonKeys() : null;
+        if (!catVal[3].isEmpty()) ensureScreen();
         int hiddenC = 0;
         for (Snap.Item it : all) {
             if (common != null && common.contains(commonKey(it.o))) {
@@ -364,6 +484,7 @@ public class RecordsActivity extends Activity {
             }
             if (!kindKey.isEmpty() && !kindKey.equals(it.o.optString("kind"))) continue;
             if (!pageFilter.isEmpty() && !pageFilter.equals(RecFormat.pageOf(it.o))) continue;
+            if (!catMatch(it.o)) continue;
             // 选了“仅设置”类型就是要看它们（它们本来就不在屏幕上），不再套“只看屏幕上”
             if (onlyOnScreen && !"TEXTSET".equals(kindKey) && "no".equals(it.o.optString("vis"))) {
                 hidden++;
@@ -447,7 +568,7 @@ public class RecordsActivity extends Activity {
                 + RecFormat.samplesLine(r, 10, 4) + " ×" + r.optInt("drawCount"));
         String id = r.optString("viewId");
         t2.setText(RecFormat.simple(r.optString("view")) + (id.isEmpty() ? "" : " id=" + id)
-                + "   页面 " + RecFormat.pageOf(r));
+                + "   页面 " + RecFormat.pageOf(r) + "   容器 " + RecFormat.containerOf(r));
         t3.setText("设: " + topFrame(r.optJSONObject("setStack")) + "\n画: " + topFrame(r.optJSONObject("drawStack")));
         return row;
     }
@@ -532,6 +653,7 @@ public class RecordsActivity extends Activity {
         if (skipped > 0) sb.append("（另有 ").append(skipped).append(" 条没有可用 hook，已略过）");
         sb.append('\n');
         sb.append("筛选：类型=").append(KINDS[kindMode]).append("  页面=").append(pageFilter.isEmpty() ? "全部" : pageFilter)
+                .append(catSummary().isEmpty() ? "" : "  分类=" + catSummary())
                 .append("  只看屏幕上=").append(cbOnScreen.isChecked() ? "是" : "否");
         if (cbCommon.isChecked()) sb.append("  已隐藏公共控件=").append(hiddenCommon);
         sb.append('\n');
@@ -604,6 +726,7 @@ public class RecordsActivity extends Activity {
             }
             sb.append("  类型=").append(KINDS[kindMode]);
             sb.append("  页面=").append(pageFilter.isEmpty() ? "全部" : pageFilter);
+            if (!catSummary().isEmpty()) sb.append("  分类=").append(catSummary());
             if (cbCommon.isChecked()) sb.append("  已隐藏公共控件=").append(hiddenCommon);
             sb.append(RecFormat.LEAN ? "  精简导出" : "");
             String qs = etSearch.getText().toString().trim();
