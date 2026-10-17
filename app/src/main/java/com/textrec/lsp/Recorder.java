@@ -76,12 +76,6 @@ final class Recorder {
         store.markDirty();
     }
 
-    private static String simpleName(String cls) {
-        if (cls == null) return "";
-        int i = cls.lastIndexOf('.');
-        return i < 0 ? cls : cls.substring(i + 1);
-    }
-
     private static void noteFragment(Object f) {
         if (f == null) return;
         String n = simpleName(f.getClass().getName());
