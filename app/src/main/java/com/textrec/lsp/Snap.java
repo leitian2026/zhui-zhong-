@@ -46,6 +46,7 @@ final class Snap {
                         + (st != null && st.optLong("droppedByRecordCap") > 0 ? "  ⚠超出记录上限，丢弃 " + st.optLong("droppedByRecordCap") : "")
                         + (st != null && st.optLong("droppedBySetOnlyCap") > 0 ? "  ⚠仅设置记录超出上限，丢弃 " + st.optLong("droppedBySetOnlyCap") + "（可调大“仅设置记录上限”）" : "")
                         + (st != null && st.optLong("droppedByRateLimit") > 0 ? "  ⚠限流丢弃 " + st.optLong("droppedByRateLimit") + " 次抓栈（可调大“每秒抓栈上限”）" : "")
+                        + blocked(st)
                         + "  快照 " + RecFormat.time(root.optLong("snapshotTime"))
                         + (warn.isEmpty() ? "" : "\n⚠ " + warn.trim()));
                 if (rs == null) continue;
@@ -59,6 +60,28 @@ final class Snap {
             }
         }
         return items;
+    }
+
+    /** 采集端过滤各挡掉了多少次；全是 0 就不显示。用来判断“记录不够”是不是被某个开关挡掉了。 */
+    private static String blocked(JSONObject st) {
+        if (st == null) return "";
+        StringBuilder sb = new StringBuilder();
+        blk(sb, "触发窗口", st.optLong("blockedByWindow"));
+        blk(sb, "线程", st.optLong("blockedByThread"));
+        blk(sb, "页面", st.optLong("blockedByPage"));
+        blk(sb, "控件", st.optLong("blockedByView"));
+        blk(sb, "排除名单", st.optLong("blockedByExclude"));
+        blk(sb, "值匹配", st.optLong("blockedByValue"));
+        long q = st.optLong("quietCounted");
+        String out = sb.length() == 0 ? "" : "  已挡掉：" + sb;
+        if (q > 0) out += "  持续型降频只计数 " + q + " 次";
+        return out;
+    }
+
+    private static void blk(StringBuilder sb, String name, long n) {
+        if (n <= 0) return;
+        if (sb.length() > 0) sb.append(" / ");
+        sb.append(name).append(' ').append(n);
     }
 
     private static String hay(JSONObject r) {
