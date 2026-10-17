@@ -224,6 +224,60 @@ container=comment zone=content hook=biz freq=high
 kind=ICON shape=fixed hidecommon=1
 ```
 
+## 采集配置（首页顶栏「粘贴配置」）
+和上面"命令"是两件事：上面那套管的是**已经采集好的记录怎么筛选查看**；这里管的是**接下来要采集什么**
+（本来就在首页用一堆开关/输入框填，现在也可以整段粘贴）。格式是标准 **Java Properties**（`key=value`，一行一个，
+`#` 开头是注释），不是自造的语法——这也是 `config.properties` 落盘、导出用的同一种格式，字段名就是
+`RecConfig.java` 里的 public 字段名，源码和这张表任何时候都应该一致。
+
+粘贴后只回填首页表单（开关勾上、输入框填好），**不会直接推送**；回填完照常自己看一眼、再点「应用并重新记录」
+或「只应用设置」推送到目标 App。没写的字段按 `new RecConfig()` 的默认值，不是保留表单当前的值
+（和上面记录页命令"先清空再应用"是同一个原则：同一段配置粘贴几次结果都一样）。
+
+| 字段 | 取值 | 含义 |
+|---|---|---|
+| `enabled` | `true`/`false` | 总开关 |
+| `keywordMode` | `true`/`false` | `false`=全部文字（默认）；`true`=只记关键字命中的 |
+| `keywords` | 文字，逗号或换行分隔 | 关键字列表（`keywordMode=true` 时生效） |
+| `regex` | `true`/`false` | 关键字是否按正则解释 |
+| `traceOnly` | `true`/`false` | `true`=只记方法追踪，其余全部强制关闭 |
+| `traceSet` | `true`/`false` | 记录"谁设置的文字"（setText 等） |
+| `traceDraw` | `true`/`false` | 记录"谁画的文字"（drawText 等） |
+| `traceColor` | `true`/`false` | 记录文字颜色设置 |
+| `traceIcons` | `true`/`false` | 记录图标/按钮图片 |
+| `autoParams` | `true`/`false` | 自动观察 Compose 文字的画笔参数 |
+| `traceSetOnly` | `true`/`false` | 记录"只设置、从未绘制"的文字 |
+| `traceState` | `true`/`false` | 记录 alpha/visibility/selected 变化 |
+| `maxSetOnly` | 整数 10~5000 | `traceSetOnly` 这类记录单独的上限 |
+| `traceMethods` | 每行 `类#方法`，可加 `@count`/`@args`/`@stack=N`/`@every=N` | 方法追踪目标列表，`#` 开头的行是注释 |
+| `windowMs` | `0`/`1500`/`3000`/`5000` | 触发窗口（毫秒），0=不限制 |
+| `windowAll` | `true`/`false` | 触发窗口是否也用于文字/图标/颜色/状态/绘制 |
+| `excludeInfra` | `true`/`false` | 排除通用基础设施（LiveData、Fragment 生命周期等） |
+| `threadMode` | `0`/`1`/`2` | 线程：全部/只主线程/只后台线程 |
+| `valueClock` | `true`/`false` | 方法追踪只记参数/返回值里带时间格式的调用 |
+| `excludeList` | 每行一条：`类#方法` `类#*` `#方法` 或类名/包名前缀 | 排除名单 |
+| `threadFilter` | 文字，逗号/换行分隔 | 线程名白名单（包含即命中） |
+| `pageFilter` | 文字 | 页面白名单（标签包含即命中，不分大小写） |
+| `viewFilter` | 文字 | 控件白名单（View 类名或 id 包含即命中） |
+| `valueFilter` | 文字 | 方法追踪的参数/返回值白名单，时长会自动展开多种写法 |
+| `quietCount` | 整数，`0`=关 | 同一位置超过这个次数后降频只计数 |
+| `quietSpanMs` | 整数（毫秒） | 配合 `quietCount`，还要求持续超过这个时长 |
+| `stackDepth` | 整数 1~60 | 每条记录保存的调用栈最大帧数 |
+| `perKeyStacks` | 整数 1~50 | 同一位置前几次抓栈 |
+| `sampleEvery` | 整数 10~100000 | 之后每隔多少次再抽样抓一次 |
+| `stacksPerSec` | 整数 1~5000 | 全局每秒最多抓栈次数（兜底限流） |
+| `maxRecords` | 整数 10~20000 | 记录总上限 |
+| `maxSetOnly` 见上 | | |
+| `flushSec` | 整数 1~60 | 落盘节流（秒） |
+
+例：只抓评论面板相关、按住看高频列表项的方法调用：
+```
+traceOnly=true
+traceMethods=com.ss.android.ugc.aweme.comment.CommentItemView#setData
+windowMs=1500
+excludeInfra=true
+```
+
 ## 导出
 - txt：给人看。
 - JSON：字段固定（`schema:1`，每条记录含 kind/view/viewId/activity/parents/drawCount/setCount/setStack/drawStack/sigs；1.3 新增字段 paints/pos/textColor/colorStack/drawNote 均为追加，不影响旧字段），
