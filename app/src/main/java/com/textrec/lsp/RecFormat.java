@@ -35,6 +35,14 @@ final class RecFormat {
         return "?";
     }
 
+    /** 记录所属页面：优先 Activity > Fragment，旧快照没有 page 字段就退回 Activity 简名。 */
+    static String pageOf(JSONObject r) {
+        String p = r.optString("page");
+        if (!p.isEmpty()) return p;
+        String a = r.optString("activity");
+        return a.isEmpty() ? "(启动中)" : simple(a);
+    }
+
     static String simple(String cls) {
         if (cls == null) return "";
         int i = cls.lastIndexOf('.');
@@ -85,7 +93,8 @@ final class RecFormat {
         }
         sb.append("View: ").append(r.optString("view")).append(idTxt).append('\n');
         String act = r.optString("activity");
-        sb.append("页面: ").append(act.isEmpty() ? "(启动中，尚无 Activity)" : act).append('\n');
+        String pg = r.optString("page");
+        sb.append("页面: ").append(!pg.isEmpty() ? pg : act.isEmpty() ? "(启动中，尚无 Activity)" : act).append('\n');
         JSONArray ps = r.optJSONArray("parents");
         if (ps != null && ps.length() > 0) {
             sb.append("父级: ");
