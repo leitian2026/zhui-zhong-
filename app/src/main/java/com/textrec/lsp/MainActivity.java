@@ -38,6 +38,7 @@ public class MainActivity extends Activity {
         LinearLayout page = Ui.vertical(this);
         page.setBackgroundColor(Ui.col(this, R.color.bg));
         Ui.Bar bar = Ui.topBar(this, "TextRec", "只读记录：屏幕上的文字 / 图标是谁设置的、谁画的", false);
+        bar.actions.addView(Ui.iconBtn(this, R.drawable.ic_code, "粘贴配置", v -> showPasteConfig()));
         page.addView(bar.root);
 
         ScrollView sv = new ScrollView(this);
@@ -457,6 +458,11 @@ public class MainActivity extends Activity {
             if (c.stacksPerSec == 50) c.stacksPerSec = 1000;
             sp.edit().putInt("ver", 2).putString("cfg", c.toText()).apply();
         }
+        applyToUi(c);
+    }
+
+    /** 把一份 RecConfig 回填进表单控件，不碰 SharedPreferences、不推送——load() 和「粘贴配置」共用这一步。 */
+    private void applyToUi(RecConfig c) {
         swEnabled.setChecked(c.enabled);
         swTraceOnly.setChecked(c.traceOnly);
         swSet.setChecked(c.traceSet);
@@ -527,6 +533,31 @@ public class MainActivity extends Activity {
         c.maxSetOnly = RecConfig.clamp(parse(etMaxSetOnly, 500), 10, 5000);
         c.epoch = epoch;
         return c;
+    }
+
+    /**
+     * 顶栏「粘贴配置」：贴一段 Java Properties 格式的文本（字段名见 README「采集配置」一节，
+     * 和 config.properties、导出用的是同一套字段名），只回填表单，不直接推送——推不推、推之前再看一眼，
+     * 照常走下面已有的「只应用设置」「应用并重新记录」按钮。
+     */
+    private void showPasteConfig() {
+        LinearLayout body = Ui.vertical(this);
+        TextView desc = Ui.tv(this,
+                "粘贴 key=value（一行一个），字段名见仓库 README「采集配置」一节；任何 AI 都能照着那张表拼，不用来问开发者。"
+                        + "没写的字段保持默认值，不是保持当前表单的值。粘贴后只回填下面的开关/输入框，不会直接推送到目标 App。",
+                13, R.color.text_sub, false);
+        desc.setLineSpacing(0, 1.15f);
+        body.addView(desc);
+        final EditText et = Ui.field(this, "keywordMode=true\nkeywords=福利,红包\ntraceIcons=true", true, false);
+        body.addView(et);
+        new Ui.Dlg(this, "粘贴配置", null).keyboard()
+                .body(body, true)
+                .button("取消", false, null)
+                .button("回填表单", true, () -> {
+                    applyToUi(RecConfig.fromText(et.getText().toString()));
+                    toast("已回填，检查一遍没问题再点下面的按钮推送");
+                })
+                .show();
     }
 
     private static int parse(EditText e, int d) {
