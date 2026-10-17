@@ -76,7 +76,48 @@ final class Recorder {
         store.markDirty();
     }
 
-    private static void noteFragment(Object f) {
+    private static java.lang.reflect.Method mChildFm, mFmFragments, mIsVisible, mUserHint;
+
+    /** 像“页面”的 Fragment：名字带 Fragment，且不是光秃秃的 "Fragment"（WidgetManager、JediViewHolderProxyHost 之类是内部组件，不算页面）。 */
+    private static boolean pageLike(Object f) {
+        String n = simpleName(f.getClass().getName());
+        return n.contains("Fragment") && !n.equals("Fragment");
+    }
+
+    /**
+     * 从 f 往下找“此刻可见”的子 Fragment，沿途取最后一个像页面的。这样容器 Fragment（MainFragment 之类）
+     * 被显示出来时，标签落在里面真正可见的页面上，而不是容器名。找不到像页面的就返回 null，保持原标签。
+     */
+    private static Object pageTarget(Object f) {
+        Object best = pageLike(f) ? f : null;
+        if (mChildFm == null || mFmFragments == null || mIsVisible == null) return best;
+        try {
+            Object cur = f;
+            for (int depth = 0; depth < 8; depth++) {
+                Object fm = mChildFm.invoke(cur);
+                if (fm == null) break;
+                java.util.List<?> kids = (java.util.List<?>) mFmFragments.invoke(fm);
+                Object next = null;
+                if (kids != null) {
+                    for (Object k : kids) {
+                        if (k == null) continue;
+                        if (!Boolean.TRUE.equals(mIsVisible.invoke(k))) continue;
+                        if (mUserHint != null && !Boolean.TRUE.equals(mUserHint.invoke(k))) continue;
+                        next = k; // 同时有多个可见子 Fragment 时取最后一个（一般是最上层）
+                    }
+                }
+                if (next == null) break;
+                cur = next;
+                if (pageLike(cur)) best = cur;
+            }
+        } catch (Throwable ignored) {
+        }
+        return best;
+    }
+
+    private static void noteFragment(Object f0) {
+        if (f0 == null) return;
+        Object f = pageTarget(f0);
         if (f == null) return;
         String n = simpleName(f.getClass().getName());
         String a = pageActivity;
@@ -89,6 +130,14 @@ final class Recorder {
         try {
             Class<?> k = Class.forName("androidx.fragment.app.Fragment", false, cl);
             if (!FRAGMENT_HOOKED.compareAndSet(false, true)) return;
+            try { // 找不到这些方法就退化成“只按被触发的 Fragment 本身打标签”
+                mChildFm = k.getMethod("getChildFragmentManager");
+                mFmFragments = Class.forName("androidx.fragment.app.FragmentManager", false, cl).getMethod("getFragments");
+                mIsVisible = k.getMethod("isVisible");
+                mUserHint = k.getMethod("getUserVisibleHint");
+            } catch (Throwable t) {
+                XposedBridge.log("[TextRec] fragment reflection incomplete: " + t);
+            }
             XC_MethodHook h = new XC_MethodHook() {
                 @Override
                 protected void afterHookedMethod(MethodHookParam p) {
