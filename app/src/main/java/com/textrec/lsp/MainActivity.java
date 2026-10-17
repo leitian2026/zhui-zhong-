@@ -3,135 +3,294 @@ package com.textrec.lsp;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.SharedPreferences;
-import android.graphics.Typeface;
 import android.os.Bundle;
-import android.text.InputType;
+import android.view.Gravity;
 import android.view.View;
-import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Switch;
 import android.widget.TextView;
+import android.widget.Toast;
 
 import java.util.List;
 import java.util.regex.Pattern;
 
+/** 首页：流程说明 → 目标 App → 记录内容 → 记录范围 → 高级；底部固定「查看记录」和「应用并重新记录」。 */
 public class MainActivity extends Activity {
     private EditText etPkgs, etKeywords, etDepth, etPerKey, etSample, etPerSec, etMax, etMaxSetOnly, etTrace;
-    private CheckBox cbEnabled, cbKeywordMode, cbRegex, cbSet, cbDraw, cbColor, cbIcons, cbAuto, cbSetOnly, cbState;
-    private Button btnPush, btnReset;
-    private TextView tvStatus;
+    private Switch swEnabled, swRegex, swSet, swDraw, swColor, swIcons, swAuto, swSetOnly, swState;
+    private Ui.Seg segRange;
+    private LinearLayout kwBox, advBody;
+    private TextView advHeader, rangeDesc, tvStatus, btnPush, btnReset, btnApplyOnly;
 
     @Override
     protected void onCreate(Bundle b) {
         super.onCreate(b);
-        setTitle("TextRec 文字位置记录");
+        setTitle("TextRec");
+
+        LinearLayout page = Ui.vertical(this);
+        page.setBackgroundColor(Ui.col(this, R.color.bg));
+        Ui.Bar bar = Ui.topBar(this, "TextRec", "只读记录：屏幕上的文字 / 图标是谁设置的、谁画的", false);
+        page.addView(bar.root);
 
         ScrollView sv = new ScrollView(this);
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        int pad = dp(14);
-        root.setPadding(pad, pad, pad, pad);
+        sv.setClipToPadding(false);
+        LinearLayout root = Ui.vertical(this);
+        root.setPadding(Ui.dp(this, 16), Ui.dp(this, 4), Ui.dp(this, 16), Ui.dp(this, 28));
         sv.addView(root);
-        setContentView(sv);
+        page.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1f));
 
-        root.addView(text("只读记录屏幕上每段文字的“设置位置”和“绘制位置”，不修改目标 App 的任何内容。\n\n"
-                + "用法：\n1. 在 LSPosed 启用本模块，作用域勾选目标 App\n"
-                + "2. 在下面设置并「保存并推送配置」（需要 root）\n"
-                + "3. 点「清空记录并重新开始」，然后强杀目标 App 再冷启动——启动时所有文字的设置和绘制都会被记下\n"
-                + "4. 回到本 App 点「查看记录」，搜索文字或类名，进详情看设置栈/绘制栈和可 hook 的方法签名", 13));
+        buildFlowCard(root);
+        buildTargetCard(root);
+        buildContentCard(root);
+        buildRangeCard(root);
+        buildAdvancedCard(root);
 
-        root.addView(label("目标包名（多个用逗号分隔）"));
-        etPkgs = edit(false, Actions.DEFAULT_PKG);
-        root.addView(etPkgs);
-
-        cbEnabled = check("启用记录");
-        root.addView(cbEnabled);
-        cbSet = check("记录“设置位置”（setText）");
-        root.addView(cbSet);
-        cbDraw = check("记录“绘制位置”（drawText）");
-        root.addView(cbDraw);
-        cbColor = check("记录文字颜色（画笔颜色 + TextView 的 setTextColor 设置位置）");
-        root.addView(cbColor);
-        cbIcons = check("记录图标/按钮图片（ImageView 的 setImage*、setContentDescription）");
-        root.addView(cbIcons);
-        cbAuto = check("自动观察 Compose 文字绘制参数（颜色、描边/填充，如弹幕）");
-        root.addView(cbAuto);
-        cbSetOnly = check("记录“只被设置、从未被绘制”的文字（隐藏的控件，如拖动进度条才出现的时长）");
-        root.addView(cbSetOnly);
-        cbState = check("记录 alpha / visibility / selected 的变化（谁改的、改成什么；看标签“选中态”怎么实现）");
-        root.addView(cbState);
-
-        root.addView(label("记录范围"));
-        cbKeywordMode = check("只记录命中关键字的文字（默认关闭 = 全量记录屏幕上所有文字）");
-        root.addView(cbKeywordMode);
-        etKeywords = edit(true, "普通模式：逗号或换行分隔；正则模式：每行一个正则，例如 \\d\\d:\\d\\d");
-        root.addView(etKeywords);
-        cbRegex = check("关键字按正则表达式处理");
-        root.addView(cbRegex);
-
-        root.addView(label("采集参数"));
-        root.addView(text("调用栈保存帧数（1~60，默认 30）", 12));
-        etDepth = number();
-        root.addView(etDepth);
-        root.addView(text("同一位置前几次抓栈（默认 3）", 12));
-        etPerKey = number();
-        root.addView(etPerKey);
-        root.addView(text("之后每隔多少次再抽样抓一次（默认 200）", 12));
-        etSample = number();
-        root.addView(etSample);
-        root.addView(text("全局每秒最多抓栈次数（默认 1000；冷启动文字很多，太小会丢文字）", 12));
-        etPerSec = number();
-        root.addView(etPerSec);
-        root.addView(text("最多保存多少条记录（默认 2000）", 12));
-        etMax = number();
-        root.addView(etMax);
-        root.addView(text("“仅设置、未绘制”记录的上限（默认 500，单独计）", 12));
-        etMaxSetOnly = number();
-        root.addView(etMaxSetOnly);
-
-        root.addView(label("方法追踪（可选，只读）"));
-        root.addView(text("每行一个 类#方法，例如 androidx.compose.ui.text.MultiParagraph#paint-LG529CI；"
-                + "记录每次调用的参数、返回值和调用栈（谁调用了它）。类没加载时进入相关页面后会自动重试；"
-                + "构造方法写 类#<init>；以 // 开头的行是注释。注意别追踪每秒调用上千次的方法。", 12));
-        etTrace = edit(true, "例如：\nandroidx.compose.ui.text.MultiParagraph#paint-LG529CI");
-        root.addView(etTrace);
-
-        btnPush = new Button(this);
-        btnPush.setText("保存并推送配置");
-        btnPush.setOnClickListener(v -> save(true, false));
-        root.addView(btnPush);
-
-        btnReset = new Button(this);
-        btnReset.setText("清空记录并重新开始");
-        btnReset.setOnClickListener(v -> save(true, true));
-        root.addView(btnReset);
-
-        Button btnLean = new Button(this);
-        btnLean.setText("一键精简（只记文字）并清空重录");
-        btnLean.setOnClickListener(v -> {
-            cbIcons.setChecked(false);
-            cbSetOnly.setChecked(false);
-            cbState.setChecked(false);
-            etDepth.setText("12");
-            save(true, true);
-        });
-        root.addView(btnLean);
-
-        Button btnView = new Button(this);
-        btnView.setText("查看记录");
-        btnView.setOnClickListener(v -> {
+        // ---- 底部固定操作栏
+        LinearLayout bottom = Ui.bottomBar(this);
+        TextView btnView = Ui.button(this, "查看记录", Ui.OUTLINE, v -> {
             save(false, false);
             startActivity(new Intent(this, RecordsActivity.class));
         });
-        root.addView(btnView);
+        bottom.addView(btnView, new LinearLayout.LayoutParams(0, -2, 1f));
+        btnReset = Ui.button(this, "应用并重新记录", Ui.PRIMARY, v -> save(true, true));
+        LinearLayout.LayoutParams lpReset = Ui.lpM(this, 0, -2, 10, 0, 0, 0);
+        lpReset.weight = 1.5f;
+        bottom.addView(btnReset, lpReset);
+        page.addView(Ui.divider(this));
+        page.addView(bottom);
 
-        tvStatus = text("", 13);
-        root.addView(tvStatus);
-
+        setContentView(page);
         load();
     }
+
+    @Override
+    protected void onPause() {
+        super.onPause();
+        save(false, false); // 离开首页就顺手存一下本地设置（不推送）
+    }
+
+    // ------------------------------------------------------------ 各区块
+
+    private void buildFlowCard(LinearLayout root) {
+        LinearLayout card = Ui.card(this);
+        card.addView(Ui.tv(this, "怎么用", 16, R.color.text, true));
+        TextView pre = Ui.tv(this, "前提：已在 LSPosed 里启用本模块，并在作用域勾选目标 App。", 12.5f, R.color.text_sub, false);
+        pre.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 8));
+        card.addView(pre);
+        card.addView(step(1, "应用设置", "点下方「应用并重新记录」：把设置推送给目标 App，并清掉旧记录（需要 root）"));
+        card.addView(step(2, "重新打开目标 App", "先强杀目标 App 再启动，然后操作你想研究的页面；启动阶段的文字也会被记下"));
+        card.addView(step(3, "查看记录", "回到这里点「查看记录」，搜文字或类名，点进条目看代码位置和可 hook 的方法"));
+
+        btnApplyOnly = Ui.button(this, "只应用设置，不清空记录", Ui.TEXT, v -> save(true, false));
+        btnApplyOnly.setMinHeight(Ui.dp(this, 40));
+        card.addView(btnApplyOnly, Ui.lpM(this, -2, -2, -8, 4, 0, 0));
+
+        tvStatus = Ui.note(this, "", false);
+        tvStatus.setTextIsSelectable(true);
+        tvStatus.setVisibility(View.GONE);
+        card.addView(tvStatus, Ui.lpM(this, -1, -2, 0, 6, 0, 0));
+        root.addView(card);
+    }
+
+    private View step(int n, String title, String desc) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setPadding(0, Ui.dp(this, 6), 0, Ui.dp(this, 6));
+        TextView num = Ui.tv(this, String.valueOf(n), 12.5f, R.color.on_primary_container, true);
+        num.setGravity(Gravity.CENTER);
+        num.setBackground(Ui.rect(Ui.col(this, R.color.primary_container), Ui.dp(this, 12), 0, 0));
+        row.addView(num, new LinearLayout.LayoutParams(Ui.dp(this, 24), Ui.dp(this, 24)));
+        LinearLayout col = Ui.vertical(this);
+        col.setPadding(Ui.dp(this, 12), 0, 0, 0);
+        col.addView(Ui.tv(this, title, 14.5f, R.color.text, true));
+        TextView d = Ui.tv(this, desc, 12.5f, R.color.text_sub, false);
+        d.setLineSpacing(0, 1.1f);
+        d.setPadding(0, Ui.dp(this, 1), 0, 0);
+        col.addView(d);
+        row.addView(col, new LinearLayout.LayoutParams(0, -2, 1f));
+        return row;
+    }
+
+    private void buildTargetCard(LinearLayout root) {
+        root.addView(Ui.section(this, "目标 App", null));
+        LinearLayout card = Ui.card(this);
+        card.addView(Ui.tv(this, "包名", 14.5f, R.color.text, true));
+        TextView hint = Ui.tv(this, "要记录哪个 App。多个包名用逗号分隔，默认是抖音。", 12.5f, R.color.text_sub, false);
+        hint.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 8));
+        card.addView(hint);
+        etPkgs = Ui.field(this, Actions.DEFAULT_PKG, false, false);
+        card.addView(etPkgs);
+        card.addView(Ui.divider(this), Ui.lpM(this, -1, Ui.dp(this, 1), 0, 12, 0, 0));
+        Ui.Sw en = Ui.switchRow(this, "启用记录", "关闭后目标 App 暂停记录，不会再产生新的记录");
+        swEnabled = en.sw;
+        card.addView(en.row);
+        root.addView(card);
+    }
+
+    private void buildContentCard(LinearLayout root) {
+        root.addView(Ui.section(this, "记录哪些内容", "每一项都是只读观察，不会修改目标 App。开得越多，记录越全，目标 App 也越卡。"));
+
+        LinearLayout presets = new LinearLayout(this);
+        presets.setOrientation(LinearLayout.HORIZONTAL);
+        presets.setGravity(Gravity.CENTER_VERTICAL);
+        presets.addView(Ui.tv(this, "快速选择", 12.5f, R.color.text_hint, false), Ui.lpM(this, -2, -2, 4, 0, 10, 0));
+        presets.addView(Ui.chip(this, "只记文字（推荐）", false, v -> {
+            swIcons.setChecked(false);
+            swSetOnly.setChecked(false);
+            swState.setChecked(false);
+            swSet.setChecked(true);
+            swDraw.setChecked(true);
+            swColor.setChecked(true);
+            swAuto.setChecked(true);
+            etDepth.setText("12");
+            toast("已选「只记文字」，点底部「应用并重新记录」后生效");
+        }), Ui.lpM(this, -2, -2, 0, 0, 8, 0));
+        presets.addView(Ui.chip(this, "全部打开", false, v -> {
+            swSet.setChecked(true);
+            swDraw.setChecked(true);
+            swColor.setChecked(true);
+            swAuto.setChecked(true);
+            swIcons.setChecked(true);
+            swSetOnly.setChecked(true);
+            swState.setChecked(true);
+            etDepth.setText("30");
+            toast("已全部打开，点底部「应用并重新记录」后生效");
+        }));
+        root.addView(presets, Ui.lpM(this, -1, -2, 0, 0, 0, 8));
+
+        LinearLayout card = Ui.card(this);
+        card.setPadding(Ui.dp(this, 16), Ui.dp(this, 2), Ui.dp(this, 16), Ui.dp(this, 2));
+        Ui.Sw s;
+        s = Ui.switchRow(this, "文字是谁设置的", "记下每段文字由哪行代码 setText 出来（最常用）");
+        swSet = s.sw;
+        card.addView(s.row);
+        card.addView(Ui.divider(this));
+        s = Ui.switchRow(this, "文字是谁画的", "记下每段文字由哪行代码画到屏幕上；自绘和 Compose 的文字只能靠它");
+        swDraw = s.sw;
+        card.addView(s.row);
+        card.addView(Ui.divider(this));
+        s = Ui.switchRow(this, "文字颜色", "记下画笔颜色，以及谁调用了 setTextColor");
+        swColor = s.sw;
+        card.addView(s.row);
+        card.addView(Ui.divider(this));
+        s = Ui.switchRow(this, "Compose 文字参数", "自动抓取 Compose 文字的颜色、描边 / 填充（如弹幕的黑边 + 白字）");
+        swAuto = s.sw;
+        card.addView(s.row);
+        card.addView(Ui.divider(this));
+        s = Ui.switchRow(this, "图标和按钮图片", "记下 ImageView 设置的图片和内容描述，用来找图标按钮；记录量会明显增加");
+        swIcons = s.sw;
+        card.addView(s.row);
+        card.addView(Ui.divider(this));
+        s = Ui.switchRow(this, "没显示出来的文字", "也记下只被设置、从未画出的文字，如拖动进度条才出现的时长");
+        swSetOnly = s.sw;
+        card.addView(s.row);
+        card.addView(Ui.divider(this));
+        s = Ui.switchRow(this, "状态变化", "记下透明度 / 可见性 / 选中态的变化，用来研究“选中”效果是怎么实现的");
+        swState = s.sw;
+        card.addView(s.row);
+        root.addView(card);
+    }
+
+    private void buildRangeCard(LinearLayout root) {
+        root.addView(Ui.section(this, "记录范围", null));
+        LinearLayout card = Ui.card(this);
+        segRange = Ui.segmented(this, new String[]{"全部文字", "只记关键字"}, 0, i -> updateRange());
+        card.addView(segRange.root);
+        rangeDesc = Ui.tv(this, "", 12.5f, R.color.text_sub, false);
+        rangeDesc.setPadding(Ui.dp(this, 2), Ui.dp(this, 8), 0, 0);
+        rangeDesc.setLineSpacing(0, 1.1f);
+        card.addView(rangeDesc);
+
+        kwBox = Ui.vertical(this);
+        etKeywords = Ui.field(this, "关键字，逗号或换行分隔；正则模式每行一个，如 \\d\\d:\\d\\d", true, false);
+        etKeywords.setMinLines(2);
+        kwBox.addView(etKeywords, Ui.lpM(this, -1, -2, 0, 10, 0, 0));
+        Ui.Sw rx = Ui.switchRow(this, "按正则表达式匹配", "打开后每行是一个正则（命中任意一行即记录）");
+        swRegex = rx.sw;
+        kwBox.addView(rx.row);
+        card.addView(kwBox);
+        root.addView(card);
+    }
+
+    private void updateRange() {
+        boolean kw = segRange.sel == 1;
+        kwBox.setVisibility(kw ? View.VISIBLE : View.GONE);
+        rangeDesc.setText(kw ? "只记录文字命中下面关键字的位置，对目标 App 影响小。"
+                : "记录屏幕上出现的所有文字。会拖慢目标 App，只建议调试时使用。");
+    }
+
+    private void buildAdvancedCard(LinearLayout root) {
+        root.addView(Ui.section(this, "高级", null));
+        LinearLayout card = Ui.card(this);
+        advHeader = Ui.tv(this, "", 15.5f, R.color.text, true);
+        advHeader.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 4));
+        advHeader.setClickable(true);
+        advHeader.setOnClickListener(v -> setAdvanced(advBody.getVisibility() != View.VISIBLE));
+        card.addView(advHeader);
+
+        advBody = Ui.vertical(this);
+        TextView note = Ui.tv(this, "一般不用改。这些参数控制抓取调用栈的力度和记录容量。", 12.5f, R.color.text_sub, false);
+        note.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 4));
+        advBody.addView(note);
+
+        etDepth = numberRow("调用栈保存层数", "每条记录保存多少层调用栈。越大越完整，文件也越大。范围 1–60，默认 12");
+        etPerKey = numberRow("同一位置先抓几次栈", "同一处代码前几次完整记录调用栈，之后只计数。默认 3");
+        etSample = numberRow("之后每隔多少次再抽样", "用来发现同一控件的其他调用路径。默认 200");
+        etPerSec = numberRow("每秒最多抓栈次数", "防止拖垮目标 App 的总闸。冷启动文字很多，设太小会丢文字。默认 1000");
+        etMax = numberRow("最多保存记录数", "超过后新记录会被丢弃。默认 2000");
+        etMaxSetOnly = numberRow("“没显示出来的文字”上限", "这类记录单独计数。默认 500");
+
+        TextView reset = Ui.button(this, "恢复默认参数", Ui.TEXT, v -> {
+            etDepth.setText("12");
+            etPerKey.setText("3");
+            etSample.setText("200");
+            etPerSec.setText("1000");
+            etMax.setText("2000");
+            etMaxSetOnly.setText("500");
+        });
+        reset.setMinHeight(Ui.dp(this, 40));
+        advBody.addView(reset, Ui.lpM(this, -2, -2, -8, 0, 0, 0));
+
+        advBody.addView(Ui.divider(this), Ui.lpM(this, -1, Ui.dp(this, 1), 0, 8, 0, 12));
+        advBody.addView(Ui.tv(this, "方法追踪（只读）", 14.5f, R.color.text, true));
+        TextView td = Ui.tv(this, "每行写一个「类名#方法名」，记录它每次被调用时的参数、返回值和调用者。"
+                + "构造方法写 类#<init>；以 // 开头的行是注释。不要追踪每秒调用上千次的方法。", 12.5f, R.color.text_sub, false);
+        td.setLineSpacing(0, 1.1f);
+        td.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 8));
+        advBody.addView(td);
+        etTrace = Ui.field(this, "androidx.compose.ui.text.MultiParagraph#paint-LG529CI", true, false);
+        advBody.addView(etTrace);
+        card.addView(advBody);
+        root.addView(card);
+        setAdvanced(false);
+    }
+
+    private void setAdvanced(boolean open) {
+        advBody.setVisibility(open ? View.VISIBLE : View.GONE);
+        advHeader.setText((open ? "▾  " : "▸  ") + "抓栈参数与方法追踪");
+    }
+
+    private EditText numberRow(String title, String desc) {
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.setGravity(Gravity.CENTER_VERTICAL);
+        row.setPadding(0, Ui.dp(this, 8), 0, Ui.dp(this, 8));
+        LinearLayout left = Ui.vertical(this);
+        left.addView(Ui.tv(this, title, 14.5f, R.color.text, false));
+        TextView d = Ui.tv(this, desc, 12, R.color.text_sub, false);
+        d.setLineSpacing(0, 1.1f);
+        d.setPadding(0, Ui.dp(this, 2), 0, 0);
+        left.addView(d);
+        row.addView(left, new LinearLayout.LayoutParams(0, -2, 1f));
+        EditText e = Ui.field(this, "", false, true);
+        row.addView(e, Ui.lpM(this, Ui.dp(this, 84), -2, 12, 0, 0, 0));
+        advBody.addView(row);
+        return e;
+    }
+
+    // ------------------------------------------------------------ 读取 / 保存
 
     private void load() {
         SharedPreferences sp = getSharedPreferences(Actions.PREFS, MODE_PRIVATE);
@@ -142,41 +301,44 @@ public class MainActivity extends Activity {
             if (c.stacksPerSec == 50) c.stacksPerSec = 1000;
             sp.edit().putInt("ver", 2).putString("cfg", c.toText()).apply();
         }
-        cbEnabled.setChecked(c.enabled);
-        cbSet.setChecked(c.traceSet);
-        cbDraw.setChecked(c.traceDraw);
-        cbColor.setChecked(c.traceColor);
-        cbIcons.setChecked(c.traceIcons);
-        cbAuto.setChecked(c.autoParams);
-        cbSetOnly.setChecked(c.traceSetOnly);
-        cbState.setChecked(c.traceState);
+        swEnabled.setChecked(c.enabled);
+        swSet.setChecked(c.traceSet);
+        swDraw.setChecked(c.traceDraw);
+        swColor.setChecked(c.traceColor);
+        swIcons.setChecked(c.traceIcons);
+        swAuto.setChecked(c.autoParams);
+        swSetOnly.setChecked(c.traceSetOnly);
+        swState.setChecked(c.traceState);
         etTrace.setText(c.traceMethods);
-        cbKeywordMode.setChecked(c.keywordMode);
+        segRange.select(c.keywordMode ? 1 : 0);
         etKeywords.setText(c.keywords);
-        cbRegex.setChecked(c.regex);
+        swRegex.setChecked(c.regex);
         etDepth.setText(String.valueOf(c.stackDepth));
         etPerKey.setText(String.valueOf(c.perKeyStacks));
         etSample.setText(String.valueOf(c.sampleEvery));
         etPerSec.setText(String.valueOf(c.stacksPerSec));
         etMax.setText(String.valueOf(c.maxRecords));
         etMaxSetOnly.setText(String.valueOf(c.maxSetOnly));
+        updateRange();
+        // 设置过方法追踪的，默认把“高级”展开，免得以为没生效
+        if (!c.traceMethods.trim().isEmpty()) setAdvanced(true);
     }
 
     private RecConfig read(long epoch) {
         RecConfig c = new RecConfig();
-        c.enabled = cbEnabled.isChecked();
-        c.traceSet = cbSet.isChecked();
-        c.traceDraw = cbDraw.isChecked();
-        c.traceColor = cbColor.isChecked();
-        c.traceIcons = cbIcons.isChecked();
-        c.autoParams = cbAuto.isChecked();
-        c.traceSetOnly = cbSetOnly.isChecked();
-        c.traceState = cbState.isChecked();
+        c.enabled = swEnabled.isChecked();
+        c.traceSet = swSet.isChecked();
+        c.traceDraw = swDraw.isChecked();
+        c.traceColor = swColor.isChecked();
+        c.traceIcons = swIcons.isChecked();
+        c.autoParams = swAuto.isChecked();
+        c.traceSetOnly = swSetOnly.isChecked();
+        c.traceState = swState.isChecked();
         c.traceMethods = etTrace.getText().toString();
-        c.keywordMode = cbKeywordMode.isChecked();
+        c.keywordMode = segRange.sel == 1;
         c.keywords = etKeywords.getText().toString();
-        c.regex = cbRegex.isChecked();
-        c.stackDepth = RecConfig.clamp(parse(etDepth, 30), 1, 60);
+        c.regex = swRegex.isChecked();
+        c.stackDepth = RecConfig.clamp(parse(etDepth, 12), 1, 60);
         c.perKeyStacks = RecConfig.clamp(parse(etPerKey, 3), 1, 50);
         c.sampleEvery = RecConfig.clamp(parse(etSample, 200), 10, 100000);
         c.stacksPerSec = RecConfig.clamp(parse(etPerSec, 1000), 1, 5000);
@@ -194,6 +356,15 @@ public class MainActivity extends Activity {
         }
     }
 
+    private void setStatus(String s) {
+        tvStatus.setText(s);
+        tvStatus.setVisibility(s == null || s.isEmpty() ? View.GONE : View.VISIBLE);
+    }
+
+    private void toast(String s) {
+        Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
+    }
+
     private void save(final boolean push, final boolean reset) {
         SharedPreferences sp = getSharedPreferences(Actions.PREFS, MODE_PRIVATE);
         long epoch = reset ? System.currentTimeMillis() : Actions.loadCfg(sp).epoch;
@@ -204,7 +375,7 @@ public class MainActivity extends Activity {
                 try {
                     Pattern.compile(k);
                 } catch (Throwable t) {
-                    tvStatus.setText("正则无效，未保存：" + k);
+                    setStatus("正则无效，未保存：" + k);
                     return;
                 }
             }
@@ -215,73 +386,23 @@ public class MainActivity extends Activity {
 
         final List<String> list = RecConfig.splitLines(pkgs);
         if (list.isEmpty()) {
-            tvStatus.setText("请先填目标包名");
+            setStatus("请先填目标 App 包名");
             return;
         }
-        btnPush.setEnabled(false);
-        btnReset.setEnabled(false);
-        tvStatus.setText("正在推送…（首次会弹出 root 授权，请允许）");
+        Ui.enable(btnReset, false);
+        Ui.enable(btnApplyOnly, false);
+        setStatus("正在推送…（首次会弹出 root 授权，请点允许）");
         new Thread(() -> {
             final String msg = Actions.push(list, c, reset)
-                    + "\n目标 App 里约 2 秒内生效，不用重启；要记录冷启动阶段的文字，请先推送，再强杀目标 App 后重新启动。"
-                    + (c.keywordMode ? "" : "\n当前是全量记录，会拖慢目标 App，只在调试时开。");
+                    + (reset ? "\n下一步：强杀目标 App 再重新打开，操作完回来点「查看记录」。"
+                    : "\n设置约 2 秒内在目标 App 里生效，不用重启；要记录冷启动阶段的文字，请强杀后重新打开。")
+                    + (c.keywordMode ? "" : "\n当前是全部文字模式，会拖慢目标 App，只建议调试时使用。");
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
-                btnPush.setEnabled(true);
-                btnReset.setEnabled(true);
-                tvStatus.setText(msg);
+                Ui.enable(btnReset, true);
+                Ui.enable(btnApplyOnly, true);
+                setStatus(msg.trim());
             });
         }).start();
-    }
-
-    // ---------- 小工具 ----------
-    private int dp(int v) {
-        return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
-    }
-
-    private TextView text(String s, int sp) {
-        TextView t = new TextView(this);
-        t.setText(s);
-        t.setTextSize(sp);
-        t.setPadding(0, dp(4), 0, dp(6));
-        return t;
-    }
-
-    private TextView label(String s) {
-        TextView t = text(s, 13);
-        t.setTypeface(Typeface.DEFAULT_BOLD);
-        t.setPadding(0, dp(14), 0, dp(2));
-        return t;
-    }
-
-    private CheckBox check(String s) {
-        CheckBox c = new CheckBox(this);
-        c.setText(s);
-        c.setTextSize(14);
-        return c;
-    }
-
-    private EditText number() {
-        EditText e = new EditText(this);
-        e.setTextSize(14);
-        e.setSingleLine(true);
-        e.setInputType(InputType.TYPE_CLASS_NUMBER);
-        return e;
-    }
-
-    private EditText edit(boolean multi, String hint) {
-        EditText e = new EditText(this);
-        e.setHint(hint);
-        e.setTextSize(14);
-        e.setSingleLine(!multi);
-        if (multi) {
-            e.setMinLines(2);
-            e.setGravity(android.view.Gravity.TOP);
-            e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_MULTI_LINE | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        } else {
-            e.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
-        }
-        e.setVisibility(View.VISIBLE);
-        return e;
     }
 }
