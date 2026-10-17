@@ -48,6 +48,8 @@ public class RecordsActivity extends Activity {
     private EditText etSearch;
     private TextView tvInfo;
     private Button btnSort, btnKind, btnPage;
+    private CheckBox cbLean, cbCommon;
+    private int hiddenCommon;
     /** 页面筛选：空 = 全部页面；否则只看（并只导出）这个页面的记录 */
     private String pageFilter = "";
     private CheckBox cbOnScreen;
@@ -57,7 +59,7 @@ public class RecordsActivity extends Activity {
     /** 当前筛选下被“只看屏幕上”隐藏的记录数和编号——导出时写进文件头，免得看文件的人以为是漏记 */
     private int hiddenOff;
     private String hiddenIds = "";
-    private int sortMode = 0, kindMode = 0;
+    private int sortMode = 0, kindMode = 1; // 默认只看 TextView
     private final AtomicBoolean loading = new AtomicBoolean();
     private String pendingExport;
     private BaseAdapter adapter;
@@ -81,7 +83,7 @@ public class RecordsActivity extends Activity {
             applyFilter();
         });
         bar.addView(btnSort, w1());
-        btnKind = btn("类型:" + KINDS[0], v -> {
+        btnKind = btn("类型:" + KINDS[kindMode], v -> {
             kindMode = (kindMode + 1) % KINDS.length;
             btnKind.setText("类型:" + KINDS[kindMode]);
             applyFilter();
@@ -106,6 +108,21 @@ public class RecordsActivity extends Activity {
         cbOnScreen.setChecked(true);
         cbOnScreen.setOnClickListener(v -> applyFilter());
         root.addView(cbOnScreen);
+
+        cbCommon = new CheckBox(this);
+        cbCommon.setText("隐藏公共控件（多个页面里位置和文字都相同的，如底部栏）");
+        cbCommon.setTextSize(13);
+        cbCommon.setChecked(true);
+        cbCommon.setOnClickListener(v -> applyFilter());
+        root.addView(cbCommon);
+
+        cbLean = new CheckBox(this);
+        cbLean.setText("精简导出（不写绘制栈、颜色栈）");
+        cbLean.setTextSize(13);
+        cbLean.setChecked(true);
+        cbLean.setOnClickListener(v -> RecFormat.LEAN = cbLean.isChecked());
+        root.addView(cbLean);
+        RecFormat.LEAN = true;
 
         etSearch = new EditText(this);
         etSearch.setHint("搜索：文字 / 类名 / 栈帧 / 页面（空格分隔多个词；re: 开头按正则）");
@@ -190,6 +207,41 @@ public class RecordsActivity extends Activity {
                 applyFilter();
             });
         }).start();
+    }
+
+    // ------------------------------------------------------------ 公共控件
+
+    /** 同一个位置 + 同一段文字：View 类、id、类型、设置栈顶帧、绘制栈顶帧、文字。 */
+    private static String commonKey(JSONObject r) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(r.optString("kind")).append('|').append(r.optString("view")).append('|').append(r.optString("viewId")).append('|');
+        sb.append(topFrame(r.optJSONObject("setStack"))).append('|').append(topFrame(r.optJSONObject("drawStack"))).append('|');
+        JSONArray ts = r.optJSONArray("texts");
+        if (ts != null && ts.length() > 0) {
+            for (int i = 0; i < ts.length() && i < 3; i++) sb.append(ts.optString(i)).append('/');
+        } else {
+            sb.append(r.optString("lastText"));
+        }
+        return sb.toString();
+    }
+
+    /** 在 2 个以上页面里都出现的 key = 公共控件。只看当前的 all，不依赖筛选。 */
+    private java.util.HashSet<String> commonKeys() {
+        java.util.HashMap<String, java.util.HashSet<String>> pages = new java.util.HashMap<>();
+        for (Snap.Item it : all) {
+            String k = commonKey(it.o);
+            java.util.HashSet<String> ps = pages.get(k);
+            if (ps == null) {
+                ps = new java.util.HashSet<>();
+                pages.put(k, ps);
+            }
+            ps.add(RecFormat.rawPageOf(it.o));
+        }
+        java.util.HashSet<String> out = new java.util.HashSet<>();
+        for (java.util.Map.Entry<String, java.util.HashSet<String>> e : pages.entrySet()) {
+            if (e.getValue().size() >= 2) out.add(e.getKey());
+        }
+        return out;
     }
 
     // ------------------------------------------------------------ 页面别名
@@ -297,7 +349,13 @@ public class RecordsActivity extends Activity {
         int hidden = 0;
         StringBuilder hid = new StringBuilder();
         shown.clear();
+        final java.util.HashSet<String> common = cbCommon.isChecked() ? commonKeys() : null;
+        int hiddenC = 0;
         for (Snap.Item it : all) {
+            if (common != null && common.contains(commonKey(it.o))) {
+                if (kindKey.isEmpty() || kindKey.equals(it.o.optString("kind"))) hiddenC++;
+                continue;
+            }
             if (!kindKey.isEmpty() && !kindKey.equals(it.o.optString("kind"))) continue;
             if (!pageFilter.isEmpty() && !pageFilter.equals(RecFormat.pageOf(it.o))) continue;
             // 选了“仅设置”类型就是要看它们（它们本来就不在屏幕上），不再套“只看屏幕上”
@@ -320,6 +378,7 @@ public class RecordsActivity extends Activity {
             shown.add(it);
         }
         hiddenOff = hidden;
+        hiddenCommon = hiddenC;
         hiddenIds = hid.toString();
         final int mode = sortMode;
         Collections.sort(shown, new Comparator<Snap.Item>() {
@@ -331,7 +390,8 @@ public class RecordsActivity extends Activity {
             }
         });
         tvInfo.setText(infoBase + "显示 " + shown.size() + " / 共 " + all.size() + " 条"
-                + (onlyOnScreen && hiddenOff > 0 ? "（已隐藏 " + hiddenOff + " 条不在屏幕上的）" : "") + bad);
+                + (onlyOnScreen && hiddenOff > 0 ? "（已隐藏 " + hiddenOff + " 条不在屏幕上的）" : "")
+                + (hiddenCommon > 0 ? "（已隐藏公共控件 " + hiddenCommon + " 条）" : "") + bad);
         adapter.notifyDataSetChanged();
     }
 
@@ -420,6 +480,8 @@ public class RecordsActivity extends Activity {
             }
             sb.append("  类型=").append(KINDS[kindMode]);
             sb.append("  页面=").append(pageFilter.isEmpty() ? "全部" : pageFilter);
+            if (cbCommon.isChecked()) sb.append("  已隐藏公共控件=").append(hiddenCommon);
+            sb.append(RecFormat.LEAN ? "  精简导出" : "");
             String qs = etSearch.getText().toString().trim();
             if (!qs.isEmpty()) sb.append("  搜索=「").append(qs).append("」");
             sb.append("  （全部记录 ").append(all.size()).append(" 条）\n");
