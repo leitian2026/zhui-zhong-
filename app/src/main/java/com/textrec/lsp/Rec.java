@@ -42,6 +42,8 @@ final class Rec {
     static final String TEXTVIEW = "TEXTVIEW";
     static final String CANVAS = "CANVAS";
     static final String COMPOSE = "COMPOSE";
+    /** setText("") / setText(null)：文字被清空。空串没有绘制，所以单独记一类，带“谁清空的”设置栈。 */
+    static final String TEXTCLEAR = "TEXTCLEAR";
     /**
      * 文字被 setText 设置过，但所在控件从未被绘制（INVISIBLE / GONE / 尺寸为 0 / 未挂到窗口 / 父级不可见）。
      * 这类文字没有“绘制”事件，只能从设置那一侧发现；是否仍“从未绘制”在写快照时动态判断。
@@ -74,6 +76,115 @@ final class Rec {
     volatile String[] drawSigs = new String[0];
 
     /** TextView 文字颜色的设置位置（只记最近一次） */
+    /** 链路追踪（开了“链路追踪”才有）：上游异步来源 + 下游调用 / 效果，最近一次采样 */
+    volatile String chain;
+
+    // ---- 调用时间 / 间隔 / 基线 / 标识 / 对象 / 栈上各层（1.21.0）
+    volatile long firstMono, lastMono;      // uptimeMillis
+    volatile long minGap = Long.MAX_VALUE, maxGap;
+    volatile int baseHits, liveHits;        // 基线期间 / 其他时间的调用次数
+    private final java.util.LinkedHashSet<String> tags = new java.util.LinkedHashSet<>();
+    private volatile String lastTag = "";
+    private final java.util.LinkedHashSet<Integer> objIds = new java.util.LinkedHashSet<>();
+    private volatile int objOverflow;
+    private volatile int frameN;
+    private final java.util.LinkedHashMap<String, int[]> frameCnt = new java.util.LinkedHashMap<>();
+    private volatile int frameOverflow;
+    volatile String hookInfo;
+    volatile String retType;
+
+    /** 每次命中都调：单调时间、间隔、基线分账、当前标识。 */
+    void stamp() {
+        long now = android.os.SystemClock.uptimeMillis();
+        long lm = lastMono;
+        if (firstMono == 0) firstMono = now;
+        if (lm != 0) {
+            long g = now - lm;
+            if (g < minGap) minGap = g;
+            if (g > maxGap) maxGap = g;
+        }
+        lastMono = now;
+        if (Timeline.baseline) baseHits++;
+        else liveHits++;
+        String t = Timeline.tag;
+        if (!t.equals(lastTag)) {
+            lastTag = t;
+            if (!t.isEmpty()) {
+                synchronized (tags) {
+                    if (tags.size() < 8) tags.add(t);
+                }
+            }
+        }
+    }
+
+    java.util.List<String> tagList() {
+        synchronized (tags) {
+            return new java.util.ArrayList<>(tags);
+        }
+    }
+
+    String lastTag() {
+        return lastTag;
+    }
+
+    void noteObj(Object o) {
+        if (o == null) return;
+        Integer id = System.identityHashCode(o);
+        synchronized (objIds) {
+            if (objIds.contains(id)) return;
+            if (objIds.size() < 8) objIds.add(id);
+            else objOverflow++;
+        }
+    }
+
+    java.util.List<String> objList() {
+        synchronized (objIds) {
+            java.util.ArrayList<String> out = new java.util.ArrayList<>();
+            for (Integer i : objIds) out.add(Integer.toHexString(i));
+            return out;
+        }
+    }
+
+    int objOverflow() {
+        return objOverflow;
+    }
+
+    /** 抓到一份栈就调一次：统计每一层出现在了多少份采样栈里（每次都出现 = 稳定层）。 */
+    void noteFrames(String[] lines) {
+        if (lines == null) return;
+        synchronized (frameCnt) {
+            frameN++;
+            for (String l : lines) {
+                String k = l;
+                int[] c = frameCnt.get(k);
+                if (c == null) {
+                    if (frameCnt.size() >= 80) {
+                        frameOverflow++;
+                        continue;
+                    }
+                    c = new int[1];
+                    frameCnt.put(k, c);
+                }
+                c[0]++;
+            }
+        }
+    }
+
+    int frameSamples() {
+        return frameN;
+    }
+
+    int frameOverflow() {
+        return frameOverflow;
+    }
+
+    java.util.LinkedHashMap<String, Integer> frameStats() {
+        synchronized (frameCnt) {
+            java.util.LinkedHashMap<String, Integer> out = new java.util.LinkedHashMap<>();
+            for (java.util.Map.Entry<String, int[]> e : frameCnt.entrySet()) out.put(e.getKey(), e.getValue()[0]);
+            return out;
+        }
+    }
     volatile ColorSet colorSet;
     /** 自绘 / Compose 最近一次 drawText 的画布内坐标（不是屏幕坐标） */
     volatile float posX = Float.NaN;
@@ -169,42 +280,11 @@ final class Rec {
         }
     }
 
-    /** 方法追踪：最近 32 次调用的毫秒时刻和参数摘要（环形），用来量事件先后、间隔（只有 TRACE 记录用）。 */
-    private static final int MAX_CALLS = 32;
-    private final long[] callAt = new long[MAX_CALLS];
-    private final String[] callTxt = new String[MAX_CALLS];
-    private int callN;
-
-    private void stampCall(long ms, String text) {
-        if (!TRACE.equals(kind)) return;
-        synchronized (callAt) {
-            int i = callN % MAX_CALLS;
-            callAt[i] = ms;
-            callTxt[i] = text == null ? "" : (text.length() > 60 ? text.substring(0, 60) + "…" : text);
-            callN++;
-        }
-    }
-
-    /** 按时间先后返回最近的调用，每项「毫秒时间戳|参数摘要」。 */
-    List<String> callList() {
-        ArrayList<String> out = new ArrayList<>();
-        if (!TRACE.equals(kind)) return out;
-        synchronized (callAt) {
-            int n = Math.min(callN, MAX_CALLS);
-            int start = callN > MAX_CALLS ? callN % MAX_CALLS : 0;
-            for (int k = 0; k < n; k++) {
-                int i = (start + k) % MAX_CALLS;
-                out.add(callAt[i] + "|" + callTxt[i]);
-            }
-        }
-        return out;
-    }
-
     /** 每次绘制命中这条记录时调用（obtain 之后总会调用一次，所以初始计数为 0）。 */
     void touch(String text, long shape) {
+        stamp();
         drawCount.incrementAndGet();
         last = System.currentTimeMillis();
-        stampCall(last, text);
         lastText = clip(text);
         if (shape != lastShape) {
             lastShape = shape;
@@ -214,6 +294,7 @@ final class Rec {
 
     /** TEXTSET：每次 setText 命中时调用（不增加绘制次数）。 */
     void noteSet(String text, long shape) {
+        stamp();
         last = System.currentTimeMillis();
         lastText = clip(text);
         if (shape != lastShape) {
@@ -224,9 +305,9 @@ final class Rec {
 
     /** 只计数不取样（高频方法追踪时的降级）。 */
     void tick() {
+        stamp();
         drawCount.incrementAndGet();
         last = System.currentTimeMillis();
-        stampCall(last, null);
     }
 
     private void addSample(long shape, String text) {
