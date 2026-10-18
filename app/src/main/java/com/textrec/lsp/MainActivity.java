@@ -22,7 +22,7 @@ public class MainActivity extends Activity {
     private Switch swEnabled, swRegex, swSet, swDraw, swColor, swIcons, swAuto, swSetOnly, swState;
     // 采集过滤：开关 / 分段选择
     private Ui.Seg segWindow, segThread;
-    private Switch swWindowAll, swInfra, swClock, swQuiet, swDump;
+    private Switch swWindowAll, swInfra, swClock, swQuiet, swDump, swChain, swChainAsync, swChainFx, swChainDown, swTl, swTlOps, swTlSamples;
     private static final int[] WINDOW_MS = {0, 1500, 3000, 5000};
     // 手写的过滤条件（可选，放在「高级」里）
     private EditText etThread, etPageF, etViewF, etExclude, etValue;
@@ -314,6 +314,29 @@ public class MainActivity extends Activity {
         Ui.Sw dp = Ui.switchRow(this, "记录对象字段值", "方法追踪时，每隔 25 次调用把被追踪对象（this）周围的字段值记一份：沿字段往下 4 层，列出数值 / 文字和 LiveData 里的值，并统计第一个数值参数的最小 / 最大值（把进度条拖到两端就能看出满量程）。找进度、总时长存在哪时用，用完关掉（只对方法追踪生效）");
         swDump = dp.sw;
         card.addView(dp.row);
+        card.addView(Ui.divider(this));
+        Ui.Sw tl = Ui.switchRow(this, "时间线（总开关）", "把用户操作、页面切换、各位置的记录样本按毫秒排成一条时间线；在记录页「更多」里还能打标记、录安静基线。导出里有时间线一段，记录会带上调用间隔和当前标识。开销很小，默认开");
+        swTl = tl.sw;
+        card.addView(tl.row);
+        Ui.Sw tO = Ui.switchRow(this, "　记用户操作", "点击、滑动、返回键，带坐标和点中的控件（钩 Activity 的触摸和按键分发）");
+        swTlOps = tO.sw;
+        card.addView(tO.row);
+        Ui.Sw tS = Ui.switchRow(this, "　记各位置的样本", "每个位置前 5 次、之后每 100 次进一次时间线：方法追踪、setText / 清空、图标、状态变化、控件加入 / 移出视图树");
+        swTlSamples = tS.sw;
+        card.addView(tS.row);
+        card.addView(Ui.divider(this));
+        Ui.Sw ch = Ui.switchRow(this, "链路追踪（总开关）", "以上面「方法追踪」里的方法为落脚点，记下它的上游和下游：上游 = 谁调用它、是谁用 Handler / 线程池异步投递过来的（一层层往上）；下游 = 它执行期间调用了哪些方法、改了哪些界面、又投递了什么任务。只对方法追踪的方法生效，采样记录（前 5 次每次记，之后每 20 次记一次），会拖慢目标 App，用完关掉");
+        swChain = ch.sw;
+        card.addView(ch.row);
+        Ui.Sw cA = Ui.switchRow(this, "　上游：异步来源", "钩 Handler 消息队列和线程池，记下异步任务是谁投递的（不在链路内的投递限流 300 次/秒，限流时来源会缺）");
+        swChainAsync = cA.sw;
+        card.addView(cA.row);
+        Ui.Sw cD = Ui.switchRow(this, "　下游：被调用的方法", "锚点所在的类、以及它同包字段所属的类（最多 8 个类、300 个方法）会被临时钩住，记下锚点执行期间它们被调用的先后和嵌套");
+        swChainDown = cD.sw;
+        card.addView(cD.row);
+        Ui.Sw cF = Ui.switchRow(this, "　下游：界面效果", "锚点执行期间（含它投递的异步任务稍后跑起来时）发生的 setText / 清空 / 图标 / 状态变化");
+        swChainFx = cF.sw;
+        card.addView(cF.row);
         root.addView(card);
     }
 
@@ -532,6 +555,13 @@ public class MainActivity extends Activity {
         swClock.setChecked(c.valueClock);
         swQuiet.setChecked(c.quietCount > 0);
         swDump.setChecked(c.traceDump);
+        swTl.setChecked(c.tlOn);
+        swTlOps.setChecked(c.tlOps);
+        swTlSamples.setChecked(c.tlSamples);
+        swChain.setChecked(c.chainOn);
+        swChainAsync.setChecked(c.chainAsync);
+        swChainDown.setChecked(c.chainDown);
+        swChainFx.setChecked(c.chainEffects);
         etThread.setText(c.threadFilter);
         etPageF.setText(c.pageFilter);
         etViewF.setText(c.viewFilter);
@@ -575,6 +605,13 @@ public class MainActivity extends Activity {
         c.valueFilter = etValue.getText().toString();
         c.quietCount = swQuiet.isChecked() ? 50 : 0;
         c.traceDump = swDump.isChecked();
+        c.tlOn = swTl.isChecked();
+        c.tlOps = swTlOps.isChecked();
+        c.tlSamples = swTlSamples.isChecked();
+        c.chainOn = swChain.isChecked();
+        c.chainAsync = swChainAsync.isChecked();
+        c.chainDown = swChainDown.isChecked();
+        c.chainEffects = swChainFx.isChecked();
         c.quietSpanMs = 3000;
         c.keywordMode = segRange.sel == 1;
         c.keywords = etKeywords.getText().toString();
