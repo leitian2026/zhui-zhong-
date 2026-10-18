@@ -62,6 +62,9 @@ public final class RecConfig {
     public int threadMode = 0;
     /** 开关：方法追踪只记参数或返回值里带时间的调用（形如 00:00、1:37） */
     public boolean valueClock = false;
+    /** 开关：方法追踪时，每隔 traceDumpEvery 次调用把 this 周围的字段值记一份（找进度 / 时长这类状态存在哪里），同时统计第一个数值参数的 last / min / max */
+    public boolean traceDump = false;
+    public int traceDumpEvery = 25;
     /** 持续型自动降频：同一位置调用超过这个次数、且持续超过 quietSpanMs，之后只计数不抓栈；0 = 关 */
     public int quietCount = 0;
     public int quietSpanMs = 3000;
@@ -219,6 +222,8 @@ public final class RecConfig {
             p.setProperty("excludeInfra", String.valueOf(excludeInfra));
             p.setProperty("threadMode", String.valueOf(threadMode));
             p.setProperty("valueClock", String.valueOf(valueClock));
+            p.setProperty("traceDump", String.valueOf(traceDump));
+            p.setProperty("traceDumpEvery", String.valueOf(traceDumpEvery));
             p.setProperty("excludeList", excludeList);
             p.setProperty("threadFilter", threadFilter);
             p.setProperty("pageFilter", pageFilter);
@@ -285,6 +290,8 @@ public final class RecConfig {
         c.excludeInfra = bool(p, "excludeInfra", c.excludeInfra);
         c.threadMode = clamp(num(p, "threadMode", c.threadMode), 0, 2);
         c.valueClock = bool(p, "valueClock", c.valueClock);
+        c.traceDump = bool(p, "traceDump", c.traceDump);
+        c.traceDumpEvery = clamp(num(p, "traceDumpEvery", c.traceDumpEvery), 1, 1000);
         c.excludeList = p.getProperty("excludeList", c.excludeList);
         c.threadFilter = p.getProperty("threadFilter", c.threadFilter);
         c.pageFilter = p.getProperty("pageFilter", c.pageFilter);
