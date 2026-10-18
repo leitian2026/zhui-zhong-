@@ -78,6 +78,7 @@ final class Recorder {
         if (name == null) name = "";
         if (name.equals(pageName)) return;
         pageName = name;
+        Timeline.add("PAGE", "页面 → " + name);
         pageHash = name.hashCode() * 0x9E3779B97F4A7C15L;
         pageLower = name.toLowerCase(Locale.ROOT);
         store.markDirty();
@@ -293,11 +294,14 @@ final class Recorder {
                 if (appliedEpoch != Long.MIN_VALUE) {
                     // 只清记录，不清“View → 设置栈 / 颜色栈”的对应：View 的设置发生在清空之前，清掉就再也补不回来了
                     store.reset();
+                    Timeline.clear();
                     if (c.traceSet || c.traceDraw || c.traceColor || c.traceIcons || c.autoParams || c.traceSetOnly || c.traceState) rescanLater(); // 屏幕上静态不变的文字不会再画，主动让它们重画一次，才能被记录（文字类记录全关、只记方法追踪时不需要）
                 }
                 appliedEpoch = c.epoch;
             }
             applyTraceTargets(c);
+            Chain.configure(c);
+            Timeline.configure(c);
             store.markDirty();
         }
     }
@@ -556,6 +560,10 @@ final class Recorder {
                     FileObserver.CLOSE_WRITE | FileObserver.MOVED_TO | FileObserver.CREATE) {
                 @Override
                 public void onEvent(int event, String path) {
+                    if (path != null && path.equals("marker.txt")) {
+                        Timeline.onMarkerFile(new File(dir, "marker.txt"));
+                        return;
+                    }
                     if (path == null || !path.equals("config.properties")) return;
                     try {
                         reload(true);
@@ -660,9 +668,31 @@ final class Recorder {
         }
     };
 
+    private static final XC_MethodHook VIEWTREE_HOOK = new XC_MethodHook() {
+        @Override
+        protected void afterHookedMethod(MethodHookParam p) {
+            try {
+                if (!Timeline.samples || p.args == null || p.args.length < 1 || !(p.args[0] instanceof View)) return;
+                View c = (View) p.args[0];
+                String k = "A:" + p.method.getName() + c.getClass().getName() + "#" + c.getId();
+                if (!Timeline.want(k)) return;
+                ViewGroup g = (ViewGroup) p.thisObject;
+                Timeline.add("VIEWTREE", p.method.getName() + " " + c.getClass().getSimpleName() + "#" + c.getId()
+                        + " → " + g.getClass().getSimpleName() + "#" + g.getId());
+            } catch (Throwable ignored) {
+            }
+        }
+    };
+
     /** 底部标签“选中态”这类效果常常靠 alpha / selected / visibility 实现，颜色本身没变。 */
     private static void hookState() {
         String[][] ms = {{"setAlpha"}, {"setVisibility"}, {"setSelected"}};
+        try { // 控件什么时候被加进 / 移出视图树（延迟创建、回收复用都靠它看）
+            XposedBridge.hookAllMethods(ViewGroup.class, "addView", VIEWTREE_HOOK);
+            XposedBridge.hookAllMethods(ViewGroup.class, "removeView", VIEWTREE_HOOK);
+        } catch (Throwable t) {
+            XposedBridge.log("[TextRec] hook ViewGroup.addView failed: " + t);
+        }
         for (String[] m : ms) {
             try {
                 XposedBridge.hookAllMethods(View.class, m[0], STATE_HOOK);
@@ -697,6 +727,9 @@ final class Recorder {
         if (!allowAll(v)) return;
         String m = p.method.getName();
         Object a0 = p.args[0];
+        if (Timeline.samples && Timeline.want("V:" + v.getClass().getName() + "#" + v.getId() + m))
+            Timeline.add("STATE", whoDesc(v) + " " + m + "(" + a0 + ") " + v.getClass().getSimpleName() + "#" + v.getId());
+        if (Chain.effects && Chain.cur() != null) Chain.effect("状态 " + whoDesc(v) + " " + m + "(" + a0 + ")");
         long vb;
         if (a0 instanceof Float) vb = Math.round(((Float) a0) * 10f); // alpha 动画只按 0.1 一档区分，避免每帧一个变体
         else if (a0 instanceof Integer) vb = (Integer) a0;
@@ -803,13 +836,52 @@ final class Recorder {
 
     private static final XC_MethodHook TRACE_HOOK = new XC_MethodHook() {
         @Override
+        protected void beforeHookedMethod(MethodHookParam p) {
+            if (!Chain.on) return; // 链路追踪没开：这里什么都不做
+            try {
+                String tk = traceKey(p.method);
+                if (isTraceTarget(p.method, tk)) Chain.enter(p.method, tk);
+            } catch (Throwable ignored) {
+            }
+        }
+
+        @Override
         protected void afterHookedMethod(MethodHookParam p) {
+            Chain.Ctx ch = null;
+            String tk = null;
+            if (Chain.on) {
+                try {
+                    tk = traceKey(p.method);
+                    ch = Chain.exit(tk);
+                } catch (Throwable ignored) {
+                }
+            }
             try {
                 onTraced(p);
             } catch (Throwable ignored) {
             }
+            if (ch != null) {
+                try {
+                    Store.DrawProxy dp = store.drawProxy(mix(mix(SEED, tk.hashCode()), 9));
+                    Chain.attach(ch, dp.rec);
+                    store.markDirty();
+                } catch (Throwable ignored) {
+                }
+            }
         }
     };
+
+    private static String traceKey(Member m) {
+        return m.getDeclaringClass().getName() + "#" + (m instanceof Constructor ? "<init>" : m.getName());
+    }
+
+    private static boolean isTraceTarget(Member m, String tk) {
+        return traceActive.contains(tk) || traceWild.contains(m.getDeclaringClass().getName());
+    }
+
+    static void markChainDirty() {
+        store.markDirty();
+    }
 
     private static void applyTraceTargets(RecConfig c) {
         HashSet<String> want = new HashSet<>(RecConfig.splitTargets(c.traceMethods));
@@ -879,6 +951,7 @@ final class Recorder {
                 }
                 continue;
             }
+            noteClassFound(t, k, cn, mn, tn);
             if (mn.equals("*")) {
                 // 类#*：这个类自己声明的所有方法和构造方法（跳过抽象 / native / 合成方法）。配合排除名单使用，调用很多，只在找钩子时用
                 int cnt = 0;
@@ -937,6 +1010,91 @@ final class Recorder {
         store.markDirty();
     }
 
+
+    // ------------------------------------------------------------ 钩点信息 / 类可用时间（1.21.0）
+
+    private static final Map<String, String> HOOK_INFO = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final Map<String, String> HOOK_RET = new java.util.concurrent.ConcurrentHashMap<>();
+
+    static String hookInfoOf(String tkey) {
+        return HOOK_INFO.get(tkey);
+    }
+
+    static String hookRetOf(String tkey) {
+        return HOOK_RET.get(tkey);
+    }
+
+    private static boolean obfName(String n) {
+        if (n == null || n.isEmpty()) return false;
+        return n.length() <= 2 || n.matches("[a-zA-Z]\\d{0,2}") || n.matches("[a-z]{1,3}\\$[a-z0-9]{1,3}");
+    }
+
+    private static boolean obfClass(String cn) {
+        if (cn.startsWith("X.") || cn.startsWith("Y.") || cn.startsWith("p000.")) return true;
+        int i = cn.lastIndexOf('.');
+        String sn = i >= 0 ? cn.substring(i + 1) : cn;
+        int d = sn.indexOf('$');
+        return obfName(d > 0 ? sn.substring(0, d) : sn);
+    }
+
+    /** 这个钩点第一次可用：记时间和类加载器，并把它的重载 / 修饰 / 是否混淆写成一行说明。 */
+    private static void noteClassFound(String t, Class<?> k, String cn, String mn, int tries) {
+        try {
+            if (HOOK_INFO.containsKey(t)) return;
+            StringBuilder sb = new StringBuilder();
+            sb.append("类 ").append(k.isInterface() ? "接口" : java.lang.reflect.Modifier.isAbstract(k.getModifiers()) ? "抽象类" : "普通类");
+            sb.append("，类名").append(obfClass(cn) ? "疑似混淆（换版本会变）" : "未混淆");
+            if (!mn.equals("*")) {
+                sb.append("；方法名").append(obfName(mn) ? "疑似混淆" : "未混淆");
+                int cnt = 0;
+                StringBuilder ov = new StringBuilder();
+                String ret = null;
+                boolean mixedRet = false;
+                for (Method dm : k.getDeclaredMethods()) {
+                    if (!dm.getName().equals(mn)) continue;
+                    cnt++;
+                    int mod = dm.getModifiers();
+                    ov.append("\n    重载").append(cnt).append(": ").append(java.lang.reflect.Modifier.toString(mod))
+                            .append(dm.isSynthetic() ? " 合成(编译器生成)" : "").append(dm.isBridge() ? " 桥接" : "")
+                            .append(" (");
+                    Class<?>[] ps = dm.getParameterTypes();
+                    for (int i = 0; i < ps.length; i++) ov.append(i > 0 ? ", " : "").append(ps[i].getSimpleName());
+                    ov.append(") → ").append(dm.getReturnType().getSimpleName());
+                    if (java.lang.reflect.Modifier.isAbstract(mod)) ov.append("  【抽象：钩的是声明处，实际执行的类要看 this 的类】");
+                    if (java.lang.reflect.Modifier.isFinal(mod)) ov.append("  final");
+                    if (java.lang.reflect.Modifier.isStatic(mod)) ov.append("  静态（没有 this）");
+                    String rn = dm.getReturnType().getName();
+                    if (ret == null) ret = rn;
+                    else if (!ret.equals(rn)) mixedRet = true;
+                }
+                if (cnt == 0) {
+                    sb.append("；此类没有声明这个方法（可能在父类 / 接口，钩点会落空）");
+                } else {
+                    sb.append("；同名重载 ").append(cnt).append(" 个（hookAll 会全部挂上）").append(ov);
+                    if (ret != null && !mixedRet) HOOK_RET.put(t, ret);
+                }
+            }
+            ClassLoader cl = k.getClassLoader();
+            sb.append("\n    类加载器: ").append(cl == null ? "boot" : cl.getClass().getName())
+                    .append("；第 ").append(tries).append(" 次尝试时可用，距进程启动 ")
+                    .append(SystemClock.uptimeMillis() - Timeline.START).append("ms");
+            HOOK_INFO.put(t, sb.toString());
+            Timeline.add("CLASS", "钩点可用 " + t + "（第 " + tries + " 次尝试）");
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 方法追踪行写了 @tag=N：取第 N 个参数 / 返回值当“当前标识”。 */
+    private static void tagFrom(XC_MethodHook.MethodHookParam p, int idx) {
+        try {
+            Object v;
+            if (idx < 0) v = p.getResult();
+            else v = p.args != null && idx < p.args.length ? p.args[idx] : null;
+            if (v instanceof CharSequence || v instanceof Number) Timeline.setTag(String.valueOf(v));
+        } catch (Throwable ignored) {
+        }
+    }
+
     private static void onTraced(XC_MethodHook.MethodHookParam p) {
         RecConfig c = cfg;
         if (!c.enabled) return;
@@ -949,6 +1107,9 @@ final class Recorder {
             if (!traceWild.contains(cn)) return;
             wild = true; // 「类#*」整类追踪命中的方法
         }
+        RecConfig.TraceOpt opt0 = traceOpts.get(tkey);
+        if (opt0 == null && wild) opt0 = traceOpts.get(cn + "#*");
+        if (opt0 != null && opt0.tagArg > -2) tagFrom(p, opt0.tagArg);
         // ---- 采集端过滤：全部在抓栈之前判断，被挡掉的调用不抓栈、不建记录，只在 Store 里累加挡掉的次数
         Gate g = gate;
         if (g.excluded(cn, mn) || (g.excludeInfra && Stacks.isGenericInfra(cn))) {
@@ -984,6 +1145,8 @@ final class Recorder {
             Store.DrawProxy dp = store.drawProxy(mix(mix(SEED, tkey.hashCode()), 9));
             int n = dp.n.incrementAndGet();
             Rec r = dp.rec;
+            if (r != null) r.noteObj(p.thisObject);
+            if (Timeline.samples && Timeline.want("T:" + tkey)) Timeline.add("TRACE", tkey + " " + clip(summarizeCall(p), 160));
             if (c.traceDump) dumpState(tkey, p, n, c); // 按方法统计，不受下面降频 / 只计数 / 换调用栈新建记录的影响
             // 持续型自动降频：同一位置调用很多次、并且持续很久（进度条刷新之类），之后只计数不抓栈
             if (c.quietCount > 0) {
@@ -1025,7 +1188,7 @@ final class Recorder {
                 store.markDirty();
                 return;
             }
-            int depth = opt != null && opt.depth > 0 ? opt.depth : c.stackDepth;
+            int depth = opt != null && opt.depth > 0 ? opt.depth : Math.max(c.stackDepth, 30); // 方法追踪的栈放宽到 30 层
             int every = opt != null && opt.every > 0 ? opt.every : c.sampleEvery;
             boolean want = r == null || n <= c.perKeyStacks || n % every == 0;
             if (want && store.allowStack(c.stacksPerSec)) {
@@ -1035,6 +1198,8 @@ final class Recorder {
                     dp.rec = nr;
                     r = nr;
                 }
+                Rec ft = nr != null ? nr : r;
+                if (ft != null) ft.noteFrames(d.lines);
             }
             if (r != null) r.touch(text, shape);
             store.markDirty();
@@ -1130,7 +1295,78 @@ final class Recorder {
 
     private static void onSetText(XC_MethodHook.MethodHookParam p) {
         if (!(p.thisObject instanceof TextView)) return;
-        recordSet((TextView) p.thisObject, textOf(p.args[0]));
+        Object a0 = p.args[0];
+        String t = textOf(a0);
+        if (Timeline.samples) {
+            TextView tv0 = (TextView) p.thisObject;
+            String k0 = tv0.getClass().getName() + "#" + tv0.getId();
+            if (Timeline.want("S:" + k0)) {
+                String sp = "";
+                if (a0 instanceof android.text.Spanned) {
+                    Object[] spans = ((android.text.Spanned) a0).getSpans(0, ((android.text.Spanned) a0).length(), Object.class);
+                    if (spans != null && spans.length > 0) {
+                        StringBuilder sn = new StringBuilder(" [带样式 ").append(spans.length).append(" 个:");
+                        for (int i = 0; i < spans.length && i < 3; i++) sn.append(' ').append(spans[i].getClass().getSimpleName());
+                        sp = sn.append(']').toString();
+                    }
+                }
+                Timeline.add(t == null || t.isEmpty() ? "CLEAR" : "SETTEXT", (t == null || t.isEmpty() ? "清空 " : "「" + clip(t, 40) + "」 ") + whoDesc(tv0) + " " + k0 + sp);
+            }
+        }
+        if (Chain.effects && Chain.cur() != null) {
+            TextView tv = (TextView) p.thisObject;
+            Chain.effect((t == null || t.isEmpty() ? "清空文字 " : "setText「" + t + "」 ") + whoDesc(tv));
+        }
+        if (a0 == null || (t != null && t.isEmpty())) { // 空串 / null = 文字被清空：不再丢掉，单独记一类
+            recordClear((TextView) p.thisObject);
+            return;
+        }
+        recordSet((TextView) p.thisObject, t);
+    }
+
+    /** 记录里给“清空”显示的文字（空串本身看不见）。 */
+    static final String CLEAR_MARK = "（空串）";
+
+    /**
+     * setText("") / setText(null)：谁把这个控件的文字清空了。和 recordSet 一样抓设置栈（受同样的限流），
+     * 记录类型 TEXTCLEAR，按 (View 类, 设置栈) 归并，次数 = 清空次数。
+     */
+    private static void recordClear(TextView v) {
+        maybeReload();
+        RecConfig c = cfg;
+        if (!c.enabled || !c.traceSet) return;
+        VIEW_SET.remove(v); // 不让后面的绘制和更早的设置栈错误配对
+        if (c.keywordMode) return; // 只记关键字时，空串不会命中关键字
+        if (!allowAll(v)) return;
+        store.setEvents.incrementAndGet();
+
+        String cls = v.getClass().getName();
+        long shape = shapeHash(CLEAR_MARK);
+        long pkey = mix(mix(mix(SEED, cls.hashCode()), v.getId()), 0x7A11);
+        Store.SetProxy sp = store.setProxy(pkey);
+        int n = sp.n.incrementAndGet();
+        SetStack ss = sp.last;
+        boolean want = ss == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
+        if (want && store.allowStack(c.stacksPerSec)) {
+            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.stackDepth, false);
+            ss = store.internSet(new SetStack(stk, Thread.currentThread().getName()), v.getClass().getClassLoader());
+            sp.last = ss;
+        }
+        if (ss == null) return;
+        ss.count.incrementAndGet();
+
+        long rkey = mix(mix(mix(mix(SEED, cls.hashCode()), v.getId()), ss.stk.sig), 19);
+        Store.DrawProxy dp = store.drawProxy(rkey);
+        Rec r = dp.rec;
+        if (r == null && dp.n.getAndIncrement() == 0) { // 每个位置只尝试建一次，满额时不反复尝试
+            r = obtain(Rec.TEXTCLEAR, cls, idName(v), ss, EMPTY, v, CLEAR_MARK, shape, c);
+            if (r != null) dp.rec = r;
+        }
+        if (r != null) {
+            r.touch(CLEAR_MARK, shape);
+            r.trackView(v);
+        }
+        store.markDirty();
     }
 
     private static void recordSet(TextView v, String text) {
@@ -1316,6 +1552,9 @@ final class Recorder {
         if (!(p.thisObject instanceof View)) return;
         View v = (View) p.thisObject;
         if (v instanceof TextView) return; // 文字控件已经由 setText 那条线记录
+        if (Timeline.samples && Timeline.want("I:" + v.getClass().getName() + "#" + v.getId() + p.method.getName()))
+            Timeline.add("ICON", whoDesc(v) + " " + p.method.getName() + " " + v.getClass().getSimpleName() + "#" + v.getId());
+        if (Chain.effects && Chain.cur() != null) Chain.effect("图标/描述 " + whoDesc(v) + " " + p.method.getName());
         maybeReload();
         RecConfig c = cfg;
         if (!c.enabled || !c.traceIcons) return;
@@ -1587,6 +1826,11 @@ final class Recorder {
         String cn = k.getName();
         if (s == null || s.startsWith(cn + "@")) return simpleName(cn); // 默认 toString（Kotlin object 如 Fill）只显示类名
         return s.length() > 80 ? s.substring(0, 80) + "…" : s;
+    }
+
+    private static String clip(String s, int n) {
+        if (s == null) return "";
+        return s.length() > n ? s.substring(0, n) + "…" : s;
     }
 
     private static String simpleName(String cn) {
