@@ -415,9 +415,12 @@ final class Store {
         } else {
             j.put("drawStack", stackJson(r.draw, r.drawSigs, r.drawThread));
         }
-        if (r.dumpN > 0) {
-            j.put("stateDump", r.stateDump == null ? "" : r.stateDump);
-            if (r.hasArg) j.put("argRange", "last=" + r.argLast + " min=" + r.argMin + " max=" + r.argMax);
+        if (Rec.TRACE.equals(r.kind)) {
+            Recorder.StateSnap ss = Recorder.stateOf(r.viewClass + "#" + r.viewId);
+            if (ss != null && ss.n > 0) {
+                j.put("stateDump", ss.dump == null ? "" : ss.dump);
+                if (ss.hasArg) j.put("argRange", "last=" + ss.last + " min=" + ss.min + " max=" + ss.max);
+            }
         }
         return j;
     }
