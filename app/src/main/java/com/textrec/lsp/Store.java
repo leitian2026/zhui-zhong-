@@ -205,7 +205,9 @@ final class Store {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.18");
+        root.put("module", "TextRec 1.21.0");
+        root.put("env", envJson());
+        root.put("monoNow", android.os.SystemClock.uptimeMillis() - Timeline.START);
         root.put("pkg", pkg);
         root.put("process", proc);
         root.put("appVersion", appVersion);
@@ -275,7 +277,25 @@ final class Store {
         st.put("quietCounted", quietCnt.get());
         root.put("stats", st);
         root.put("records", arr);
+        JSONArray tl = Timeline.toJson();
+        root.put("timeline", tl);
+        root.put("timelineDropped", Timeline.dropped());
+        root.put("baselineDone", Timeline.baselineDone);
+        root.put("baselineMs", Timeline.baselineDone ? Timeline.baseEnd - Timeline.baseStart : 0);
         return root.toString();
+    }
+
+    private JSONObject envJson() throws Exception {
+        JSONObject e = new JSONObject();
+        e.put("appVersion", appVersion);
+        e.put("process", proc);
+        e.put("pkg", pkg);
+        e.put("sdk", Build.VERSION.SDK_INT);
+        e.put("release", Build.VERSION.RELEASE);
+        e.put("model", Build.MANUFACTURER + " " + Build.MODEL);
+        e.put("abi", Build.SUPPORTED_ABIS != null && Build.SUPPORTED_ABIS.length > 0 ? Build.SUPPORTED_ABIS[0] : "");
+        e.put("build", Build.DISPLAY);
+        return e;
     }
 
     private static JSONObject stackJson(Stacks.Stk s, String[] sigs, String thread) throws Exception {
@@ -314,6 +334,21 @@ final class Store {
         j.put("setCount", r.set == null ? 0 : r.set.count.get());
         j.put("first", r.first);
         j.put("last", r.last);
+        j.put("firstMono", r.firstMono == 0 ? 0 : r.firstMono - Timeline.START);
+        j.put("lastMono", r.lastMono == 0 ? 0 : r.lastMono - Timeline.START);
+        if (r.minGap != Long.MAX_VALUE) {
+            j.put("minGap", r.minGap);
+            j.put("maxGap", r.maxGap);
+        }
+        j.put("baseHits", r.baseHits);
+        j.put("liveHits", r.liveHits);
+        j.put("baseline", !Timeline.baselineDone ? "unknown" : r.baseHits > 0 ? "noise" : "live");
+        j.put("tags", new JSONArray(r.tagList()));
+        j.put("lastTag", r.lastTag());
+        if (!r.objList().isEmpty()) {
+            j.put("objs", new JSONArray(r.objList()));
+            j.put("objsMore", r.objOverflow());
+        }
         j.put("firstText", r.firstText);
         j.put("lastText", r.lastText);
         if (setOnly) {
@@ -416,12 +451,30 @@ final class Store {
             j.put("drawStack", stackJson(r.draw, r.drawSigs, r.drawThread));
         }
         if (Rec.TRACE.equals(r.kind)) {
-            j.put("callTimes", new JSONArray(r.callList()));
             Recorder.StateSnap ss = Recorder.stateOf(r.viewClass + "#" + r.viewId);
             if (ss != null && ss.n > 0) {
                 j.put("stateDump", ss.dump == null ? "" : ss.dump);
                 if (ss.hasArg) j.put("argRange", "last=" + ss.last + " min=" + ss.min + " max=" + ss.max);
             }
+            String ch = r.chain;
+            if (ch != null) j.put("chain", ch);
+            String tk = r.viewClass + "#" + r.viewId;
+            String hi = Recorder.hookInfoOf(tk);
+            if (hi != null) j.put("hookInfo", hi);
+            String rt = Recorder.hookRetOf(tk);
+            if (rt != null) j.put("ret", rt);
+        }
+        if (r.frameSamples() > 0) {
+            JSONArray fa = new JSONArray();
+            for (java.util.Map.Entry<String, Integer> fe : r.frameStats().entrySet()) {
+                JSONObject fo = new JSONObject();
+                fo.put("f", fe.getKey());
+                fo.put("n", fe.getValue());
+                fa.put(fo);
+            }
+            j.put("frames", fa);
+            j.put("frameSamples", r.frameSamples());
+            j.put("frameOverflow", r.frameOverflow());
         }
         return j;
     }
