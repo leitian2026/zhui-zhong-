@@ -984,7 +984,7 @@ final class Recorder {
             Store.DrawProxy dp = store.drawProxy(mix(mix(SEED, tkey.hashCode()), 9));
             int n = dp.n.incrementAndGet();
             Rec r = dp.rec;
-            if (c.traceDump && r != null) dumpState(r, p, n, c); // 不受下面降频 / 只计数的影响
+            if (c.traceDump) dumpState(tkey, p, n, c); // 按方法统计，不受下面降频 / 只计数 / 换调用栈新建记录的影响
             // 持续型自动降频：同一位置调用很多次、并且持续很久（进度条刷新之类），之后只计数不抓栈
             if (c.quietCount > 0) {
                 long nowMs = SystemClock.uptimeMillis();
@@ -1044,17 +1044,42 @@ final class Recorder {
     }
 
     /** 状态快照：统计第一个数值参数的 last / min / max；每隔 traceDumpEvery 次把 this 周围的字段值记一份（此时已设 BUSY）。 */
-    private static void dumpState(Rec r, XC_MethodHook.MethodHookParam p, int n, RecConfig c) {
+    private static void dumpState(String tkey, XC_MethodHook.MethodHookParam p, int n, RecConfig c) {
         try {
+            StateSnap s = STATE.get(tkey);
+            if (s == null) {
+                STATE.putIfAbsent(tkey, new StateSnap());
+                s = STATE.get(tkey);
+            }
             Object[] a = p.args;
-            if (a != null && a.length > 0 && a[0] instanceof Number) r.noteArg(((Number) a[0]).longValue());
-            if (r.dumpN > 0 && n % Math.max(1, c.traceDumpEvery) != 0) return;
+            if (a != null && a.length > 0 && a[0] instanceof Number) {
+                long v = ((Number) a[0]).longValue();
+                s.last = v;
+                if (v < s.min) s.min = v;
+                if (v > s.max) s.max = v;
+                s.hasArg = true;
+            }
+            if (s.n > 0 && n % Math.max(1, c.traceDumpEvery) != 0) return;
             if (p.thisObject == null) return;
-            r.stateDump = FieldDump.dump(p.thisObject, 40);
-            r.dumpN++;
+            s.dump = FieldDump.dump(p.thisObject, 40);
+            s.n++;
             store.markDirty();
         } catch (Throwable ignored) {
         }
+    }
+
+    /** 方法追踪的状态快照，按 类#方法 统计：同一个方法不同调用栈的几条记录共用一份。 */
+    static final class StateSnap {
+        volatile String dump;
+        volatile int n;
+        volatile boolean hasArg;
+        volatile long last, min = Long.MAX_VALUE, max = Long.MIN_VALUE;
+    }
+
+    private static final java.util.concurrent.ConcurrentHashMap<String, StateSnap> STATE = new java.util.concurrent.ConcurrentHashMap<>();
+
+    static StateSnap stateOf(String classAndMethod) {
+        return STATE.get(classAndMethod);
     }
 
     /** 追踪方法的调用对象：View 给“类#id「文字」”，其他对象给类名。 */
