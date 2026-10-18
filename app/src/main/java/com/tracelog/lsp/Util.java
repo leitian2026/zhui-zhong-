@@ -1,10 +1,7 @@
 package com.tracelog.lsp;
 
-import java.lang.reflect.Field;
-import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.IdentityHashMap;
 import java.util.List;
 
 final class Util {
@@ -95,91 +92,6 @@ final class Util {
 
     static String hex(int c) {
         return String.format("0x%08X", c);
-    }
-
-    // ------------------------------------------------------------ 字段快照
-
-    /**
-     * 把对象周围的状态列出来：沿字段往下最多 4 层（只进 App 自己的类，kotlin Lazy 取值），
-     * 数值 / 布尔 / 文字直接写，LiveData 写它当前的值。每行以空格开头（日志里以 # 开头的才算新记录）。
-     * 调用前必须已经设了 BUSY，免得读 LiveData 时又触发被追踪的方法。
-     */
-    static String dumpFields(Object o, int maxLines) {
-        StringBuilder sb = new StringBuilder();
-        try {
-            dumpInto(o, "this", 0, new IdentityHashMap<Object, Boolean>(), sb, new int[]{maxLines});
-        } catch (Throwable ignored) {
-        }
-        return sb.toString();
-    }
-
-    private static final Object NONE = new Object();
-
-    private static void dumpInto(Object o, String path, int depth, IdentityHashMap<Object, Boolean> seen, StringBuilder sb, int[] left) {
-        if (o == null || left[0] <= 0 || depth > 3 || seen.put(o, Boolean.TRUE) != null) return;
-        for (Class<?> c = o.getClass(); c != null && c != Object.class && !skipClass(c.getName()); c = c.getSuperclass()) {
-            for (Field f : c.getDeclaredFields()) {
-                if (left[0] <= 0) return;
-                if (Modifier.isStatic(f.getModifiers())) continue;
-                try {
-                    f.setAccessible(true);
-                    Object v = f.get(o);
-                    if (v == null) continue;
-                    String p = path + "." + f.getName();
-                    if (v instanceof Number || v instanceof Boolean) line(sb, left, p + " = " + v);
-                    else if (v instanceof CharSequence) line(sb, left, p + " = \"" + clean(v.toString(), 30) + "\"");
-                    else dumpObject(v, p, depth, seen, sb, left);
-                } catch (Throwable ignored) {
-                }
-            }
-        }
-    }
-
-    private static void dumpObject(Object v, String p, int depth, IdentityHashMap<Object, Boolean> seen, StringBuilder sb, int[] left) {
-        Class<?> k = v.getClass();
-        String n = k.getName();
-        if (n.contains("Lazy")) {
-            try {
-                dumpObject(k.getMethod("getValue").invoke(v), p, depth, seen, sb, left);
-            } catch (Throwable ignored) {
-            }
-            return;
-        }
-        if (isLiveData(k)) {
-            Object lv = NONE;
-            try {
-                lv = k.getMethod("getValue").invoke(v);
-            } catch (Throwable ignored) {
-            }
-            if (lv == NONE) return;
-            if (lv == null) {
-                line(sb, left, p + " (LiveData) = null");
-            } else if (lv instanceof Number || lv instanceof Boolean || lv instanceof CharSequence) {
-                line(sb, left, p + " (LiveData) = " + clean(String.valueOf(lv), 40));
-            } else {
-                line(sb, left, p + " (LiveData) = " + lv.getClass().getName());
-                dumpInto(lv, p + ".value", depth + 1, seen, sb, left);
-            }
-            return;
-        }
-        if (!skipClass(n)) dumpInto(v, p, depth + 1, seen, sb, left);
-    }
-
-    private static boolean isLiveData(Class<?> k) {
-        for (Class<?> c = k; c != null && c != Object.class; c = c.getSuperclass()) {
-            if (c.getName().contains("LiveData")) return true;
-        }
-        return false;
-    }
-
-    private static boolean skipClass(String cn) {
-        return isFramework(cn) || cn.startsWith("kotlin.") || cn.startsWith("kotlinx.") || cn.startsWith("androidx.")
-                || isInfra(cn);
-    }
-
-    private static void line(StringBuilder sb, int[] left, String s) {
-        sb.append("    ").append(clean(s, 100)).append('\n');
-        left[0]--;
     }
 
     static String str(Object o) {
