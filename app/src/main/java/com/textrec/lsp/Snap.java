@@ -26,6 +26,33 @@ final class Snap {
     /** 从列表页带到详情页的当前条目 */
     static volatile Item current;
 
+    /** 各进程的时间线文字（导出用）；每次刷新前先 resetExtras()。 */
+    static volatile String timelineText = "";
+
+    static void resetExtras() {
+        timelineText = "";
+    }
+
+    private static String timelineOf(JSONObject root, String proc) {
+        JSONArray tl = root.optJSONArray("timeline");
+        if (tl == null || tl.length() == 0) return "";
+        StringBuilder sb = new StringBuilder();
+        sb.append("进程 ").append(proc).append("：").append(tl.length()).append(" 条");
+        long dr = root.optLong("timelineDropped");
+        if (dr > 0) sb.append("  ⚠ 超过 3000 条上限，最早的 ").append(dr).append(" 条已丢（环形保留最近的）");
+        sb.append("  （前一列是单调时钟毫秒，相对目标进程开始记录；同一毫秒内看序号 #）\n");
+        for (int i = 0; i < tl.length(); i++) {
+            JSONObject e = tl.optJSONObject(i);
+            if (e == null) continue;
+            sb.append(String.format(Locale.US, "%8d #%-5d %-8s ", e.optLong("t"), e.optLong("seq"), e.optString("kind")))
+                    .append(e.optString("text"));
+            String tg = e.optString("tag");
+            if (!tg.isEmpty()) sb.append("   <标识 ").append(tg).append('>');
+            sb.append("   [").append(e.optString("page")).append("]\n");
+        }
+        return sb.toString();
+    }
+
     /** raw 是 RootShell.pullSnapshots 的输出；infos 追加每个进程的概况。 */
     static List<Item> parse(String raw, List<String> infos) {
         ArrayList<Item> items = new ArrayList<>();
@@ -49,6 +76,14 @@ final class Snap {
                         + blocked(st)
                         + "  快照 " + RecFormat.time(root.optLong("snapshotTime"))
                         + (warn.isEmpty() ? "" : "\n⚠ " + warn.trim()));
+                JSONObject env = root.optJSONObject("env");
+                if (env != null) {
+                    infos.add(proc + "  环境：" + env.optString("model") + "  Android " + env.optString("release") + "(API " + env.optInt("sdk")
+                            + ")  " + env.optString("abi") + "  App " + env.optString("appVersion") + "  模块 " + root.optString("module"));
+                }
+                if (root.optBoolean("baselineDone")) infos.add(proc + "  基线：已录 " + root.optLong("baselineMs") + "ms（记录里标了“基线里也在调用”的是周期性噪声）");
+                String tlx = timelineOf(root, proc);
+                if (!tlx.isEmpty()) timelineText = timelineText + tlx + "\n";
                 if (rs == null) continue;
                 for (int i = 0; i < rs.length(); i++) {
                     JSONObject r = rs.getJSONObject(i);
@@ -93,7 +128,10 @@ final class Snap {
                 .append(r.optString("page")).append('\n')
                 .append(r.optString("firstText")).append('\n')
                 .append(r.optString("lastText")).append('\n')
-                .append(r.optString("stateDump")).append('\n');
+                .append(r.optString("stateDump")).append('\n')
+                .append(r.optString("lastTag")).append('\n')
+                .append(r.optString("hookInfo")).append('\n')
+                .append(r.optString("chain")).append('\n');
         JSONArray ps = r.optJSONArray("parents");
         if (ps != null) for (int i = 0; i < ps.length(); i++) sb.append(ps.optString(i)).append('\n');
         JSONArray ts = r.optJSONArray("texts");
