@@ -64,7 +64,12 @@ final class ClassTracer {
     }
 
     static void resetCounters() {
-        for (CallHook h : HOOKS) h.cnt.set(0);
+        for (CallHook h : HOOKS) {
+            h.cnt.set(0);
+            h.min = Long.MAX_VALUE;
+            h.max = Long.MIN_VALUE;
+            h.last = 0;
+        }
     }
 
     private static boolean pending() {
@@ -140,8 +145,34 @@ final class ClassTracer {
     }
 
     private static final class CallHook extends XC_MethodHook {
+        /** 第一个数值参数的 last / min / max（拖到两端就能看出满量程），每隔 dumpEvery 次连同 this 的字段值记一份。 */
+        private void dumpHook(MethodHookParam p, int n, TraceConfig c) {
+            try {
+                Object[] a = p.args;
+                if (a != null && a.length > 0 && a[0] instanceof Number) {
+                    long v = ((Number) a[0]).longValue();
+                    last = v;
+                    if (v < min) min = v;
+                    if (v > max) max = v;
+                }
+                if (n != 1 && n % Math.max(1, c.dumpEvery) != 0) return;
+                Util.BUSY.set(Boolean.TRUE);
+                try {
+                    String head = label + " 第" + n + "次 arg0: last=" + last
+                            + " min=" + (min == Long.MAX_VALUE ? "-" : String.valueOf(min))
+                            + " max=" + (max == Long.MIN_VALUE ? "-" : String.valueOf(max));
+                    String body = p.thisObject == null ? "" : Util.dumpFields(p.thisObject, 40);
+                    TraceLog.log("FIELDS", head, body);
+                } finally {
+                    Util.BUSY.set(Boolean.FALSE);
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+
         final String spec, label;
         final AtomicInteger cnt = new AtomicInteger();
+        volatile long min = Long.MAX_VALUE, max = Long.MIN_VALUE, last;
 
         CallHook(String spec, String label) {
             this.spec = spec;
@@ -156,6 +187,7 @@ final class ClassTracer {
                 if (!c.enabled) return;
                 if (Boolean.TRUE.equals(Util.BUSY.get())) return; // 防止 toString 又触发 Hook 造成递归
                 int n = cnt.incrementAndGet();
+                if (c.dumpFields) dumpHook(p, n, c); // 不受「每个方法最多记录次数」限制：满额之后仍然统计、仍然每隔 N 次记一份
                 if (n > c.maxPerMethod) {
                     if (n == c.maxPerMethod + 1) TraceLog.log("CAP", label + " 已达上限 " + c.maxPerMethod + "，不再记录", null);
                     return;
