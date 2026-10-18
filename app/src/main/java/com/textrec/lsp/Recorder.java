@@ -984,6 +984,7 @@ final class Recorder {
             Store.DrawProxy dp = store.drawProxy(mix(mix(SEED, tkey.hashCode()), 9));
             int n = dp.n.incrementAndGet();
             Rec r = dp.rec;
+            if (c.traceDump && r != null) dumpState(r, p, n, c); // 不受下面降频 / 只计数的影响
             // 持续型自动降频：同一位置调用很多次、并且持续很久（进度条刷新之类），之后只计数不抓栈
             if (c.quietCount > 0) {
                 long nowMs = SystemClock.uptimeMillis();
@@ -1039,6 +1040,20 @@ final class Recorder {
             store.markDirty();
         } finally {
             busy[0] = false;
+        }
+    }
+
+    /** 状态快照：统计第一个数值参数的 last / min / max；每隔 traceDumpEvery 次把 this 周围的字段值记一份（此时已设 BUSY）。 */
+    private static void dumpState(Rec r, XC_MethodHook.MethodHookParam p, int n, RecConfig c) {
+        try {
+            Object[] a = p.args;
+            if (a != null && a.length > 0 && a[0] instanceof Number) r.noteArg(((Number) a[0]).longValue());
+            if (r.dumpN > 0 && n % Math.max(1, c.traceDumpEvery) != 0) return;
+            if (p.thisObject == null) return;
+            r.stateDump = FieldDump.dump(p.thisObject, 40);
+            r.dumpN++;
+            store.markDirty();
+        } catch (Throwable ignored) {
         }
     }
 
