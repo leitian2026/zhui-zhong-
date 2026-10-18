@@ -197,6 +197,7 @@ final class Ui {
 
     static int kindColor(String kind) {
         if ("TEXTVIEW".equals(kind)) return 0xFF4C6FFF;
+        if ("TEXTCLEAR".equals(kind)) return 0xFF6C7BD9;
         if ("COMPOSE".equals(kind)) return 0xFF9B5DE5;
         if ("CANVAS".equals(kind)) return 0xFF0FA3A3;
         if ("ICON".equals(kind)) return 0xFFF08A24;
