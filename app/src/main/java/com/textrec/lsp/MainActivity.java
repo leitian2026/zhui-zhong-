@@ -19,7 +19,7 @@ import java.util.regex.Pattern;
 /** 首页：流程说明 → 目标 App → 记录内容 → 记录范围 → 高级；底部固定「查看记录」和「应用并重新记录」。 */
 public class MainActivity extends Activity {
     private EditText etPkgs, etKeywords, etDepth, etPerKey, etSample, etPerSec, etMax, etMaxSetOnly, etTrace;
-    private Switch swEnabled, swTraceOnly, swRegex, swSet, swDraw, swColor, swIcons, swAuto, swSetOnly, swState;
+    private Switch swEnabled, swRegex, swSet, swDraw, swColor, swIcons, swAuto, swSetOnly, swState;
     // 采集过滤：开关 / 分段选择
     private Ui.Seg segWindow, segThread;
     private Switch swWindowAll, swInfra, swClock, swQuiet;
@@ -27,6 +27,8 @@ public class MainActivity extends Activity {
     // 手写的过滤条件（可选，放在「高级」里）
     private EditText etThread, etPageF, etViewF, etExclude, etValue;
     private Ui.Seg segRange;
+    /** 快速选择按钮：当前开关组合正好等于某个预设时高亮。 */
+    private TextView chTextOnly, chAll, chTraceOnly, chHook, chOff;
     private LinearLayout kwBox, advBody;
     private TextView advHeader, rangeDesc, tvStatus, btnPush, btnReset, btnApplyOnly;
 
@@ -70,6 +72,7 @@ public class MainActivity extends Activity {
         page.addView(bottom);
 
         setContentView(page);
+        wireChips();
         load();
     }
 
@@ -144,8 +147,7 @@ public class MainActivity extends Activity {
         presets.setOrientation(LinearLayout.HORIZONTAL);
         presets.setGravity(Gravity.CENTER_VERTICAL);
         presets.addView(Ui.tv(this, "快速选择", 12.5f, R.color.text_hint, false), Ui.lpM(this, -2, -2, 4, 0, 10, 0));
-        presets.addView(Ui.chip(this, "只记文字（推荐）", false, v -> {
-            swTraceOnly.setChecked(false);
+        chTextOnly = Ui.chip(this, "只记文字（推荐）", false, v -> {
             swIcons.setChecked(false);
             swSetOnly.setChecked(false);
             swState.setChecked(false);
@@ -155,9 +157,23 @@ public class MainActivity extends Activity {
             swAuto.setChecked(true);
             etDepth.setText("12");
             toast("已选「只记文字」，点底部「应用并重新记录」后生效");
-        }), Ui.lpM(this, -2, -2, 0, 0, 8, 0));
-        presets.addView(Ui.chip(this, "全部打开", false, v -> {
-            swTraceOnly.setChecked(false);
+        });
+        presets.addView(chTextOnly, Ui.lpM(this, -2, -2, 0, 0, 8, 0));
+        chTraceOnly = Ui.chip(this, "只记方法追踪", false, v -> {
+            // 一键：文字 / 图标 / 颜色 / 状态这些记录开关全部关掉，只剩「高级」里填的方法追踪
+            swSet.setChecked(false);
+            swDraw.setChecked(false);
+            swColor.setChecked(false);
+            swAuto.setChecked(false);
+            swIcons.setChecked(false);
+            swSetOnly.setChecked(false);
+            swState.setChecked(false);
+            setAdvanced(true); // 方法清单在「高级」里，顺手展开
+            refreshChips();
+            toast("已选「只记方法追踪」，到「高级」里填要追踪的方法；点底部「应用并重新记录」后生效");
+        });
+        presets.addView(chTraceOnly, Ui.lpM(this, -2, -2, 0, 0, 8, 0));
+        chAll = Ui.chip(this, "全部打开", false, v -> {
             swSet.setChecked(true);
             swDraw.setChecked(true);
             swColor.setChecked(true);
@@ -167,19 +183,13 @@ public class MainActivity extends Activity {
             swState.setChecked(true);
             etDepth.setText("30");
             toast("已全部打开，点底部「应用并重新记录」后生效");
-        }));
+        });
+        presets.addView(chAll);
         root.addView(presets, Ui.lpM(this, -1, -2, 0, 0, 0, 8));
 
         LinearLayout card = Ui.card(this);
         card.setPadding(Ui.dp(this, 16), Ui.dp(this, 2), Ui.dp(this, 16), Ui.dp(this, 2));
         Ui.Sw s;
-        s = Ui.switchRow(this, "只记方法追踪", "打开后下面所有文字 / 图标 / 颜色 / 状态记录都不记，只记「高级」里「方法追踪」填的方法，记录最干净");
-        swTraceOnly = s.sw;
-        swTraceOnly.setOnCheckedChangeListener((b, on) -> {
-            if (on) setAdvanced(true); // 方法清单在「高级」里，顺手展开
-        });
-        card.addView(s.row);
-        card.addView(Ui.divider(this));
         s = Ui.switchRow(this, "文字是谁设置的", "记下每段文字由哪行代码 setText 出来（最常用）");
         swSet = s.sw;
         card.addView(s.row);
@@ -251,17 +261,17 @@ public class MainActivity extends Activity {
         presets.setOrientation(LinearLayout.HORIZONTAL);
         presets.setGravity(Gravity.CENTER_VERTICAL);
         presets.addView(Ui.tv(this, "快速选择", 12.5f, R.color.text_hint, false), Ui.lpM(this, -2, -2, 4, 0, 10, 0));
-        presets.addView(Ui.chip(this, "找钩子（最窄）", false, v -> {
-            swTraceOnly.setChecked(true); // 只记方法追踪（会顺带展开「高级」，方法清单在那里）
+        chHook = Ui.chip(this, "找钩子（最窄）", false, v -> {
             segWindow.select(1);          // 触摸后 1.5 秒
             swWindowAll.setChecked(false);
             swInfra.setChecked(true);
             segThread.select(0);
             swClock.setChecked(false);
             swQuiet.setChecked(true);
-            toast("已选「找钩子」：只记方法追踪，触摸后 1.5 秒内才记；点底部按钮后生效");
-        }), Ui.lpM(this, -2, -2, 0, 0, 8, 0));
-        presets.addView(Ui.chip(this, "关掉全部过滤", false, v -> {
+            toast("已选「找钩子」：触摸后 1.5 秒内才记，排除通用基础设施，压低高频方法；点底部按钮后生效");
+        });
+        presets.addView(chHook, Ui.lpM(this, -2, -2, 0, 0, 8, 0));
+        chOff = Ui.chip(this, "关掉全部过滤", false, v -> {
             segWindow.select(0);
             swWindowAll.setChecked(false);
             swInfra.setChecked(false);
@@ -274,7 +284,8 @@ public class MainActivity extends Activity {
             etExclude.setText("");
             etValue.setText("");
             toast("已关掉全部采集过滤，点底部按钮后生效");
-        }));
+        });
+        presets.addView(chOff);
         root.addView(presets, Ui.lpM(this, -1, -2, 0, 0, 0, 8));
 
         LinearLayout card = Ui.card(this);
@@ -449,6 +460,44 @@ public class MainActivity extends Activity {
 
     // ------------------------------------------------------------ 读取 / 保存
 
+    /** 开关 / 分段选择 / 手写框一变，就重新判断四个快速选择按钮该不该高亮（只改按钮颜色，不动任何开关）。 */
+    private void wireChips() {
+        android.widget.CompoundButton.OnCheckedChangeListener l = (b, on) -> refreshChips();
+        for (Switch sw : new Switch[]{swSet, swDraw, swColor, swAuto, swIcons, swSetOnly, swState,
+                swWindowAll, swInfra, swClock, swQuiet}) sw.setOnCheckedChangeListener(l);
+        segWindow.cb = i -> refreshChips();
+        segThread.cb = i -> refreshChips();
+        android.text.TextWatcher tw = new android.text.TextWatcher() {
+            public void beforeTextChanged(CharSequence s, int a, int b, int c) { }
+            public void onTextChanged(CharSequence s, int a, int b, int c) { }
+            public void afterTextChanged(android.text.Editable e) { refreshChips(); }
+        };
+        for (EditText et : new EditText[]{etThread, etPageF, etViewF, etExclude, etValue}) et.addTextChangedListener(tw);
+    }
+
+    private static boolean blank(EditText e) {
+        return e.getText().toString().trim().isEmpty();
+    }
+
+    private void refreshChips() {
+        if (chHook == null || chOff == null || chTextOnly == null || chAll == null || chTraceOnly == null || segWindow == null) return;
+        boolean filtersOff = segWindow.sel == 0 && !swWindowAll.isChecked() && !swInfra.isChecked()
+                && segThread.sel == 0 && !swClock.isChecked() && !swQuiet.isChecked()
+                && blank(etThread) && blank(etPageF) && blank(etViewF) && blank(etExclude) && blank(etValue);
+        boolean hook = segWindow.sel == 1 && !swWindowAll.isChecked() && swInfra.isChecked()
+                && segThread.sel == 0 && !swClock.isChecked() && swQuiet.isChecked();
+        boolean four = swSet.isChecked() && swDraw.isChecked() && swColor.isChecked() && swAuto.isChecked();
+        boolean textOnly = four && !swIcons.isChecked() && !swSetOnly.isChecked() && !swState.isChecked();
+        boolean all = four && swIcons.isChecked() && swSetOnly.isChecked() && swState.isChecked();
+        boolean traceOnly = !swSet.isChecked() && !swDraw.isChecked() && !swColor.isChecked() && !swAuto.isChecked()
+                && !swIcons.isChecked() && !swSetOnly.isChecked() && !swState.isChecked();
+        Ui.setChip(chTraceOnly, traceOnly, "只记方法追踪");
+        Ui.setChip(chHook, hook, "找钩子（最窄）");
+        Ui.setChip(chOff, filtersOff, "关掉全部过滤");
+        Ui.setChip(chTextOnly, textOnly, "只记文字（推荐）");
+        Ui.setChip(chAll, all, "全部打开");
+    }
+
     private void load() {
         SharedPreferences sp = getSharedPreferences(Actions.PREFS, MODE_PRIVATE);
         etPkgs.setText(sp.getString("pkgs", Actions.DEFAULT_PKG));
@@ -464,7 +513,6 @@ public class MainActivity extends Activity {
     /** 把一份 RecConfig 回填进表单控件，不碰 SharedPreferences、不推送——load() 和「粘贴配置」共用这一步。 */
     private void applyToUi(RecConfig c) {
         swEnabled.setChecked(c.enabled);
-        swTraceOnly.setChecked(c.traceOnly);
         swSet.setChecked(c.traceSet);
         swDraw.setChecked(c.traceDraw);
         swColor.setChecked(c.traceColor);
@@ -494,6 +542,7 @@ public class MainActivity extends Activity {
         etMax.setText(String.valueOf(c.maxRecords));
         etMaxSetOnly.setText(String.valueOf(c.maxSetOnly));
         updateRange();
+        refreshChips();
         // 设置过方法追踪的，默认把“高级”展开，免得以为没生效
         if (!c.traceMethods.trim().isEmpty()) setAdvanced(true);
     }
@@ -501,7 +550,6 @@ public class MainActivity extends Activity {
     private RecConfig read(long epoch) {
         RecConfig c = new RecConfig();
         c.enabled = swEnabled.isChecked();
-        c.traceOnly = swTraceOnly.isChecked();
         c.traceSet = swSet.isChecked();
         c.traceDraw = swDraw.isChecked();
         c.traceColor = swColor.isChecked();
