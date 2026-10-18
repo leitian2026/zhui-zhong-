@@ -169,10 +169,42 @@ final class Rec {
         }
     }
 
+    /** 方法追踪：最近 32 次调用的毫秒时刻和参数摘要（环形），用来量事件先后、间隔（只有 TRACE 记录用）。 */
+    private static final int MAX_CALLS = 32;
+    private final long[] callAt = new long[MAX_CALLS];
+    private final String[] callTxt = new String[MAX_CALLS];
+    private int callN;
+
+    private void stampCall(long ms, String text) {
+        if (!TRACE.equals(kind)) return;
+        synchronized (callAt) {
+            int i = callN % MAX_CALLS;
+            callAt[i] = ms;
+            callTxt[i] = text == null ? "" : (text.length() > 60 ? text.substring(0, 60) + "…" : text);
+            callN++;
+        }
+    }
+
+    /** 按时间先后返回最近的调用，每项「毫秒时间戳|参数摘要」。 */
+    List<String> callList() {
+        ArrayList<String> out = new ArrayList<>();
+        if (!TRACE.equals(kind)) return out;
+        synchronized (callAt) {
+            int n = Math.min(callN, MAX_CALLS);
+            int start = callN > MAX_CALLS ? callN % MAX_CALLS : 0;
+            for (int k = 0; k < n; k++) {
+                int i = (start + k) % MAX_CALLS;
+                out.add(callAt[i] + "|" + callTxt[i]);
+            }
+        }
+        return out;
+    }
+
     /** 每次绘制命中这条记录时调用（obtain 之后总会调用一次，所以初始计数为 0）。 */
     void touch(String text, long shape) {
         drawCount.incrementAndGet();
         last = System.currentTimeMillis();
+        stampCall(last, text);
         lastText = clip(text);
         if (shape != lastShape) {
             lastShape = shape;
@@ -194,6 +226,7 @@ final class Rec {
     void tick() {
         drawCount.incrementAndGet();
         last = System.currentTimeMillis();
+        stampCall(last, null);
     }
 
     private void addSample(long shape, String text) {
