@@ -65,6 +65,19 @@ public final class RecConfig {
     /** 开关：方法追踪时，每隔 traceDumpEvery 次调用把 this 周围的字段值记一份（找进度 / 时长这类状态存在哪里），同时统计第一个数值参数的 last / min / max */
     public boolean traceDump = false;
     public int traceDumpEvery = 25;
+    /** 链路追踪：以方法追踪的方法为锚点，串起上游（异步来源）和下游（被调用的方法、界面效果）。总开关 + 三个子开关 */
+    /** 时间线：用户操作 / 页面 / 各位置的记录样本，按毫秒排成一条；标记和基线从记录页发来 */
+    public boolean tlOn = true;
+    public boolean tlOps = true;
+    public boolean tlSamples = true;
+    public boolean chainOn = false;
+    public boolean chainAsync = true;
+    public boolean chainEffects = true;
+    public boolean chainDown = true;
+    /** 前 5 次调用每次都建链，之后每隔 chainEvery 次建一次 */
+    public int chainEvery = 20;
+    /** 一次链里最多列多少个被调用的方法 */
+    public int chainMaxDown = 120;
     /** 持续型自动降频：同一位置调用超过这个次数、且持续超过 quietSpanMs，之后只计数不抓栈；0 = 关 */
     public int quietCount = 0;
     public int quietSpanMs = 3000;
@@ -120,6 +133,8 @@ public final class RecConfig {
         int depth;
         /** 这一行单独的抽样间隔，0 = 用全局的 */
         int every;
+        /** @tag=N：第 N 个参数（从 0 数）当作“当前标识”（如视频 id）；@tag=ret 用返回值 */
+        int tagArg = -2;
     }
 
     /** 行里第一个“空白 + @”的空白位置；没有返回 -1。 */
@@ -157,6 +172,9 @@ public final class RecConfig {
                 } else if (w.startsWith("stack=") || w.startsWith("depth=")) {
                     int v = intOf(w.substring(w.indexOf('=') + 1));
                     if (v > 0) o.depth = clamp(v, 1, 60);
+                } else if (w.startsWith("tag=")) {
+                    String tv = w.substring(4);
+                    o.tagArg = tv.equals("ret") ? -1 : Math.max(0, intOf(tv));
                 } else if (w.startsWith("every=")) {
                     int v = intOf(w.substring(w.indexOf('=') + 1));
                     if (v > 0) o.every = clamp(v, 1, 100000);
@@ -224,6 +242,15 @@ public final class RecConfig {
             p.setProperty("valueClock", String.valueOf(valueClock));
             p.setProperty("traceDump", String.valueOf(traceDump));
             p.setProperty("traceDumpEvery", String.valueOf(traceDumpEvery));
+            p.setProperty("tlOn", String.valueOf(tlOn));
+            p.setProperty("tlOps", String.valueOf(tlOps));
+            p.setProperty("tlSamples", String.valueOf(tlSamples));
+            p.setProperty("chainOn", String.valueOf(chainOn));
+            p.setProperty("chainAsync", String.valueOf(chainAsync));
+            p.setProperty("chainEffects", String.valueOf(chainEffects));
+            p.setProperty("chainDown", String.valueOf(chainDown));
+            p.setProperty("chainEvery", String.valueOf(chainEvery));
+            p.setProperty("chainMaxDown", String.valueOf(chainMaxDown));
             p.setProperty("excludeList", excludeList);
             p.setProperty("threadFilter", threadFilter);
             p.setProperty("pageFilter", pageFilter);
@@ -292,6 +319,15 @@ public final class RecConfig {
         c.valueClock = bool(p, "valueClock", c.valueClock);
         c.traceDump = bool(p, "traceDump", c.traceDump);
         c.traceDumpEvery = clamp(num(p, "traceDumpEvery", c.traceDumpEvery), 1, 1000);
+        c.tlOn = bool(p, "tlOn", c.tlOn);
+        c.tlOps = bool(p, "tlOps", c.tlOps);
+        c.tlSamples = bool(p, "tlSamples", c.tlSamples);
+        c.chainOn = bool(p, "chainOn", c.chainOn);
+        c.chainAsync = bool(p, "chainAsync", c.chainAsync);
+        c.chainEffects = bool(p, "chainEffects", c.chainEffects);
+        c.chainDown = bool(p, "chainDown", c.chainDown);
+        c.chainEvery = clamp(num(p, "chainEvery", c.chainEvery), 1, 100000);
+        c.chainMaxDown = clamp(num(p, "chainMaxDown", c.chainMaxDown), 10, 1000);
         c.excludeList = p.getProperty("excludeList", c.excludeList);
         c.threadFilter = p.getProperty("threadFilter", c.threadFilter);
         c.pageFilter = p.getProperty("pageFilter", c.pageFilter);
