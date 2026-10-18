@@ -415,6 +415,10 @@ final class Store {
         } else {
             j.put("drawStack", stackJson(r.draw, r.drawSigs, r.drawThread));
         }
+        if (r.dumpN > 0) {
+            j.put("stateDump", r.stateDump == null ? "" : r.stateDump);
+            if (r.hasArg) j.put("argRange", "last=" + r.argLast + " min=" + r.argMin + " max=" + r.argMax);
+        }
         return j;
     }
 }
