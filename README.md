@@ -89,17 +89,17 @@
 - 带 `@count` / `@args` 的记录没有调用栈，是预期行为。
 
 ### 预设
-- 「找钩子（最窄）」：只记方法追踪 + 触发窗口 1.5 秒 + 排除通用基础设施 + 压低高频方法。
+- 「找钩子（最窄）」：只设置采集过滤：触发窗口 1.5 秒 + 排除通用基础设施 + 压低高频方法。不动「记录哪些内容」的任何开关。
 - 「关掉全部过滤」：全部恢复不过滤。
 
 ### 没有在真机上验证过的地方
 - 这版只做过语法检查（没有 Android SDK 编译），请先构建、跑一遍再用。
 - 改过滤开关靠配置热更新（inotify），按现有代码应该不用强杀重开；新增追踪方法在类还没加载时会自动重试。
 
-## 1.17：只记方法追踪
+## 1.17：只记方法追踪（1.18 起去掉这个开关，见下）
 - 首页「记录哪些内容」最上面新增开关「只记方法追踪」：打开后文字 / 图标 / 颜色 / Compose 参数 / 没显示的文字 / 状态变化全部不记（读配置时强制关掉），也不再做清空后的重绘扫描，记录里只剩「高级 → 方法追踪」里填的方法。
 - 记录页：如果记录里只有方法追踪，默认类型自动切到「方法追踪」并关掉「隐藏公共控件」（以前默认只看 TextView，会什么都看不到）。
-- 点「只记文字（推荐）」/「全部打开」会自动关掉这个开关。
+- 1.18：开关之间不再互相联动，读配置时也不再强制关掉别的记录项。「只记方法追踪」改成「记录哪些内容」里的快速选择按钮，一键把文字 / 图标 / 颜色 / 状态这些开关全部关掉，并展开「高级」；之后想一起记哪项，就单独把那项打开。
 
 ## 1.16：界面整体重做（功能不变，只改页面和操作）
 
@@ -240,7 +240,7 @@ kind=ICON shape=fixed hidecommon=1
 | `keywordMode` | `true`/`false` | `false`=全部文字（默认）；`true`=只记关键字命中的 |
 | `keywords` | 文字，逗号或换行分隔 | 关键字列表（`keywordMode=true` 时生效） |
 | `regex` | `true`/`false` | 关键字是否按正则解释 |
-| `traceOnly` | `true`/`false` | `true`=只记方法追踪，其余全部强制关闭 |
+| `traceOnly` | | 已废弃，写了也忽略。想只记方法追踪，把 `traceSet` `traceDraw` `traceColor` `traceIcons` `autoParams` `traceSetOnly` `traceState` 都设成 `false` |
 | `traceSet` | `true`/`false` | 记录"谁设置的文字"（setText 等） |
 | `traceDraw` | `true`/`false` | 记录"谁画的文字"（drawText 等） |
 | `traceColor` | `true`/`false` | 记录文字颜色设置 |
@@ -272,7 +272,13 @@ kind=ICON shape=fixed hidecommon=1
 
 例：只抓评论面板相关、按住看高频列表项的方法调用：
 ```
-traceOnly=true
+traceSet=false
+traceDraw=false
+traceColor=false
+traceIcons=false
+autoParams=false
+traceSetOnly=false
+traceState=false
 traceMethods=com.ss.android.ugc.aweme.comment.CommentItemView#setData
 windowMs=1500
 excludeInfra=true
