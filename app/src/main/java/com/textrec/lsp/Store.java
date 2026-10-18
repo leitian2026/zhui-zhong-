@@ -416,6 +416,7 @@ final class Store {
             j.put("drawStack", stackJson(r.draw, r.drawSigs, r.drawThread));
         }
         if (Rec.TRACE.equals(r.kind)) {
+            j.put("callTimes", new JSONArray(r.callList()));
             Recorder.StateSnap ss = Recorder.stateOf(r.viewClass + "#" + r.viewId);
             if (ss != null && ss.n > 0) {
                 j.put("stateDump", ss.dump == null ? "" : ss.dump);
