@@ -19,8 +19,8 @@ public class MainActivity extends Activity {
     static final String PREFS = "ui";
     static final String DEFAULT_PKG = "com.ss.android.ugc.aweme";
 
-    private EditText etPkgs, etKeywords, etColorFilter, etClasses, etDepth, etMax, etDumpEvery;
-    private CheckBox cbEnabled, cbText, cbColor, cbClassStack, cbDump;
+    private EditText etPkgs, etKeywords, etColorFilter, etClasses, etDepth, etMax;
+    private CheckBox cbEnabled, cbText, cbColor, cbClassStack;
     private TextView tvStatus;
     private Button btnPush;
 
@@ -69,12 +69,6 @@ public class MainActivity extends Activity {
         root.addView(etClasses);
         cbClassStack = check("类追踪时同时记录调用栈");
         root.addView(cbClassStack);
-        cbDump = check("类追踪时记录 this 的字段值（找进度 / 时长这类状态用）：每隔 N 次调用记一份，沿字段往下 4 层，列出数值 / 文字和 LiveData 里的值，并统计第一个数值参数的最小 / 最大值（拖到两端就能看出满量程）");
-        root.addView(cbDump);
-        root.addView(label("字段值：每隔多少次调用记一份（1-1000）"));
-        etDumpEvery = edit(false, "25");
-        etDumpEvery.setInputType(InputType.TYPE_CLASS_NUMBER);
-        root.addView(etDumpEvery);
 
         root.addView(label("调用栈深度（1-60）"));
         etDepth = edit(false, "20");
@@ -112,8 +106,6 @@ public class MainActivity extends Activity {
         cbText.setChecked(c.traceText);
         cbColor.setChecked(c.traceColor);
         cbClassStack.setChecked(c.classStack);
-        cbDump.setChecked(c.dumpFields);
-        etDumpEvery.setText(String.valueOf(c.dumpEvery));
         etKeywords.setText(c.keywords);
         etColorFilter.setText(c.colorFilter);
         etClasses.setText(c.classes);
@@ -127,8 +119,6 @@ public class MainActivity extends Activity {
         c.traceText = cbText.isChecked();
         c.traceColor = cbColor.isChecked();
         c.classStack = cbClassStack.isChecked();
-        c.dumpFields = cbDump.isChecked();
-        c.dumpEvery = TraceConfig.clamp(parse(etDumpEvery, 25), 1, 1000);
         c.keywords = etKeywords.getText().toString().trim();
         c.colorFilter = etColorFilter.getText().toString().trim();
         c.classes = etClasses.getText().toString().trim();
