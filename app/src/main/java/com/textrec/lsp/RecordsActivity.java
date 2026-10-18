@@ -49,17 +49,21 @@ public class RecordsActivity extends Activity {
     private static final int REQ_TXT = 2001, REQ_JSON = 2002, REQ_HTML = 2003, REQ_HOOK = 2004;
     private static final String[] SORTS = {"最近更新", "次数最多", "最早出现"};
     private static final String[] SORT_DESC = {"最近一次出现的排前面", "出现 / 绘制次数多的排前面", "最早被记录到的排前面"};
-    private static final String[] KINDS = {"全部", "TextView", "自绘", "Compose", "图标", "方法追踪", "仅设置", "状态变化"};
-    private static final String[] KIND_KEYS = {"", "TEXTVIEW", "CANVAS", "COMPOSE", "ICON", "TRACE", "TEXTSET", "STATE"};
+    /**
+     * 记录类型和采集端的开关一一对应（颜色 / Compose 参数不单独成记录，跟着文字走）：
+     *   文字是谁设置的 → 文字（TextView）；文字是谁画的 → 画出来的文字（自绘 / Compose）；
+     *   图标和按钮图片 → 图标；没显示出来的文字 → 没显示的文字；状态变化 → 状态变化；方法追踪 → 方法追踪。
+     * 默认选中的类型 = 采集时打开的开关；手动改过就以手动为准。
+     */
+    private static final String[] KINDS = {"文字（TextView）", "画出来的文字", "图标", "没显示的文字", "状态变化", "方法追踪"};
+    private static final String[][] KIND_KEYS = {{"TEXTVIEW", "TEXTCLEAR"}, {"CANVAS", "COMPOSE"}, {"ICON"}, {"TEXTSET"}, {"STATE"}, {"TRACE"}};
     private static final String[] KIND_DESC = {
-            "所有类型的记录",
-            "用 TextView 显示的文字（最常见）",
-            "直接用 Canvas.drawText 画出来的文字",
-            "Jetpack Compose 里的文字",
-            "ImageView 图片和按钮（需在首页打开“图标和按钮图片”）",
-            "你在首页“方法追踪”里指定的方法",
-            "被设置过、但从未显示出来的文字",
-            "透明度 / 可见性 / 选中态的变化（需在首页打开“状态变化”）"};
+            "用 TextView 显示的文字，含 setText 空串 / null 的“清空文字”（对应“文字是谁设置的”）",
+            "Canvas.drawText 自绘和 Jetpack Compose 里的文字（对应“文字是谁画的”）",
+            "ImageView 图片和按钮（对应“图标和按钮图片”）",
+            "被设置过、但从未显示出来的文字（对应“没显示出来的文字”）",
+            "透明度 / 可见性 / 选中态的变化（对应“状态变化”）",
+            "你在首页“方法追踪”里指定的方法"};
     private static final String[] CAT_DESC = {
             "控件放在哪个特殊容器里，如底部栏、顶部 Tab 项",
             "设置这段文字的代码属于哪个功能包，如 feed.bottombar",
@@ -70,7 +74,11 @@ public class RecordsActivity extends Activity {
             "调用或绘制了多少次：仅一次的多半是固定文案，高频的多半是列表项公共渲染点",
             "同一段代码（控件类+最近稳定帧）是不是在好几个页面都出现，越多越像全局公共入口",
             "这个位置出现过的文字长什么样：时长格式 / 纯数字计数 / 固定文案 / 多种动态文案",
-            "相对这批记录里最晚一次更新时间，是刚冒出来的还是很久前就有的历史记录"};
+            "相对这批记录里最晚一次更新时间，是刚冒出来的还是很久前就有的历史记录",
+            "这条记录能拿来做什么：改色 / 隐藏显示 / 换文字 / 跳过（方法追踪）。一条可以有几个用途，筛选按“包含”",
+            "录过“安静基线”之后：基线里也在调用的是周期性噪声，基线里没出现的才是操作 / 播放触发的",
+            "被什么触发：用户操作 / 帧回调·绘制 / 数据变化 / 消息·异步任务 / 同步调用（按栈判断）",
+            "出现时的当前标识（方法追踪行写 @tag=N 取参数当标识，如视频 id），不同视频的记录靠它对上号"};
 
     private ListView lv;
     private EditText etSearch;
@@ -99,7 +107,10 @@ public class RecordsActivity extends Activity {
     /** 当前筛选下被“只看屏幕上”隐藏的记录数和编号——导出时写进文件头，免得看文件的人以为是漏记 */
     private int hiddenOff;
     private String hiddenIds = "";
-    private int sortMode = 0, kindMode = 1; // 默认只看 TextView
+    private int sortMode = 0;
+    /** 选中的记录类型（和 KINDS 一一对应）。kindManual=false 时按采集开关自动选，true 时以手动为准。 */
+    private final boolean[] kindSel = new boolean[KINDS.length];
+    private boolean kindManual = false;
     private final AtomicBoolean loading = new AtomicBoolean();
     private String pendingExport;
     private BaseAdapter adapter;
@@ -241,6 +252,7 @@ public class RecordsActivity extends Activity {
         root.addView(area, new LinearLayout.LayoutParams(-1, 0, 1f));
 
         setContentView(root);
+        applyDefaultKinds(); // 类型默认跟着采集开关走
         updateChips();
         updateEmpty();
     }
@@ -267,6 +279,7 @@ public class RecordsActivity extends Activity {
         new Thread(() -> {
             final List<Snap.Item> items = new ArrayList<>();
             final List<String> infos = new ArrayList<>();
+            Snap.resetExtras();
             for (String pkg : pkgs) {
                 if (!RootShell.validPkg(pkg)) {
                     infos.add(pkg + "：包名格式不对");
@@ -298,18 +311,8 @@ public class RecordsActivity extends Activity {
                 all.clear();
                 all.addAll(items);
                 infoBase = ib.toString();
-                if (kindMode == 1) { // 默认只看 TextView：但记录里只有方法追踪时，那样会什么都看不到
-                    int trace = 0, other = 0;
-                    for (Snap.Item it : all) {
-                        if ("TRACE".equals(it.o.optString("kind"))) trace++;
-                        else other++;
-                    }
-                    if (trace > 0 && other == 0) {
-                        kindMode = 5;
-                        hideCommon = false;
-                        updateChips();
-                    }
-                }
+                if (!kindManual) applyDefaultKinds(); // 采集开关可能刚改过：没手动选过类型就跟着开关走
+                updateChips();
                 applyFilter();
             });
         }).start();
@@ -354,7 +357,7 @@ public class RecordsActivity extends Activity {
 
     private boolean catMatch(JSONObject r) {
         for (int d = 0; d < catVal.length; d++) {
-            if (!catVal[d].isEmpty() && !catVal[d].equals(RecFormat.catOf(d, r, scrW, scrH, reuseGroups, maxLast))) return false;
+            if (!catVal[d].isEmpty() && !RecFormat.catHas(d, RecFormat.catOf(d, r, scrW, scrH, reuseGroups, maxLast), catVal[d])) return false;
         }
         return true;
     }
@@ -427,7 +430,7 @@ public class RecordsActivity extends Activity {
     // ------------------------------------------------------------ 筛选芯片 / 清除
 
     private void updateChips() {
-        Ui.setChip(chType, kindMode != 0, "类型：" + KINDS[kindMode] + " ▾");
+        Ui.setChip(chType, kindManual, "类型：" + kindChipText() + " ▾");
         String pg = pageFilter.isEmpty() ? "全部" : pageFilter;
         Ui.setChip(chPage, !pageFilter.isEmpty(), "页面：" + pg + " ▾");
         int n = catCount();
@@ -440,8 +443,10 @@ public class RecordsActivity extends Activity {
     private void clearFilters() {
         etSearch.setText("");
         pageFilter = "";
+        fullIds.clear();
         java.util.Arrays.fill(catVal, "");
-        kindMode = 0;
+        kindManual = false;
+        applyDefaultKinds();
         onlyOnScreen = false;
         hideCommon = false;
         updateChips();
@@ -473,19 +478,76 @@ public class RecordsActivity extends Activity {
             Integer n = cnt.get(k);
             cnt.put(k, n == null ? 1 : n + 1);
         }
-        final Ui.Dlg d = new Ui.Dlg(this, "记录类型", "按记录的来源类型筛选。数字是该类型的记录总数。");
+        final Ui.Dlg d = new Ui.Dlg(this, "记录类型",
+                "和首页的采集开关一一对应，默认选中的就是你采集时打开的开关。可以多选；数字是该类型的记录总数。");
         LinearLayout body = Ui.vertical(this);
         for (int i = 0; i < KINDS.length; i++) {
             final int idx = i;
-            Integer n = KIND_KEYS[i].isEmpty() ? Integer.valueOf(all.size()) : cnt.get(KIND_KEYS[i]);
-            body.addView(Ui.optionRow(this, KINDS[i], KIND_DESC[i], String.valueOf(n == null ? 0 : n), i == kindMode, v -> {
+            int n = 0;
+            for (String k : KIND_KEYS[i]) {
+                Integer c = cnt.get(k);
+                if (c != null) n += c;
+            }
+            body.addView(Ui.optionRow(this, KINDS[i], KIND_DESC[i], String.valueOf(n), kindSel[i], v -> {
                 d.dismiss();
-                kindMode = idx;
+                kindManual = true;
+                kindSel[idx] = !kindSel[idx];
                 updateChips();
                 applyFilter();
+                chooseKind(); // 多选：切换后重新打开，连续选几项再点「完成」
             }));
         }
-        d.body(body, true).button("取消", false, null).show();
+        d.body(body, true)
+                .button("按采集开关自动选", false, () -> {
+                    kindManual = false;
+                    applyDefaultKinds();
+                    updateChips();
+                    applyFilter();
+                })
+                .button("完成", true, null)
+                .show();
+    }
+
+    /** 默认选中的类型 = 采集时打开的开关（读首页保存的配置）。 */
+    private void applyDefaultKinds() {
+        RecConfig c = Actions.loadCfg(getSharedPreferences(Actions.PREFS, MODE_PRIVATE));
+        kindSel[0] = c.traceSet || c.traceDraw; // TextView 的文字：设置或绘制任一个打开都会产生
+        kindSel[1] = c.traceDraw;
+        kindSel[2] = c.traceIcons;
+        kindSel[3] = c.traceSetOnly;
+        kindSel[4] = c.traceState;
+        kindSel[5] = !c.traceMethods.trim().isEmpty();
+    }
+
+    private boolean anyKindSel() {
+        for (boolean b : kindSel) if (b) return true;
+        return false;
+    }
+
+    /** 这条记录的类型有没有被选中。一个都没选（所有开关都关着）时不过滤。 */
+    private boolean kindOk(String kind) {
+        if (!anyKindSel()) return true;
+        for (int i = 0; i < KIND_KEYS.length; i++) {
+            if (!kindSel[i]) continue;
+            for (String k : KIND_KEYS[i]) if (k.equals(kind)) return true;
+        }
+        return false;
+    }
+
+    /** 导出文件头 / 芯片上用的文字：选中的类型名，一个都没选写「全部」。 */
+    private String kindSummary() {
+        if (!anyKindSel()) return "全部";
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < KINDS.length; i++) {
+            if (kindSel[i]) sb.append(sb.length() > 0 ? "、" : "").append(KINDS[i]);
+        }
+        return sb.toString();
+    }
+
+    private String kindChipText() {
+        int n = 0;
+        for (boolean b : kindSel) if (b) n++;
+        return n <= 2 ? kindSummary() : n + " 类";
     }
 
     private void chooseSort() {
@@ -619,9 +681,11 @@ public class RecordsActivity extends Activity {
         ensureAgg();
         final java.util.HashMap<String, Integer> cnt = new java.util.HashMap<>();
         for (Snap.Item it : shown) {
-            String v = RecFormat.catOf(dim, it.o, scrW, scrH, reuseGroups, maxLast);
-            Integer n = cnt.get(v);
-            cnt.put(v, n == null ? 1 : n + 1);
+            String v0 = RecFormat.catOf(dim, it.o, scrW, scrH, reuseGroups, maxLast);
+            for (String v : (dim == 10 ? v0.split(",") : new String[]{v0})) { // 用途可以有几个，每个各算一次
+                Integer n = cnt.get(v);
+                cnt.put(v, n == null ? 1 : n + 1);
+            }
         }
         catVal[dim] = keep;
         applyFilter(); // 还原
@@ -677,7 +741,6 @@ public class RecordsActivity extends Activity {
         } else if (!q.isEmpty()) {
             terms = q.split("\\s+");
         }
-        String kindKey = KIND_KEYS[kindMode];
         int hidden = 0;
         StringBuilder hid = new StringBuilder();
         shown.clear();
@@ -686,15 +749,16 @@ public class RecordsActivity extends Activity {
         ensureAgg(); // 有缓存，all 没变时这一句基本免费
         int hiddenC = 0;
         for (Snap.Item it : all) {
-            if (common != null && common.contains(commonKey(it.o))) {
-                if (kindKey.isEmpty() || kindKey.equals(it.o.optString("kind"))) hiddenC++;
+            final String kind = it.o.optString("kind");
+            if (common != null && !"TRACE".equals(kind) && common.contains(commonKey(it.o))) { // 方法追踪不算公共控件
+                if (kindOk(kind)) hiddenC++;
                 continue;
             }
-            if (!kindKey.isEmpty() && !kindKey.equals(it.o.optString("kind"))) continue;
+            if (!kindOk(kind)) continue;
             if (!pageFilter.isEmpty() && !pageFilter.equals(RecFormat.pageOf(it.o))) continue;
             if (!catMatch(it.o)) continue;
-            // 选了“仅设置”类型就是要看它们（它们本来就不在屏幕上），不再套“只看屏幕上”
-            if (onlyOnScreen && !"TEXTSET".equals(kindKey) && "no".equals(it.o.optString("vis"))) {
+            // “没显示的文字”“清空文字”本来就不在屏幕上，不套“只看屏幕上”
+            if (onlyOnScreen && !"TEXTSET".equals(kind) && !"TEXTCLEAR".equals(kind) && "no".equals(it.o.optString("vis"))) {
                 hidden++;
                 if (hid.length() < 200) hid.append(" #").append(it.o.optInt("id"));
                 continue;
@@ -903,13 +967,65 @@ public class RecordsActivity extends Activity {
 
     // ------------------------------------------------------------ 菜单 / 帮助 / 清空
 
+    private long markerSeq = System.currentTimeMillis();
+
+    private void askMarker() {
+        LinearLayout body = Ui.vertical(this);
+        helpItem(body, "标记", "写下接下来要做的事，比如“开始划到下一个视频”“点进评论”。点“记下”后马上去做，时间线里这一笔之后的记录就属于这件事。");
+        final EditText et = Ui.field(this, "例如：划到下一个视频", true, false);
+        body.addView(et);
+        new Ui.Dlg(this, "打标记", null).keyboard()
+                .body(body, true)
+                .button("取消", false, null)
+                .button("记下", true, () -> sendMarker(et.getText().toString().trim().isEmpty() ? "（标记）" : et.getText().toString().trim()))
+                .show();
+    }
+
+    /** 经 root 把标记写进目标 App 的数据目录，目标进程监听到就记进时间线。 */
+    private void sendMarker(final String label) {
+        final long seq = ++markerSeq;
+        final List<String> pk = Actions.pkgs(getSharedPreferences(Actions.PREFS, MODE_PRIVATE));
+        new Thread(() -> {
+            StringBuilder sb = new StringBuilder();
+            for (String pkg : pk) {
+                if (!RootShell.validPkg(pkg)) continue;
+                RootShell.Result r = RootShell.pushMarker(pkg, seq, label);
+                sb.append(r.out.contains("__OK__") ? "✓ " : "✗ ").append(pkg).append(' ');
+            }
+            final String msg = label + "  " + sb;
+            runOnUiThread(() -> toast(msg));
+        }).start();
+    }
+
+    private void showTimeline() {
+        String t = Snap.timelineText;
+        if (t.isEmpty()) {
+            toast("还没有时间线（先刷新；确认首页「时间线」开关开着）");
+            return;
+        }
+        LinearLayout body = Ui.vertical(this);
+        TextView tv = Ui.tv(this, t, 11.5f, R.color.text, false);
+        tv.setTextIsSelectable(true);
+        tv.setTypeface(android.graphics.Typeface.MONOSPACE);
+        body.addView(tv);
+        new Ui.Dlg(this, "时间线", "导出的 txt / json 里也有这份").body(body, true).button("关闭", true, null).show();
+    }
+
     private void showMenu(View anchor) {
         PopupMenu pm = new PopupMenu(this, anchor);
         pm.getMenu().add(0, 1, 0, "这些筛选是什么意思");
         pm.getMenu().add(0, 3, 1, "粘贴命令…");
-        pm.getMenu().add(0, 2, 2, "清空所有记录…");
+        pm.getMenu().add(0, 4, 3, "打标记…（时间线上记一笔“现在开始做某某”）");
+        pm.getMenu().add(0, 5, 4, "基线：开始（什么都不操作）");
+        pm.getMenu().add(0, 6, 5, "基线：结束");
+        pm.getMenu().add(0, 7, 6, "查看时间线");
+        pm.getMenu().add(0, 2, 7, "清空所有记录…");
         pm.setOnMenuItemClickListener(item -> {
             if (item.getItemId() == 1) showHelp();
+            else if (item.getItemId() == 4) askMarker();
+            else if (item.getItemId() == 5) sendMarker("基线开始");
+            else if (item.getItemId() == 6) sendMarker("基线结束");
+            else if (item.getItemId() == 7) showTimeline();
             else if (item.getItemId() == 3) showCmd();
             else confirmClear();
             return true;
@@ -925,6 +1041,11 @@ public class RecordsActivity extends Activity {
     private static final String[] REUSE_CODES = {"local", "cross", "global"};
     private static final String[] SHAPE_CODES = {"empty", "duration", "number", "fixed", "dynamic"};
     private static final String[] FRESH_CODES = {"new", "recent", "old"};
+    private static final String[] PURPOSE_CODES = {"color", "hide", "text", "skip", "other"};
+    private static final String[] BASE_CODES = {"noise", "live", "unknown"};
+    private static final String[] TRIG_CODES = {"touch", "frame", "data", "msg", "sync", "none"};
+    /** 导出时只给这些编号的记录完整细节，其余一行摘要；空 = 全部完整 */
+    private final java.util.HashSet<Integer> fullIds = new java.util.HashSet<>();
 
     private void showCmd() {
         LinearLayout body = Ui.vertical(this);
@@ -972,7 +1093,8 @@ public class RecordsActivity extends Activity {
         etSearch.setText("");
         pageFilter = "";
         java.util.Arrays.fill(catVal, "");
-        kindMode = 0;
+        kindManual = false;
+        applyDefaultKinds();
         onlyOnScreen = false;
         hideCommon = false;
         java.util.ArrayList<String> words = new java.util.ArrayList<>();
@@ -1016,14 +1138,20 @@ public class RecordsActivity extends Activity {
                     ok = applyEnum(3, val, ZONE_CODES);
                     break;
                 case "kind": {
+                    kindManual = true;
                     if (val.equalsIgnoreCase("all")) {
-                        kindMode = 0;
+                        java.util.Arrays.fill(kindSel, true);
                     } else {
                         int idx = -1;
-                        for (int i = 1; i < KIND_KEYS.length; i++) {
-                            if (KIND_KEYS[i].equalsIgnoreCase(val)) { idx = i; break; }
+                        for (int i = 0; i < KIND_KEYS.length && idx < 0; i++) {
+                            for (String k : KIND_KEYS[i]) if (k.equalsIgnoreCase(val)) { idx = i; break; }
                         }
-                        if (idx < 0) ok = false; else kindMode = idx;
+                        if (idx < 0) {
+                            ok = false;
+                        } else {
+                            java.util.Arrays.fill(kindSel, false);
+                            kindSel[idx] = true;
+                        }
                     }
                     break;
                 }
@@ -1042,6 +1170,30 @@ public class RecordsActivity extends Activity {
                 case "fresh":
                     ok = applyEnum(9, val, FRESH_CODES);
                     break;
+                case "purpose":
+                    ok = applyEnum(10, val, PURPOSE_CODES);
+                    break;
+                case "baseline":
+                    ok = applyEnum(11, val, BASE_CODES);
+                    break;
+                case "trigger":
+                    ok = applyEnum(12, val, TRIG_CODES);
+                    break;
+                case "tag": {
+                    String r = resolveFree(13, val);
+                    if (r == null) ok = false; else catVal[13] = r;
+                    break;
+                }
+                case "full": {
+                    fullIds.clear();
+                    for (String x : val.split("[,;]")) {
+                        try {
+                            fullIds.add(Integer.parseInt(x.trim()));
+                        } catch (Throwable bad) {
+                        }
+                    }
+                    break;
+                }
                 case "onscreen":
                     onlyOnScreen = val.equals("1") || val.equalsIgnoreCase("true");
                     break;
@@ -1183,7 +1335,7 @@ public class RecordsActivity extends Activity {
                 .append("  共 ").append(written).append(" 条");
         if (skipped > 0) sb.append("（另有 ").append(skipped).append(" 条没有可用 hook，已略过）");
         sb.append('\n');
-        sb.append("筛选：类型=").append(KINDS[kindMode]).append("  页面=").append(pageFilter.isEmpty() ? "全部" : pageFilter)
+        sb.append("筛选：类型=").append(kindSummary()).append("  页面=").append(pageFilter.isEmpty() ? "全部" : pageFilter)
                 .append(catSummary().isEmpty() ? "" : "  分类=" + catSummary())
                 .append("  只看屏幕上=").append(onlyOnScreen ? "是" : "否");
         if (hideCommon) sb.append("  已隐藏公共控件=").append(hiddenCommon);
@@ -1208,7 +1360,7 @@ public class RecordsActivity extends Activity {
                 .append("td,th{border:1px solid #bbb;padding:4px;vertical-align:top}img{width:56px;height:56px;object-fit:contain;")
                 .append("background:#9e9e9e;margin-right:4px}.g{background:#e8eef7;font-weight:bold}code{font-size:11px;word-break:break-all}</style>");
         sb.append("<h3>TextRec 导出 ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
-                .append("　类型=").append(esc(KINDS[kindMode])).append("　页面=").append(esc(pageFilter.isEmpty() ? "全部" : pageFilter))
+                .append("　类型=").append(esc(kindSummary())).append("　页面=").append(esc(pageFilter.isEmpty() ? "全部" : pageFilter))
                 .append("　共 ").append(shown.size()).append(" 条</h3>");
         sb.append("<table><tr><th>#</th><th>图标</th><th>类型</th><th>文字 / 描述</th><th>View</th><th>设置位置</th><th>次数</th></tr>");
         String cur = null;
@@ -1255,7 +1407,7 @@ public class RecordsActivity extends Activity {
                 sb.append("（已隐藏 ").append(hiddenOff).append(" 条不在屏幕上的")
                         .append(hiddenOff > 0 ? "：" + hiddenIds.trim() : "").append("）");
             }
-            sb.append("  类型=").append(KINDS[kindMode]);
+            sb.append("  类型=").append(kindSummary());
             sb.append("  页面=").append(pageFilter.isEmpty() ? "全部" : pageFilter);
             if (!catSummary().isEmpty()) sb.append("  分类=").append(catSummary());
             if (hideCommon) sb.append("  已隐藏公共控件=").append(hiddenCommon);
@@ -1264,6 +1416,8 @@ public class RecordsActivity extends Activity {
             if (!qs.isEmpty()) sb.append("  搜索=「").append(qs).append("」");
             sb.append("  （全部记录 ").append(all.size()).append(" 条）\n");
             if (!infoBase.isEmpty()) sb.append(infoBase);
+            if (!Snap.timelineText.isEmpty()) sb.append("\n══ 时间线 ══\n").append(Snap.timelineText).append("══ 时间线结束 ══\n");
+            if (!fullIds.isEmpty()) sb.append("完整细节只给编号 ").append(fullIds).append(" 的记录，其余只有一行摘要（命令 full=编号,编号）\n");
             sb.append('\n');
             RecFormat.Dedup dd = new RecFormat.Dedup(); // 同一份栈 / 签名只完整写一次
             String curPage = null;
@@ -1272,6 +1426,10 @@ public class RecordsActivity extends Activity {
                 if (pageFilter.isEmpty() && !pg.equals(curPage)) {
                     curPage = pg;
                     sb.append("\n████ 页面：").append(pg).append("（").append(countPage(pg)).append(" 条）████\n\n");
+                }
+                if (!fullIds.isEmpty() && !fullIds.contains(it.o.optInt("id"))) {
+                    sb.append(RecFormat.oneLineSummary(it.o)).append('\n');
+                    continue;
                 }
                 sb.append(RecFormat.full(it, dd)).append("\n==========================================\n\n");
             }
@@ -1288,11 +1446,12 @@ public class RecordsActivity extends Activity {
                 JSONArray inf = new JSONArray();
                 for (String s : infoBase.split("\n")) if (!s.trim().isEmpty()) inf.put(s);
                 o.put("info", inf);
+                o.put("timelineText", Snap.timelineText);
                 JSONObject fo = new JSONObject();
                 fo.put("onlyOnScreen", onlyOnScreen);
                 fo.put("hiddenOffScreen", hiddenOff);
                 fo.put("hiddenIds", hiddenIds.trim());
-                fo.put("kind", KINDS[kindMode]);
+                fo.put("kind", kindSummary());
                 fo.put("page", pageFilter.isEmpty() ? "全部" : pageFilter);
                 fo.put("query", etSearch.getText().toString().trim());
                 fo.put("totalRecords", all.size());
