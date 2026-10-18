@@ -181,6 +181,7 @@ final class RecFormat {
             if (more > 0) sb.append("  … 另有 ").append(more).append(" 种未列出\n");
             sb.append("最近一次: 「").append(oneLine(r.optString("lastText"))).append("」\n");
         }
+        stateBlock(sb, r);
         JSONArray pa = r.optJSONArray("paints");
         if (pa != null && pa.length() > 0) {
             sb.append("画笔/参数（颜色、字号、描边或填充；Compose 文字带 paint 调用的参数）：\n");
@@ -331,6 +332,16 @@ final class RecFormat {
         sb.append("」");
         if (total > maxItems) sb.append(" 等").append(total).append("种");
         return sb.toString();
+    }
+
+    /** 方法追踪的状态快照：第一个数值参数的 last / min / max，以及 this 周围的字段值（最近一份）。 */
+    private static void stateBlock(StringBuilder sb, JSONObject r) {
+        String d = r.optString("stateDump");
+        String ar = r.optString("argRange");
+        if (d.isEmpty() && ar.isEmpty()) return;
+        sb.append("状态快照（this 周围的字段值，最近一份）");
+        if (!ar.isEmpty()) sb.append("   第一个数值参数 ").append(ar);
+        sb.append('\n').append(d.isEmpty() ? "  (空)\n" : d);
     }
 
     private static String clipTo(String s, int n) {
