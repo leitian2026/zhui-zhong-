@@ -13,7 +13,7 @@ final class RecFormat {
 
     static String time(long ms) {
         if (ms <= 0) return "-";
-        return new SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(new Date(ms));
+        return new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date(ms));
     }
 
     static String kindLabel(String kind) {
@@ -23,6 +23,7 @@ final class RecFormat {
         if ("ICON".equals(kind)) return "图标";
         if ("TRACE".equals(kind)) return "方法追踪";
         if ("TEXTSET".equals(kind)) return "仅设置";
+        if ("TEXTCLEAR".equals(kind)) return "清空文字";
         if ("STATE".equals(kind)) return "状态变化";
         return kind;
     }
@@ -91,6 +92,9 @@ final class RecFormat {
         } else if ("ICON".equals(kind)) {
             sb.append("设置 ").append(r.optInt("drawCount")).append(" 次 / 该设置位置共调用 ").append(r.optInt("setCount"))
                     .append(" 次(可能含同一代码设置的其他控件)");
+        } else if ("TEXTCLEAR".equals(kind)) {
+            sb.append("清空 ").append(r.optInt("drawCount")).append(" 次（setText 空串 / null）/ 该设置位置共调用 ")
+                    .append(r.optInt("setCount")).append(" 次(可能含同一代码设置的其他控件)");
         } else if ("TEXTSET".equals(kind)) {
             sb.append("绘制 0 次（从未绘制）/ 该设置位置共调用 ").append(r.optInt("setCount"))
                     .append(" 次(可能含同一代码设置的其他控件)");
@@ -181,24 +185,10 @@ final class RecFormat {
             if (more > 0) sb.append("  … 另有 ").append(more).append(" 种未列出\n");
             sb.append("最近一次: 「").append(oneLine(r.optString("lastText"))).append("」\n");
         }
-        JSONArray ct = r.optJSONArray("callTimes");
-        if ("TRACE".equals(kind) && ct != null && ct.length() > 0) {
-            int from = Math.max(0, ct.length() - 16);
-            sb.append("调用时刻（最近 ").append(ct.length() - from).append(" 次，时:分:秒.毫秒）：\n");
-            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("HH:mm:ss.SSS", Locale.US);
-            for (int i = from; i < ct.length(); i++) {
-                String e = ct.optString(i);
-                int bar = e.indexOf('|');
-                long ms = 0;
-                try {
-                    ms = Long.parseLong(bar < 0 ? e : e.substring(0, bar));
-                } catch (Throwable ignored) {
-                }
-                String tx = bar < 0 ? "" : e.substring(bar + 1);
-                sb.append("  ").append(f.format(new Date(ms))).append(tx.isEmpty() ? "" : "  " + oneLine(tx)).append('\n');
-            }
-        }
         stateBlock(sb, r);
+        metaBlock(sb, r);
+        String chain = r.optString("chain");
+        if (!chain.isEmpty()) sb.append("链路追踪（上游 → 下游，最近一次采样）\n").append(chain);
         JSONArray pa = r.optJSONArray("paints");
         if (pa != null && pa.length() > 0) {
             sb.append("画笔/参数（颜色、字号、描边或填充；Compose 文字带 paint 调用的参数）：\n");
@@ -301,7 +291,7 @@ final class RecFormat {
         String view = r.optString("view");
         String vid = r.optString("viewId");
         String flt = "按 View 类 " + simple(view) + (vid.isEmpty() ? "" : "、id " + vid) + " 过滤";
-        if ("TEXTVIEW".equals(kind) || "TEXTSET".equals(kind)) {
+        if ("TEXTVIEW".equals(kind) || "TEXTSET".equals(kind) || "TEXTCLEAR".equals(kind)) {
             sb.append("备选[设置侧·系统方法，不会被混淆] android.widget.TextView#setText(java.lang.CharSequence,")
                     .append("android.widget.TextView$BufferType,boolean,int)   ").append(flt).append('\n');
         } else if ("STATE".equals(kind)) {
@@ -349,6 +339,75 @@ final class RecFormat {
         sb.append("」");
         if (total > maxItems) sb.append(" 等").append(total).append("种");
         return sb.toString();
+    }
+
+    /** 一行摘要：导出时没被选中要完整细节的记录只写这一行。 */
+    static String oneLineSummary(JSONObject r) {
+        String vid = r.optString("viewId");
+        return "#" + r.optInt("id") + " " + kindLabel(r.optString("kind")) + " " + simple(r.optString("view"))
+                + (vid.isEmpty() ? "" : "#" + vid) + "  次数 " + Math.max(r.optInt("drawCount"), r.optInt("setCount"))
+                + "  用途 " + purposeText(purposeOf(r)) + "  触发 " + catLabel(12, triggerOf(r))
+                + "  「" + clipTo(oneLine(r.optString("lastText")), 40) + "」  页面 " + pageOf(r);
+    }
+
+    private static String purposeText(String codes) {
+        StringBuilder sb = new StringBuilder();
+        for (String c : codes.split(",")) {
+            if (c.isEmpty()) continue;
+            String l = catLabel(10, c);
+            int i = l.indexOf('（');
+            sb.append(sb.length() > 0 ? " / " : "").append(i > 0 ? l.substring(0, i) : l);
+        }
+        return sb.toString();
+    }
+
+    /** 用途 / 触发 / 时间与间隔 / 基线 / 标识 / 对象 / 钩点 / 栈上各层。 */
+    private static void metaBlock(StringBuilder sb, JSONObject r) {
+        sb.append("用途: ").append(purposeText(purposeOf(r))).append("   触发: ").append(catLabel(12, triggerOf(r))).append('\n');
+        long fm = r.optLong("firstMono"), lm = r.optLong("lastMono");
+        if (lm > 0) {
+            sb.append("时间(单调时钟，相对目标进程开始记录，毫秒): 首次 ").append(fm).append("  最近 ").append(lm);
+            if (r.has("minGap")) {
+                sb.append("   相邻两次间隔 最短 ").append(r.optLong("minGap")).append("ms 最长 ").append(r.optLong("maxGap")).append("ms");
+                int n = Math.max(r.optInt("drawCount"), r.optInt("setCount"));
+                if (n > 1 && lm > fm) sb.append("  约 ").append(String.format(java.util.Locale.US, "%.1f", (n - 1) * 1000.0 / (lm - fm))).append(" 次/秒");
+            }
+            sb.append('\n');
+        }
+        String bl = r.optString("baseline");
+        if ("noise".equals(bl)) sb.append("基线: 安静基线期间也被调用 ").append(r.optInt("baseHits")).append(" 次（周期性噪声，找“操作才触发”的位置时可排除）\n");
+        else if ("live".equals(bl)) sb.append("基线: 基线期间没出现，操作 / 播放时才触发（共 ").append(r.optInt("liveHits")).append(" 次）\n");
+        JSONArray tg = r.optJSONArray("tags");
+        if (tg != null && tg.length() > 0) {
+            sb.append("出现时的当前标识: ");
+            for (int i = 0; i < tg.length(); i++) sb.append(i > 0 ? "  |  " : "").append(tg.optString(i));
+            sb.append('\n');
+        }
+        JSONArray ob = r.optJSONArray("objs");
+        if (ob != null && ob.length() > 0) {
+            sb.append("对象身份(this 的 identityHashCode): ");
+            for (int i = 0; i < ob.length(); i++) sb.append(i > 0 ? " " : "").append(ob.optString(i));
+            int om = r.optInt("objsMore");
+            sb.append(ob.length() == 1 && om == 0 ? "   → 每次都是同一个对象" : om > 0 ? "   → 多个不同对象（超出 8 个后另有 ≥" + om + " 次新对象，多半是列表项 / 每次新建）" : "   → " + ob.length() + " 个不同对象");
+            sb.append('\n');
+        }
+        String hi = r.optString("hookInfo");
+        if (!hi.isEmpty()) sb.append("钩点信息: ").append(hi).append('\n');
+        JSONArray fa = r.optJSONArray("frames");
+        if (fa != null && fa.length() > 0) {
+            int total = r.optInt("frameSamples");
+            sb.append("栈上各层出现次数（共 ").append(total).append(" 份采样栈；每份都出现 = 每次调用都经过的稳定层；这是采样栈里的出现次数，不是真实调用次数）：\n");
+            int shown = 0;
+            for (int i = 0; i < fa.length() && shown < 40; i++) {
+                JSONObject fo = fa.optJSONObject(i);
+                if (fo == null) continue;
+                int n = fo.optInt("n");
+                sb.append("  ").append(n >= total ? "✔每次 " : "  " + n + "/" + total + " ").append(fo.optString("f")).append('\n');
+                shown++;
+            }
+            if (fa.length() > shown) sb.append("  … 另有 ").append(fa.length() - shown).append(" 层未列出\n");
+            if (r.optInt("frameOverflow") > 0) sb.append("  ⚠ 栈层种类超过 80 个，另有 ").append(r.optInt("frameOverflow")).append(" 次出现没计入\n");
+        }
     }
 
     /** 方法追踪的状态快照：第一个数值参数的 last / min / max，以及 this 周围的字段值（最近一份）。 */
@@ -458,14 +517,15 @@ final class RecFormat {
         if (!LEAN) return header(it) + "\n" + setColumn(it, dd) + "\n" + drawColumn(it, dd);
         // 精简：文字 / 图标 / 状态变化都有“设置栈”，绘制栈是 onDraw 的噪声，不写；自绘、Compose、方法追踪没有设置栈，绘制栈照写
         String k = it.o.optString("kind");
-        boolean skipDraw = "TEXTVIEW".equals(k) || "ICON".equals(k) || "STATE".equals(k) || "TEXTSET".equals(k);
+        boolean skipDraw = "TEXTVIEW".equals(k) || "ICON".equals(k) || "STATE".equals(k) || "TEXTSET".equals(k) || "TEXTCLEAR".equals(k);
         return header(it) + "\n" + setColumn(it, dd) + (skipDraw ? "" : "\n" + drawColumn(it, dd));
     }
 
     // ------------------------------------------------------------ 分类（几万条记录里快速定位）
 
     static final String[] CAT_DIMS = {"所属容器", "代码模块", "控件类", "屏幕位置",
-            "记录类型", "hook可靠度", "调用频次", "复用范围", "内容形态", "新鲜度"};
+            "记录类型", "hook可靠度", "调用频次", "复用范围", "内容形态", "新鲜度",
+            "用途", "基线", "触发原因", "视频/标识"};
 
     private static boolean genericClass(String cn) {
         if (cn.startsWith("android.") || cn.startsWith("androidx.constraintlayout.") || cn.startsWith("androidx.recyclerview.")
@@ -696,8 +756,31 @@ final class RecFormat {
                     case "old": return "历史记录";
                     default: return "无时间";
                 }
+            case 10:
+                switch (code) {
+                    case "color": return "改色";
+                    case "hide": return "隐藏 / 显示";
+                    case "text": return "换文字";
+                    case "skip": return "跳过 / 通用方法（方法追踪）";
+                    default: return "其他（图标等）";
+                }
+            case 11:
+                switch (code) {
+                    case "noise": return "基线里也在调用（周期性噪声）";
+                    case "live": return "基线里没出现（操作才触发）";
+                    default: return "没录基线";
+                }
+            case 12:
+                switch (code) {
+                    case "touch": return "用户操作";
+                    case "frame": return "帧回调 / 绘制";
+                    case "data": return "数据变化（LiveData 等）";
+                    case "msg": return "消息 / 异步任务";
+                    case "sync": return "同步调用";
+                    default: return "没有栈";
+                }
             default:
-                return code; // 容器 / 代码模块 / 控件类本身就是可读的类名、包名
+                return code; // 容器 / 代码模块 / 控件类 / 标识本身就是可读的
         }
     }
 
@@ -724,9 +807,88 @@ final class RecFormat {
                 return reuseOf(r, reuseGroups);
             case 8:
                 return shapeOf(r);
-            default:
+            case 9:
                 return freshnessOf(r, maxLast);
+            case 10:
+                return purposeOf(r);
+            case 11:
+                return r.optString("baseline", "unknown");
+            case 12:
+                return triggerOf(r);
+            default: {
+                String t = r.optString("lastTag");
+                return t.isEmpty() ? "(无标识)" : t;
+            }
         }
+    }
+
+    /** 用途可以同时有几个，用逗号连起来；筛选时按“包含”判断。 */
+    static boolean catHas(int dim, String val, String want) {
+        if (dim != 10) return val.equals(want);
+        for (String x : val.split(",")) if (x.equals(want)) return true;
+        return false;
+    }
+
+    /**
+     * 这条记录能拿来做什么：color 改色 / hide 隐藏显示 / text 换文字 / skip 跳过（方法追踪都可作候选）/ other 其他。
+     * 只是按记录类型和方法名、返回类型给的提示，不是保证。
+     */
+    static String purposeOf(JSONObject r) {
+        String kind = r.optString("kind");
+        java.util.LinkedHashSet<String> out = new java.util.LinkedHashSet<>();
+        switch (kind) {
+            case "STATE":
+                out.add("hide");
+                break;
+            case "ICON":
+                out.add("other");
+                break;
+            case "TRACE": {
+                out.add("skip");
+                String mn = r.optString("viewId").toLowerCase(java.util.Locale.ROOT);
+                String ret = r.optString("ret");
+                if (mn.matches(".*(visib|show|hide|gone|alpha|display|dismiss|remove|attach).*")) out.add("hide");
+                if (mn.matches(".*(color|paint|tint|style|theme).*")) out.add("color");
+                if (ret.equals("java.lang.String") || ret.equals("java.lang.CharSequence")) out.add("text");
+                break;
+            }
+            default: // TEXTVIEW / TEXTCLEAR / TEXTSET / CANVAS / COMPOSE
+                out.add("text");
+                JSONArray pa = r.optJSONArray("paints");
+                if (!r.optString("textColor").isEmpty() || (pa != null && pa.length() > 0)) out.add("color");
+        }
+        StringBuilder sb = new StringBuilder();
+        for (String x : out) sb.append(sb.length() > 0 ? "," : "").append(x);
+        return sb.toString();
+    }
+
+    /** 这条记录是被什么触发的（从栈上判断）：touch 用户操作 / frame 帧回调·绘制 / data LiveData·观察者 / msg 消息·异步任务 / sync 同步调用 / none 没栈。 */
+    static String triggerOf(JSONObject r) {
+        String[] keys = {"setStack", "drawStack"};
+        boolean any = false, frame = false, touch = false, data = false, msg = false;
+        for (String k : keys) {
+            JSONObject st = r.optJSONObject(k);
+            JSONArray fr = st == null ? null : st.optJSONArray("frames");
+            if (fr == null) continue;
+            for (int i = 0; i < fr.length(); i++) {
+                String f = fr.optString(i);
+                any = true;
+                if (f.contains("dispatchTouchEvent") || f.contains("performClick") || f.contains("onTouchEvent")
+                        || f.contains("onClick(") || f.contains("dispatchKeyEvent")) touch = true;
+                else if (f.contains("Choreographer") || f.contains("performTraversals") || f.contains("doFrame")) frame = true;
+                else if (f.contains("LiveData") || f.contains("considerNotify") || f.contains("dispatchingValue")) data = true;
+                else if (f.contains("Handler.dispatchMessage") || f.contains("Handler.handleCallback")
+                        || f.contains("ThreadPoolExecutor") || f.contains("$$ExternalSyntheticLambda")) msg = true;
+            }
+        }
+        JSONArray fa = r.optJSONArray("frames");
+        if (fa != null) any = true;
+        if (!any) return "none";
+        if (touch) return "touch";
+        if (frame) return "frame";
+        if (data) return "data";
+        if (msg) return "msg";
+        return "sync";
     }
 
     // ------------------------------------------------------------ hook 清单（给接入模块用）
