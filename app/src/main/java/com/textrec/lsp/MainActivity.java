@@ -22,7 +22,7 @@ public class MainActivity extends Activity {
     private Switch swEnabled, swRegex, swSet, swDraw, swColor, swIcons, swAuto, swSetOnly, swState;
     // 采集过滤：开关 / 分段选择
     private Ui.Seg segWindow, segThread;
-    private Switch swWindowAll, swInfra, swClock, swQuiet;
+    private Switch swWindowAll, swInfra, swClock, swQuiet, swDump;
     private static final int[] WINDOW_MS = {0, 1500, 3000, 5000};
     // 手写的过滤条件（可选，放在「高级」里）
     private EditText etThread, etPageF, etViewF, etExclude, etValue;
@@ -310,6 +310,10 @@ public class MainActivity extends Activity {
         Ui.Sw qt = Ui.switchRow(this, "压低高频方法", "同一位置调用超过 50 次且持续超过 3 秒后只计数、不再抓栈，进度条刷新之类就不会淹没记录（只对方法追踪生效）");
         swQuiet = qt.sw;
         card.addView(qt.row);
+        card.addView(Ui.divider(this));
+        Ui.Sw dp = Ui.switchRow(this, "记录对象字段值", "方法追踪时，每隔 25 次调用把被追踪对象（this）周围的字段值记一份：沿字段往下 4 层，列出数值 / 文字和 LiveData 里的值，并统计第一个数值参数的最小 / 最大值（把进度条拖到两端就能看出满量程）。找进度、总时长存在哪时用，用完关掉（只对方法追踪生效）");
+        swDump = dp.sw;
+        card.addView(dp.row);
         root.addView(card);
     }
 
@@ -527,6 +531,7 @@ public class MainActivity extends Activity {
         segThread.select(Math.max(0, Math.min(2, c.threadMode)));
         swClock.setChecked(c.valueClock);
         swQuiet.setChecked(c.quietCount > 0);
+        swDump.setChecked(c.traceDump);
         etThread.setText(c.threadFilter);
         etPageF.setText(c.pageFilter);
         etViewF.setText(c.viewFilter);
@@ -569,6 +574,7 @@ public class MainActivity extends Activity {
         c.excludeList = etExclude.getText().toString();
         c.valueFilter = etValue.getText().toString();
         c.quietCount = swQuiet.isChecked() ? 50 : 0;
+        c.traceDump = swDump.isChecked();
         c.quietSpanMs = 3000;
         c.keywordMode = segRange.sel == 1;
         c.keywords = etKeywords.getText().toString();
