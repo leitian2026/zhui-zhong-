@@ -20,6 +20,9 @@ public final class TraceConfig {
     public String classes = "";
     public int stackDepth = 20;
     public int maxPerMethod = 100;
+    /** 类追踪时，每隔 dumpEvery 次调用，把 this 对象周围的字段值（含 LiveData 里的值）记一份；同时统计第一个数值参数的最小 / 最大值。 */
+    public boolean dumpFields = false;
+    public int dumpEvery = 25;
 
     private volatile List<String> kwCache, cfCache, clsCache;
 
@@ -67,6 +70,8 @@ public final class TraceConfig {
             p.setProperty("classes", classes);
             p.setProperty("stackDepth", String.valueOf(stackDepth));
             p.setProperty("maxPerMethod", String.valueOf(maxPerMethod));
+            p.setProperty("dumpFields", String.valueOf(dumpFields));
+            p.setProperty("dumpEvery", String.valueOf(dumpEvery));
             ByteArrayOutputStream bo = new ByteArrayOutputStream();
             p.store(bo, null);
             // Properties.store 输出纯 ASCII（非 ASCII 会转成 \\uXXXX），换行也被转义，可安全放进 shell heredoc
@@ -109,6 +114,8 @@ public final class TraceConfig {
         c.classes = p.getProperty("classes", c.classes);
         c.stackDepth = clamp(num(p, "stackDepth", c.stackDepth), 1, 60);
         c.maxPerMethod = clamp(num(p, "maxPerMethod", c.maxPerMethod), 1, 5000);
+        c.dumpFields = bool(p, "dumpFields", c.dumpFields);
+        c.dumpEvery = clamp(num(p, "dumpEvery", c.dumpEvery), 1, 1000);
     }
 
     private static boolean bool(Properties p, String k, boolean d) {
