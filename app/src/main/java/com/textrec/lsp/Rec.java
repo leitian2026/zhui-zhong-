@@ -79,19 +79,6 @@ final class Rec {
     volatile float posX = Float.NaN;
     volatile float posY = Float.NaN;
 
-    /** 方法追踪的状态快照（RecConfig.traceDump）：最近一份 this 周围的字段值，加第一个数值参数的 last / min / max */
-    volatile String stateDump;
-    volatile int dumpN;
-    volatile boolean hasArg;
-    volatile long argLast, argMin = Long.MAX_VALUE, argMax = Long.MIN_VALUE;
-
-    void noteArg(long v) {
-        argLast = v;
-        if (v < argMin) argMin = v;
-        if (v > argMax) argMax = v;
-        hasArg = true;
-    }
-
     /** 这个位置上出现过的不同文字（按“文字形状”去重，数字折叠，所以时长只占一项），最多 40 种。 */
     private static final int MAX_SAMPLES = 40;
     private final LinkedHashMap<Long, String> samples = new LinkedHashMap<>();
