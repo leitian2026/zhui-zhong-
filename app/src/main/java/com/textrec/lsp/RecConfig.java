@@ -23,7 +23,7 @@ public final class RecConfig {
     public boolean keywordMode = false;
     public String keywords = "";
     public boolean regex = false;
-    /** 只记方法追踪：文字 / 图标 / 颜色 / 状态变化全部不记，记录里只有「方法追踪」填的那些方法。读配置时会把其他记录项强制关掉。 */
+    /** 已废弃：不再有任何作用（旧配置里的这个键会被忽略）。想只记方法追踪，把文字 / 图标 / 颜色 / 状态这几个记录开关都关掉即可。 */
     public boolean traceOnly = false;
     public boolean traceSet = true;
     public boolean traceDraw = true;
@@ -278,15 +278,6 @@ public final class RecConfig {
         c.traceSetOnly = bool(p, "traceSetOnly", c.traceSetOnly);
         c.traceState = bool(p, "traceState", c.traceState);
         c.traceOnly = bool(p, "traceOnly", c.traceOnly);
-        if (c.traceOnly) { // 只记方法追踪：其余记录项一律关掉（目标 App 里的各个 Hook 本来就按这些开关早退）
-            c.traceSet = false;
-            c.traceDraw = false;
-            c.traceColor = false;
-            c.traceIcons = false;
-            c.autoParams = false;
-            c.traceSetOnly = false;
-            c.traceState = false;
-        }
         c.maxSetOnly = clamp(num(p, "maxSetOnly", c.maxSetOnly), 10, 5000);
         c.traceMethods = p.getProperty("traceMethods", c.traceMethods);
         c.windowMs = clamp(num(p, "windowMs", c.windowMs), 0, 600000);
