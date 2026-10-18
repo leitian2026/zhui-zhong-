@@ -92,7 +92,8 @@ final class Snap {
                 .append(r.optString("activity")).append('\n')
                 .append(r.optString("page")).append('\n')
                 .append(r.optString("firstText")).append('\n')
-                .append(r.optString("lastText")).append('\n');
+                .append(r.optString("lastText")).append('\n')
+                .append(r.optString("stateDump")).append('\n');
         JSONArray ps = r.optJSONArray("parents");
         if (ps != null) for (int i = 0; i < ps.length(); i++) sb.append(ps.optString(i)).append('\n');
         JSONArray ts = r.optJSONArray("texts");
