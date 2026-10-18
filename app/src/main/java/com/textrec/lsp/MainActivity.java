@@ -214,7 +214,7 @@ public class MainActivity extends Activity {
         swSetOnly = s.sw;
         card.addView(s.row);
         card.addView(Ui.divider(this));
-        s = Ui.switchRow(this, "状态变化", "记下透明度 / 可见性 / 选中态的变化，用来研究“选中”效果是怎么实现的");
+        s = Ui.switchRow(this, "状态变化", "记下透明度 / 可见性 / 选中态的变化，用来研究“选中”效果是怎么实现的。默认只记已经记过文字或图标的控件；在「高级」里填了「控件包含」，匹配的任何控件都记");
         swState = s.sw;
         card.addView(s.row);
         root.addView(card);
