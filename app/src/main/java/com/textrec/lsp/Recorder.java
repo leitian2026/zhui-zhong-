@@ -692,7 +692,8 @@ final class Recorder {
         if (!c.enabled || !c.traceState) return;
         if (!(p.thisObject instanceof View) || p.args == null || p.args.length < 1) return;
         View v = (View) p.thisObject;
-        if (!isTracked(v)) return;
+        // 默认只记“已经记过文字 / 图标”的控件；在「高级」里填了「控件包含」时，匹配的任何控件都记（不再依赖文字 / 图标开关）
+        if (!isTracked(v) && !gate.hasViews) return;
         if (!allowAll(v)) return;
         String m = p.method.getName();
         Object a0 = p.args[0];
