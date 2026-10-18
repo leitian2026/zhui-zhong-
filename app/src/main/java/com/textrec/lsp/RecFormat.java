@@ -13,7 +13,7 @@ final class RecFormat {
 
     static String time(long ms) {
         if (ms <= 0) return "-";
-        return new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date(ms));
+        return new SimpleDateFormat("HH:mm:ss.SSS", Locale.US).format(new Date(ms));
     }
 
     static String kindLabel(String kind) {
@@ -180,6 +180,23 @@ final class RecFormat {
             for (int i = 0; i < n; i++) sb.append("  · ").append(oneLine(ts.optString(i))).append('\n');
             if (more > 0) sb.append("  … 另有 ").append(more).append(" 种未列出\n");
             sb.append("最近一次: 「").append(oneLine(r.optString("lastText"))).append("」\n");
+        }
+        JSONArray ct = r.optJSONArray("callTimes");
+        if ("TRACE".equals(kind) && ct != null && ct.length() > 0) {
+            int from = Math.max(0, ct.length() - 16);
+            sb.append("调用时刻（最近 ").append(ct.length() - from).append(" 次，时:分:秒.毫秒）：\n");
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("HH:mm:ss.SSS", Locale.US);
+            for (int i = from; i < ct.length(); i++) {
+                String e = ct.optString(i);
+                int bar = e.indexOf('|');
+                long ms = 0;
+                try {
+                    ms = Long.parseLong(bar < 0 ? e : e.substring(0, bar));
+                } catch (Throwable ignored) {
+                }
+                String tx = bar < 0 ? "" : e.substring(bar + 1);
+                sb.append("  ").append(f.format(new Date(ms))).append(tx.isEmpty() ? "" : "  " + oneLine(tx)).append('\n');
+            }
         }
         stateBlock(sb, r);
         JSONArray pa = r.optJSONArray("paints");
