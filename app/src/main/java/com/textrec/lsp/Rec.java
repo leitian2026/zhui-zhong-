@@ -104,7 +104,7 @@ final class Rec {
             if (g > maxGap) maxGap = g;
         }
         lastMono = now;
-        if (Timeline.baseline) baseHits++;
+        if (Timeline.inBaseline()) baseHits++;
         else liveHits++;
         String t = Timeline.tag;
         if (!t.equals(lastTag)) {
