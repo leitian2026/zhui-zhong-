@@ -51,7 +51,8 @@ public class GuideService extends Service {
                     + "暂停|点一下视频暂停，停 3 秒||\n"
                     + "继续播放|再点一下继续播放||\n"
                     + "拖进度条回退|按住进度条往左拖一段再松手||\n"
-                    + "进评论再返回|点评论图标，等评论出来，再按返回||\n";
+                    + "进评论再返回|点评论图标，等评论出来，再按返回||\n"
+                    + "弹幕密集 40 秒|进弹幕密集的直播间 / 视频，别操作，让弹幕自己滚 40 秒|40\n";
 
     static final class Task {
         final String name, hint;
@@ -107,7 +108,10 @@ public class GuideService extends Service {
     private View root;
     private WindowManager.LayoutParams lp;
     private TextView tvStep, tvTitle, tvHint, tvTimer;
-    private LinearLayout rowRun, rowReady;
+    private LinearLayout rowRun, rowReady, rowDone, rowPaused;
+    private TextView btnPause, btnNext;
+    private volatile int token;
+    private boolean paused;
     private boolean ready;
     private boolean checking, failed;
     private TextView tvWarn;
@@ -232,7 +236,7 @@ public class GuideService extends Service {
         row.addView(btn("◀ 上一件", v -> {
             if (!checking) go(idx - 1, "任务上一件", true);
         }), bl);
-        row.addView(btn("▶ 下一件", v -> next()), bl);
+        row.addView(btn("▶ 提前结束", v -> next()), bl);
         rowRun = row;
         box.addView(row);
 
@@ -243,6 +247,28 @@ public class GuideService extends Service {
         row2.addView(btn("▶ 开始", v -> startRun()), bl);
         rowReady = row2;
         box.addView(row2);
+
+        // 任务自动结束且记录到了：重做 / 暂停记录 / 下一件
+        LinearLayout row4 = new LinearLayout(this);
+        row4.setOrientation(LinearLayout.HORIZONTAL);
+        row4.addView(btn("✕ 关闭", v -> closeAll(true)), bl);
+        row4.addView(btn("↺ 重做", v -> redo()), bl);
+        btnPause = btn("⏸ 暂停记录", v -> pauseRec());
+        row4.addView(btnPause, bl);
+        btnNext = btn("▶ 下一件", v -> nextTask());
+        row4.addView(btnNext, bl);
+        row4.setVisibility(View.GONE);
+        rowDone = row4;
+        box.addView(row4);
+
+        // 暂停记录中：目标 App 什么都不记，翻到相关界面再点开始记录
+        LinearLayout row5 = new LinearLayout(this);
+        row5.setOrientation(LinearLayout.HORIZONTAL);
+        row5.addView(btn("✕ 关闭", v -> closeAll(true)), bl);
+        row5.addView(btn("▶ 开始记录", v -> resumeRec()), bl);
+        row5.setVisibility(View.GONE);
+        rowPaused = row5;
+        box.addView(row5);
 
         // 检查没通过：复制原因（发给 Claude）/ 重做 / 忽略继续 / 关闭
         LinearLayout row3 = new LinearLayout(this);
@@ -359,6 +385,7 @@ public class GuideService extends Service {
     }
 
     private void stopTimer() {
+        token++;
         ui.removeCallbacksAndMessages(null);
         if (baseRunning) {
             baseRunning = false;
@@ -412,7 +439,10 @@ public class GuideService extends Service {
         tvWarn.setVisibility(View.GONE);
         rowErr.setVisibility(View.GONE);
         rowReady.setVisibility(View.GONE);
+        rowDone.setVisibility(View.GONE);
+        rowPaused.setVisibility(View.GONE);
         rowRun.setVisibility(View.VISIBLE);
+        tvTimer.setTextColor(0xFFFFC857);
         // 重做时已经发过“任务重做”，不再重复发“任务开始”
         if (!redoFlag) marker("任务开始 " + (idx + 1) + " " + t.name);
         redoFlag = false;
@@ -422,7 +452,112 @@ public class GuideService extends Service {
             baseRunning = true;
             remain = t.secs;
             tickDown();
+        } else {
+            runTick0 = System.currentTimeMillis();
+            runTick();
         }
+        startWatch();
+    }
+
+    private long runTick0;
+
+    private void runTick() {
+        if (idx < 0 || idx >= tasks.size() || tasks.get(idx).baseline || finished || checking || failed) return;
+        tvTimer.setText("记录中 " + ((System.currentTimeMillis() - runTick0) / 1000) + " 秒");
+        ui.postDelayed(this::runTick, 1000);
+    }
+
+    /** 每 3.5 秒读一次目标进程快照：这件事记到东西了并且安静下来 / 到点了，就自动结束；一直没记到就自动写出原因。 */
+    private void startWatch() {
+        final int tk = ++token;
+        final int n = idx + 1;
+        final Task t = tasks.get(idx);
+        final long t0 = System.currentTimeMillis();
+        final long limitNo = t.secs > 0 ? (t.secs + 10) * 1000L : 25000L;
+        Thread th = new Thread(() -> {
+            int lastEntries = -1, quiet = 0;
+            while (true) {
+                try {
+                    Thread.sleep(3500);
+                } catch (InterruptedException e) {
+                    return;
+                }
+                if (tk != token) return;
+                if (t.baseline && baseRunning) continue;
+                final long el = System.currentTimeMillis() - t0;
+                final Check c = evaluate(n, t);
+                if (tk != token) return;
+                boolean done = false;
+                if (c.ok) {
+                    if (t.baseline) done = true;
+                    else if (t.secs > 0) done = el >= t.secs * 1000L;
+                    else {
+                        if (c.entries == lastEntries) quiet++;
+                        else quiet = 0;
+                        lastEntries = c.entries;
+                        done = (quiet >= 2 && el >= 6000) || el >= 90000;
+                    }
+                } else if (el >= limitNo) {
+                    done = true;
+                }
+                if (done) {
+                    ui.post(() -> autoEnd(tk, n, t, c));
+                    return;
+                }
+            }
+        });
+        th.setDaemon(true);
+        th.start();
+    }
+
+    private void autoEnd(int tk, int n, Task t, Check c) {
+        if (tk != token || root == null || finished || idx != n - 1 || checking) return;
+        stopTimer();
+        marker("任务结束 " + n + " " + t.name + "（自动）");
+        afterCheck(c);
+    }
+
+    private void showDone(String info) {
+        failed = false;
+        tvWarn.setVisibility(View.GONE);
+        rowRun.setVisibility(View.GONE);
+        rowErr.setVisibility(View.GONE);
+        rowPaused.setVisibility(View.GONE);
+        rowDone.setVisibility(View.VISIBLE);
+        boolean last = idx >= tasks.size() - 1;
+        btnPause.setVisibility(last ? View.GONE : View.VISIBLE);
+        btnNext.setText(last ? "▶ 完成" : "▶ 下一件");
+        tvStep.setText((idx + 1) + " / " + tasks.size() + "    按住这里可拖动");
+        tvTimer.setTextColor(0xFF7EE787);
+        tvTimer.setText("已记录完成 ✓");
+        tvHint.setText(info + (last ? "" : "\n下一件要翻好几个界面？点「暂停记录」，到了再点「开始记录」；不用翻就直接点「下一件」。"));
+        buzz();
+    }
+
+    private void nextTask() {
+        if (finished || idx < 0) return;
+        go(idx + 1, "任务开始", false);
+    }
+
+    private void pauseRec() {
+        if (finished || idx < 0 || idx >= tasks.size() - 1) return;
+        paused = true;
+        marker("记录暂停（第 " + (idx + 1) + " 件之后，等翻到下一件相关界面）");
+        rowDone.setVisibility(View.GONE);
+        rowPaused.setVisibility(View.VISIBLE);
+        Task nx = tasks.get(idx + 1);
+        tvStep.setText("已暂停记录    按住这里可拖动");
+        tvTimer.setTextColor(0xFFFFC857);
+        tvTimer.setText("暂停中，不记录");
+        tvTitle.setText("下一件：" + nx.name);
+        tvHint.setText(nx.hint + "\n翻到相关界面后点「开始记录」，这时才开始记。");
+    }
+
+    private void resumeRec() {
+        if (!paused) return;
+        paused = false;
+        marker("记录继续");
+        go(idx + 1, "任务开始", false);
     }
 
     private boolean redoFlag;
@@ -433,6 +568,8 @@ public class GuideService extends Service {
         boolean ok;
         String summary = "";
         String full = "";
+        int entries;
+        String okText = "";
     }
 
     private static final java.util.Set<String> NOT_EVENT = new java.util.HashSet<>(java.util.Arrays.asList(
@@ -463,8 +600,7 @@ public class GuideService extends Service {
         checking = false;
         if (root == null) return;
         if (c.ok) {
-            tvWarn.setVisibility(View.GONE);
-            go(idx + 1, "任务开始", false);
+            showDone(c.okText);
             return;
         }
         failed = true;
@@ -481,8 +617,7 @@ public class GuideService extends Service {
         marker("任务检查未通过，用户选择忽略继续 " + (idx + 1));
         tvWarn.setVisibility(View.GONE);
         rowErr.setVisibility(View.GONE);
-        rowRun.setVisibility(View.VISIBLE);
-        go(idx + 1, "任务开始", false);
+        showDone("（这件没记到，已忽略）");
     }
 
     private void copyReason() {
@@ -500,7 +635,8 @@ public class GuideService extends Service {
         StringBuilder d = new StringBuilder();
         d.append("TextRec 任务检查未通过\n任务 ").append(n).append("「").append(t.name).append("」\n");
         boolean anySnap = false, gotStart = false, gotEnd = false;
-        int bestEvents = -1;
+        int bestEvents = -1, bestEntries = 0;
+        String bestKinds = "";
         String cfgInfo = "", warn = "";
         long bestRecs = -1;
         for (String pkg : pkgs) {
@@ -545,14 +681,16 @@ public class GuideService extends Service {
                         }
                     }
                     java.util.TreeMap<String, Integer> kinds = new java.util.TreeMap<>();
-                    int events = 0;
+                    int events = 0, entries = 0;
                     if (s0 && tl != null) {
                         for (int i = 0; i < tl.length(); i++) {
                             JSONObject e = tl.optJSONObject(i);
                             if (e == null) continue;
                             long tt = e.optLong("t");
                             String k = e.optString("kind");
-                            if (tt < startT || tt > endT || NOT_EVENT.contains(k)) continue;
+                            if (tt < startT || tt > endT) continue;
+                            if (!"TASK".equals(k) && !"BASE".equals(k) && !"MARK".equals(k) && !"CLASS".equals(k)) entries++;
+                            if (NOT_EVENT.contains(k)) continue;
                             int add = Math.max(1, e.optInt("n"));
                             events += add;
                             Integer c0 = kinds.get(k);
@@ -566,6 +704,8 @@ public class GuideService extends Service {
                     if (s0) gotStart = true;
                     if (e0) gotEnd = true;
                     if (s0 && events > bestEvents) bestEvents = events;
+                    if (s0 && entries > bestEntries) bestEntries = entries;
+                    if (s0 && events >= bestEvents) bestKinds = kinds.toString();
                     if (recs > bestRecs) {
                         bestRecs = recs;
                         JSONObject cj = root.optJSONObject("config");
@@ -590,6 +730,8 @@ public class GuideService extends Service {
         }
         if (why == null) {
             res.ok = true;
+            res.entries = bestEntries;
+            res.okText = t.baseline ? "基线已记录" : "这件事期间记到 " + bestEvents + " 个事件 " + bestKinds;
             return res;
         }
         d.append("原因：").append(why).append('\n');
@@ -597,6 +739,7 @@ public class GuideService extends Service {
         if (!cfgInfo.isEmpty()) d.append("目标进程采集配置与统计：").append(cfgInfo).append('\n');
         if (!warn.isEmpty()) d.append("目标进程警告：").append(warn).append('\n');
         res.ok = false;
+        res.entries = bestEntries;
         res.full = d.toString();
         res.summary = "任务 " + n + "「" + t.name + "」没记录到\n" + why + "\n点「复制原因」发给 Claude，不用做下一件。";
         return res;
@@ -608,8 +751,7 @@ public class GuideService extends Service {
         if (remain <= 0) {
             baseRunning = false;
             marker("基线结束");
-            tvTimer.setText("基线完成");
-            tvHint.setText("点 ▶ 下一件");
+            tvTimer.setText("基线完成，检查中…");
             buzz();
             return;
         }
@@ -620,7 +762,11 @@ public class GuideService extends Service {
 
     private void closeAll(boolean mark) {
         stopTimer();
+        boolean wasPaused = paused;
+        paused = false;
         if (mark && !ready && !finished && idx >= 0) marker("任务中止（在第 " + (idx + 1) + " 件）");
+        // 流程开始过（不管有没有暂停）都发一条，目标进程靠它退出「任务流程」状态，之后照常全记
+        if (wasPaused || !ready && idx >= 0) marker("记录继续（浮窗关闭）");
         if (root != null) {
             try {
                 wm.removeView(root);
