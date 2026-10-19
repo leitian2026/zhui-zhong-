@@ -205,7 +205,7 @@ final class Store {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.21.0");
+        root.put("module", "TextRec 1.22.0");
         root.put("env", envJson());
         root.put("monoNow", android.os.SystemClock.uptimeMillis() - Timeline.START);
         root.put("pkg", pkg);
@@ -280,6 +280,7 @@ final class Store {
         JSONArray tl = Timeline.toJson();
         root.put("timeline", tl);
         root.put("timelineDropped", Timeline.dropped());
+        root.put("timelineKindDropped", Timeline.kindDropped());
         root.put("baselineDone", Timeline.baselineDone);
         root.put("baselineMs", Timeline.baselineDone ? Timeline.baseEnd - Timeline.baseStart : 0);
         return root.toString();
