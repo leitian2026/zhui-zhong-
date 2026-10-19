@@ -32,7 +32,7 @@ final class Chain {
     private Chain() {
     }
 
-    static volatile boolean on, async, effects, down;
+    static volatile boolean on, async, effects, down, coroutine;
     static volatile int every = 20, maxDown = 120;
 
     private static final int FRAMES = 8;
@@ -103,6 +103,7 @@ final class Chain {
         async = c.chainOn && c.chainAsync;
         effects = c.chainOn && c.chainEffects;
         down = c.chainOn && c.chainDown;
+        coroutine = c.chainOn && c.chainAsync && c.chainCoroutine;
         every = Math.max(1, c.chainEvery);
         maxDown = Math.max(10, Math.min(1000, c.chainMaxDown));
         if (on && async) hookAsync();
@@ -389,6 +390,90 @@ final class Chain {
         r.chain = render(par);
         Recorder.markChainDirty();
     }
+
+    // ---------------------------------------------------------------- 协程调度（尽力而为）
+    /**
+     * kotlinx.coroutines 的 Default / IO 调度器用自己的线程池（CoroutineScheduler），不走 ThreadPoolExecutor，
+     * 所以单靠上面的 Executor 钩子看不到它投递的任务。这里钩 CoroutineScheduler.dispatch（记投递来源）和
+     * TaskImpl.run（任务开始跑时接上来源）。Main 调度器最终走 Handler，已经被 Handler 钩子覆盖。
+     * 类名 / 字段名被混淆或没有用协程时找不到，只写一行日志，不影响别的；回到前台时会再试几次。
+     */
+    private static volatile boolean coHooked;
+    private static volatile int coTries;
+    private static volatile java.lang.reflect.Field coBlock;
+
+    static void coroutineHook(ClassLoader cl) {
+        if (cl == null || coHooked || coTries >= 6) return;
+        if (!on || !async || !coroutine) return;
+        coTries++;
+        try {
+            Class<?> sch = Class.forName("kotlinx.coroutines.scheduling.CoroutineScheduler", false, cl);
+            Class<?> task = Class.forName("kotlinx.coroutines.scheduling.TaskImpl", false, cl);
+            int n = 0;
+            for (java.lang.reflect.Method m : sch.getDeclaredMethods()) {
+                if (!m.getName().equals("dispatch") || java.lang.reflect.Modifier.isAbstract(m.getModifiers())) continue;
+                if (m.getParameterTypes().length < 1 || !Runnable.class.isAssignableFrom(m.getParameterTypes()[0])) continue;
+                XposedBridge.hookMethod(m, CO_DISPATCH);
+                n++;
+            }
+            for (java.lang.reflect.Method m : task.getDeclaredMethods()) {
+                if (!m.getName().equals("run") || m.getParameterTypes().length != 0) continue;
+                XposedBridge.hookMethod(m, CO_RUN);
+                n++;
+            }
+            try {
+                java.lang.reflect.Field f = task.getDeclaredField("block");
+                f.setAccessible(true);
+                coBlock = f;
+            } catch (Throwable e) {
+                XposedBridge.log("[TextRec] chain coroutine: TaskImpl.block 字段找不到（可能被混淆），异步来源接不上: " + e);
+            }
+            coHooked = n > 0;
+            XposedBridge.log("[TextRec] chain coroutine hooked: " + n);
+        } catch (Throwable e) {
+            XposedBridge.log("[TextRec] chain coroutine 类找不到（没用协程或被混淆）: " + e);
+        }
+    }
+
+    private static final XC_MethodHook CO_DISPATCH = new XC_MethodHook() {
+        @Override
+        protected void beforeHookedMethod(MethodHookParam p) {
+            try {
+                if (p.args == null || p.args.length < 1 || p.args[0] == null) return;
+                Origin o = makeOrigin("Coroutine.dispatch → " + p.args[0].getClass().getName());
+                if (o == null) return;
+                synchronized (RUNS) {
+                    RUNS.put(p.args[0], o);
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+    };
+
+    private static final XC_MethodHook CO_RUN = new XC_MethodHook() {
+        @Override
+        protected void beforeHookedMethod(MethodHookParam p) {
+            try {
+                java.lang.reflect.Field f = coBlock;
+                Origin o = null;
+                if (f != null && p.thisObject != null) {
+                    Object blk = f.get(p.thisObject);
+                    if (blk != null) {
+                        synchronized (RUNS) {
+                            o = RUNS.remove(blk);
+                        }
+                    }
+                }
+                begin(o);
+            } catch (Throwable ignored) {
+            }
+        }
+
+        @Override
+        protected void afterHookedMethod(MethodHookParam p) {
+            end();
+        }
+    };
 
     private static void hookAsync() {
         if (asyncHooked) return;
