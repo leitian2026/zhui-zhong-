@@ -374,6 +374,25 @@ final class RecFormat {
             }
             sb.append('\n');
         }
+        JSONObject sg = r.optJSONObject("segCounts");
+        if (sg != null && sg.length() > 0) {
+            sb.append("按任务阶段的调用次数: ");
+            java.util.TreeMap<Integer, Integer> tm = new java.util.TreeMap<>();
+            java.util.Iterator<String> kit = sg.keys();
+            while (kit.hasNext()) {
+                String k = kit.next();
+                try {
+                    tm.put(Integer.parseInt(k), sg.optInt(k));
+                } catch (Throwable ignored) {
+                }
+            }
+            boolean first = true;
+            for (java.util.Map.Entry<Integer, Integer> e : tm.entrySet()) {
+                sb.append(first ? "" : "  ").append(e.getKey() == 0 ? "任务之外" : "任务" + e.getKey()).append(' ').append(e.getValue());
+                first = false;
+            }
+            sb.append("（没出现的任务 = 那个阶段 0 次）\n");
+        }
         String bl = r.optString("baseline");
         if ("noise".equals(bl)) sb.append("基线: 安静基线期间也被调用 ").append(r.optInt("baseHits")).append(" 次（周期性噪声，找“操作才触发”的位置时可排除）\n");
         else if ("live".equals(bl)) sb.append("基线: 基线期间没出现，操作 / 播放时才触发（共 ").append(r.optInt("liveHits")).append(" 次）\n");
