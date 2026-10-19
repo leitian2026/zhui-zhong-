@@ -38,6 +38,14 @@ final class Timeline {
     static final long START = SystemClock.uptimeMillis();
 
     private static final int CAP = 3000;
+    /** 关键事件（标记 / 基线 / 任务 / 操作 / 页面 / 标识 / 类可用）单独存，不会被下面这些高频采样挤掉 */
+    private static final java.util.Set<String> KEY_KINDS = new java.util.HashSet<>(java.util.Arrays.asList(
+            "MARK", "BASE", "TASK", "TOUCH", "KEY", "PAGE", "TAG", "CLASS"));
+    /** 采样类事件每种最多记这么多条（记满后只计数，丢了多少写进导出） */
+    private static final int KIND_BUDGET = 400;
+    private static final ArrayDeque<Ev> SAMP = new ArrayDeque<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, int[]> KIND_N = new java.util.concurrent.ConcurrentHashMap<>();
+    private static final java.util.concurrent.ConcurrentHashMap<String, int[]> KIND_DROP = new java.util.concurrent.ConcurrentHashMap<>();
     private static final AtomicLong SEQ = new AtomicLong();
     private static final AtomicLong DROPPED = new AtomicLong();
     private static final ArrayDeque<Ev> EVS = new ArrayDeque<>();
@@ -47,12 +55,13 @@ final class Timeline {
 
     static final class Ev {
         final long seq, t, wall;
-        final String kind, text, page, tag;
+        final String kind, page, tag;
+        volatile String text;
 
-        Ev(String kind, String text) {
+        Ev(String kind, String text, long t, long wall) {
             this.seq = SEQ.incrementAndGet();
-            this.t = SystemClock.uptimeMillis();
-            this.wall = System.currentTimeMillis();
+            this.t = t;
+            this.wall = wall;
             this.kind = kind;
             this.text = text;
             this.page = Recorder.pageName;
@@ -68,14 +77,51 @@ final class Timeline {
     }
 
     static void add(String kind, String text) {
+        addAt(kind, text, SystemClock.uptimeMillis(), System.currentTimeMillis());
+    }
+
+    /** 指定发生时间（标记从 TextRec 经文件传来有延迟，按发送时刻往回推）。 */
+    static void addAt(String kind, String text, long t, long wall) {
         if (!on) return;
-        Ev e = new Ev(kind, text == null ? "" : (text.length() > 240 ? text.substring(0, 240) + "…" : text));
-        synchronized (EVS) {
-            if (EVS.size() >= CAP) {
-                EVS.pollFirst();
-                DROPPED.incrementAndGet();
+        String tx = text == null ? "" : (text.length() > 240 ? text.substring(0, 240) + "…" : text);
+        if (KEY_KINDS.contains(kind)) {
+            synchronized (EVS) {
+                // 同一毫秒级的连续页面切换（碎片恢复顺序）合成一条
+                if ("PAGE".equals(kind)) {
+                    Ev last = EVS.peekLast();
+                    if (last != null && "PAGE".equals(last.kind) && t - last.t <= 100 && last.text.length() < 400) {
+                        last.text = last.text + " → " + tx.replace("页面 → ", "");
+                        return;
+                    }
+                }
+                Ev e = new Ev(kind, tx, t, wall);
+                if (EVS.size() >= CAP) {
+                    EVS.pollFirst();
+                    DROPPED.incrementAndGet();
+                }
+                EVS.addLast(e);
             }
-            EVS.addLast(e);
+        } else {
+            int[] n = KIND_N.get(kind);
+            if (n == null) {
+                n = new int[1];
+                int[] old = KIND_N.putIfAbsent(kind, n);
+                if (old != null) n = old;
+            }
+            if (++n[0] > KIND_BUDGET) {
+                int[] d = KIND_DROP.get(kind);
+                if (d == null) {
+                    d = new int[1];
+                    int[] old = KIND_DROP.putIfAbsent(kind, d);
+                    if (old != null) d = old;
+                }
+                d[0]++;
+                return;
+            }
+            Ev e = new Ev(kind, tx, t, wall);
+            synchronized (EVS) {
+                SAMP.addLast(e);
+            }
         }
         Recorder.markChainDirty();
     }
@@ -127,23 +173,31 @@ final class Timeline {
                 int n = in.read(b);
                 if (n <= 0) return;
                 String s = new String(b, 0, n, java.nio.charset.StandardCharsets.UTF_8);
-                int nl = s.indexOf('\n');
-                if (nl < 0) return;
-                long seq = Long.parseLong(s.substring(0, nl).trim());
-                String label = s.substring(nl + 1).trim();
+                String[] ln = s.split("\n", 3);
+                if (ln.length < 3) return;
+                long seq = Long.parseLong(ln[0].trim());
+                long sendWall = Long.parseLong(ln[1].trim());
+                String label = ln[2].trim();
                 if (seq == lastMarkSeq) return;
                 lastMarkSeq = seq;
+                long nowW = System.currentTimeMillis();
+                long delay = nowW - sendWall;
+                if (delay < 0 || delay > 15000) delay = 0; // 两边时钟对不上就按收到的时刻
+                long t = SystemClock.uptimeMillis() - delay;
+                String suffix = delay > 0 ? "（TextRec 发出 " + delay + "ms 后收到，时间已按发出时刻推算）" : "";
                 if ("基线开始".equals(label)) {
                     baseline = true;
-                    baseStart = SystemClock.uptimeMillis();
-                    add("BASE", "基线开始（请什么都不要操作）");
+                    baseStart = t;
+                    addAt("BASE", "基线开始（请什么都不要操作）" + suffix, t, sendWall);
                 } else if ("基线结束".equals(label)) {
                     baseline = false;
                     baselineDone = true;
-                    baseEnd = SystemClock.uptimeMillis();
-                    add("BASE", "基线结束（共 " + (baseEnd - baseStart) + "ms）");
+                    baseEnd = t;
+                    addAt("BASE", "基线结束（共 " + (baseEnd - baseStart) + "ms）" + suffix, t, sendWall);
+                } else if (label.startsWith("任务")) {
+                    addAt("TASK", label + suffix, t, sendWall);
                 } else {
-                    add("MARK", label);
+                    addAt("MARK", label + suffix, t, sendWall);
                 }
             }
         } catch (Throwable ignored) {
@@ -242,15 +296,44 @@ final class Timeline {
         }
         String cn = cur.getClass().getName();
         int i = cn.lastIndexOf('.');
-        return (i >= 0 ? cn.substring(i + 1) : cn) + id;
+        StringBuilder sb = new StringBuilder((i >= 0 ? cn.substring(i + 1) : cn) + id);
+        try {
+            CharSequence cd = cur.getContentDescription();
+            if (cd != null && cd.length() > 0) sb.append(" 描述=").append(cd.length() > 20 ? cd.subSequence(0, 20) : cd);
+            if (cur instanceof android.widget.TextView) {
+                CharSequence tx = ((android.widget.TextView) cur).getText();
+                if (tx != null && tx.length() > 0) sb.append(" 文字=").append(tx.length() > 20 ? tx.subSequence(0, 20) : tx);
+            }
+            View p = cur;
+            sb.append(" 上级=");
+            for (int k = 0; k < 3 && p.getParent() instanceof View; k++) {
+                p = (View) p.getParent();
+                String pn = p.getClass().getName();
+                sb.append(k > 0 ? "<" : "").append(pn.substring(pn.lastIndexOf('.') + 1));
+            }
+        } catch (Throwable ignored) {
+        }
+        return sb.toString();
     }
 
     // ------------------------------------------------------------ 输出
 
     static JSONArray toJson() throws Exception {
         JSONArray a = new JSONArray();
+        java.util.ArrayList<Ev> all = new java.util.ArrayList<>();
         synchronized (EVS) {
-            for (Ev e : EVS) {
+            all.addAll(EVS);
+            all.addAll(SAMP);
+        }
+        java.util.Collections.sort(all, new java.util.Comparator<Ev>() {
+            @Override
+            public int compare(Ev x, Ev y) {
+                int c = Long.compare(x.t, y.t);
+                return c != 0 ? c : Long.compare(x.seq, y.seq);
+            }
+        });
+        {
+            for (Ev e : all) {
                 JSONObject o = new JSONObject();
                 o.put("seq", e.seq);
                 o.put("t", e.t - START);
@@ -269,10 +352,20 @@ final class Timeline {
         return DROPPED.get();
     }
 
+    /** 每种采样事件超出 400 条上限后丢了多少。 */
+    static JSONObject kindDropped() throws Exception {
+        JSONObject o = new JSONObject();
+        for (java.util.Map.Entry<String, int[]> e : KIND_DROP.entrySet()) o.put(e.getKey(), e.getValue()[0]);
+        return o;
+    }
+
     static void clear() {
         synchronized (EVS) {
             EVS.clear();
+            SAMP.clear();
         }
+        KIND_N.clear();
+        KIND_DROP.clear();
         DROPPED.set(0);
         KEYN.clear();
     }
