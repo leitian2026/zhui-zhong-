@@ -332,7 +332,7 @@ public class GuideService extends Service {
         redoFlag = false;
         buzz();
         if (t.baseline) {
-            marker("基线开始");
+            marker("基线开始 " + t.secs);
             baseRunning = true;
             remain = t.secs;
             tickDown();
