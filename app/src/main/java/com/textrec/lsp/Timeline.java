@@ -45,6 +45,23 @@ final class Timeline {
     private static final int KIND_BUDGET = 150; // 每种事件、每个任务阶段各自 150 种不同的（见 addAt），一个阶段灌满不影响别的阶段
     private static final java.util.concurrent.ConcurrentHashMap<String, Ev> AGG = new java.util.concurrent.ConcurrentHashMap<>();
     static volatile int curTask;
+    /** 任务浮窗的流程进行中（收到「任务流程开始」到「任务全部完成 / 任务中止 / 浮窗关闭」）。没用浮窗时一直是 false，记录照旧全记。 */
+    static volatile boolean flowActive;
+    /** 配置：任务外也记录（默认关） */
+    static volatile boolean recOutside;
+
+    /**
+     * 这次调用要不要跳过“建记录 / 记样本”（轻模式）：暂停记录期间，或任务流程进行中、现在不在任务里、而且没开「任务外也记录」。
+     * 轻模式下 setText 仍然维护“控件 ← 设置栈”的对应（不然任务里画出来的文字查不到是谁设置的），其余一律不记。
+     */
+    static boolean skip() {
+        return paused || (flowActive && curTask == 0 && !recOutside);
+    }
+
+    /** 记录归哪一桶：0 = 任务内（含没用任务浮窗时的全部记录），1 = 任务外（任务流程进行中、现在不在任务里，只有开了「任务外也记录」才会走到这里）。 */
+    static int bucket() {
+        return flowActive && curTask == 0 ? 1 : 0;
+    }
     private static final ArrayDeque<Ev> SAMP = new ArrayDeque<>();
     private static final java.util.concurrent.ConcurrentHashMap<String, int[]> KIND_N = new java.util.concurrent.ConcurrentHashMap<>();
     private static final java.util.concurrent.ConcurrentHashMap<String, int[]> KIND_DROP = new java.util.concurrent.ConcurrentHashMap<>();
@@ -74,10 +91,22 @@ final class Timeline {
         }
     }
 
+    static volatile boolean fClass = true, fTouch = true, fKey = true, fPage = true, fTree = true, sText = true, sState = true, sIcon = true, sTrace = true;
+
     static void configure(RecConfig c) {
         on = c.tlOn;
+        recOutside = c.recOutside;
         ops = c.tlOn && c.tlOps;
         samples = c.tlOn && c.tlSamples;
+        fClass = c.tlClass;
+        fTouch = c.tlTouch;
+        fKey = c.tlKey;
+        fPage = c.tlPage;
+        fTree = c.tlViewTree;
+        sText = c.smpText;
+        sState = c.smpState;
+        sIcon = c.smpIcon;
+        sTrace = c.smpTrace;
         if (ops) install();
     }
 
@@ -88,6 +117,11 @@ final class Timeline {
     /** 指定发生时间（标记从 TextRec 经文件传来有延迟，按发送时刻往回推）。 */
     static void addAt(String kind, String text, long t, long wall) {
         if (!on) return;
+        if (!fClass && "CLASS".equals(kind)) return;
+        if (!fTouch && "TOUCH".equals(kind) || !fKey && "KEY".equals(kind) || !fPage && "PAGE".equals(kind)
+                || !fTree && "VIEWTREE".equals(kind) || !sText && ("SETTEXT".equals(kind) || "CLEAR".equals(kind))
+                || !sState && "STATE".equals(kind) || !sIcon && "ICON".equals(kind) || !sTrace && "TRACE".equals(kind)) return;
+        if (skip() && !("MARK".equals(kind) || "BASE".equals(kind) || "TASK".equals(kind) || "CLASS".equals(kind) || "PAGE".equals(kind))) return;
         String tx = text == null ? "" : (text.length() > 240 ? text.substring(0, 240) + "…" : text);
         if (KEY_KINDS.contains(kind)) {
             synchronized (EVS) {
@@ -277,6 +311,9 @@ final class Timeline {
         }
     }
 
+    /** 浮窗点了“暂停记录”：到“记录继续”之前，目标进程什么都不记（只留标记、页面切换这类定位用的）。 */
+    static volatile boolean paused;
+
     private static void onMarkerLine(String line) {
         if (line.isEmpty()) return;
         String[] ln = line.split("\\|", 3);
@@ -295,6 +332,20 @@ final class Timeline {
         if (delay < 0 || delay > (replaying ? 300000 : 15000)) delay = 0; // 两边时钟对不上就按收到的时刻；补读的标记允许更早（时间会是负数 = 进程启动前）
         long t = SystemClock.uptimeMillis() - delay;
         String suffix = replaying ? "（进程启动前发出，启动后补读，时间按发出时刻推算）" : delay > 200 ? "（TextRec 发出 " + delay + "ms 后才收到，时间已按发出时刻推算）" : "";
+        if (label.startsWith("记录暂停")) {
+            addAt("MARK", label + suffix, t, sendWall);
+            paused = true;
+            return;
+        }
+        if (label.startsWith("记录继续")) {
+            paused = false;
+            if (label.startsWith("记录继续（浮窗关闭）")) {
+                flowActive = false; // 浮窗关了：回到没用浮窗时的样子，照常全记
+                curTask = 0;
+            }
+            addAt("MARK", label + suffix, t, sendWall);
+            return;
+        }
         if (label.startsWith("基线开始")) {
             int secs = 0;
             try {
@@ -307,10 +358,18 @@ final class Timeline {
             addAt("BASE", "基线开始（请什么都不要操作" + (secs > 0 ? "，" + secs + " 秒后自动结束" : "") + "）" + suffix, t, sendWall);
         } else if (label.startsWith("基线结束")) {
             endBaseline(t, "基线结束" + suffix, sendWall);
+        } else if (label.startsWith("任务流程开始")) {
+            flowActive = true;
+            curTask = 0;
+            addAt("TASK", label + suffix, t, sendWall);
         } else if (label.startsWith("任务")) {
             java.util.regex.Matcher m = java.util.regex.Pattern.compile("^任务(开始|重做) (\\d+)").matcher(label);
-            if (m.find()) curTask = Integer.parseInt(m.group(2));
-            else if (label.startsWith("任务结束") || label.startsWith("任务中止") || label.startsWith("任务全部完成")) curTask = 0;
+            if (m.find()) {
+                curTask = Integer.parseInt(m.group(2));
+                flowActive = true; // 冷启动补读时可能漏了「任务流程开始」，看到任务开始也算进入流程
+            } else if (label.startsWith("任务结束") || label.startsWith("任务中止") || label.startsWith("任务全部完成")) {
+                curTask = 0; // flowActive 保持：做完以后到关浮窗之前，任务外仍按「任务外也记录」开关处理，不会把收尾操作记进任务内
+            }
             addAt("TASK", label + suffix, t, sendWall);
         } else {
             addAt("MARK", label + suffix, t, sendWall);
