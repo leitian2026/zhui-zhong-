@@ -42,7 +42,9 @@ final class Timeline {
     private static final java.util.Set<String> KEY_KINDS = new java.util.HashSet<>(java.util.Arrays.asList(
             "MARK", "BASE", "TASK", "TOUCH", "KEY", "PAGE", "TAG", "CLASS"));
     /** 采样类事件每种最多记这么多条（记满后只计数，丢了多少写进导出） */
-    private static final int KIND_BUDGET = 400;
+    private static final int KIND_BUDGET = 150; // 每种事件、每个任务阶段各自 150 种不同的（见 addAt），一个阶段灌满不影响别的阶段
+    private static final java.util.concurrent.ConcurrentHashMap<String, Ev> AGG = new java.util.concurrent.ConcurrentHashMap<>();
+    static volatile int curTask;
     private static final ArrayDeque<Ev> SAMP = new ArrayDeque<>();
     private static final java.util.concurrent.ConcurrentHashMap<String, int[]> KIND_N = new java.util.concurrent.ConcurrentHashMap<>();
     private static final java.util.concurrent.ConcurrentHashMap<String, int[]> KIND_DROP = new java.util.concurrent.ConcurrentHashMap<>();
@@ -57,6 +59,8 @@ final class Timeline {
         final long seq, t, wall;
         final String kind, page, tag;
         volatile String text;
+        volatile int n = 1;        // 完全相同的事件出现了几次（合并计数，不占额度）
+        volatile long lastT;
 
         Ev(String kind, String text, long t, long wall) {
             this.seq = SEQ.incrementAndGet();
@@ -66,6 +70,7 @@ final class Timeline {
             this.text = text;
             this.page = Recorder.pageName;
             this.tag = Timeline.tag;
+            this.lastT = t;
         }
     }
 
@@ -102,23 +107,37 @@ final class Timeline {
                 EVS.addLast(e);
             }
         } else {
-            int[] n = KIND_N.get(kind);
+            // 采样事件：相同的合并计数（不占额度）；不同的按「种类 + 任务阶段」各记前 KIND_BUDGET 种，
+            // 超出的只计数并在导出里写明。这样第 1 个任务灌满了也不会把第 5 个任务挤掉。
+            String body = tx.startsWith("(第") && tx.indexOf(") ") > 0 ? tx.substring(tx.indexOf(") ") + 2) : tx;
+            int seg = curTask;
+            String key = kind + "#" + seg + "#" + body;
+            Ev old = AGG.get(key);
+            if (old != null) {
+                old.n++;
+                old.lastT = t;
+                return;
+            }
+            String bk = kind + "#" + seg;
+            int[] n = KIND_N.get(bk);
             if (n == null) {
                 n = new int[1];
-                int[] old = KIND_N.putIfAbsent(kind, n);
-                if (old != null) n = old;
+                int[] o2 = KIND_N.putIfAbsent(bk, n);
+                if (o2 != null) n = o2;
             }
             if (++n[0] > KIND_BUDGET) {
-                int[] d = KIND_DROP.get(kind);
+                int[] d = KIND_DROP.get(bk);
                 if (d == null) {
                     d = new int[1];
-                    int[] old = KIND_DROP.putIfAbsent(kind, d);
-                    if (old != null) d = old;
+                    int[] o3 = KIND_DROP.putIfAbsent(bk, d);
+                    if (o3 != null) d = o3;
                 }
                 d[0]++;
                 return;
             }
             Ev e = new Ev(kind, tx, t, wall);
+            if (AGG.size() > 30000) AGG.clear();
+            AGG.put(key, e);
             synchronized (EVS) {
                 SAMP.addLast(e);
             }
@@ -165,43 +184,124 @@ final class Timeline {
 
     // ------------------------------------------------------------ 标记 / 基线（来自记录页，经 marker.txt 传进来）
 
-    /** 文件内容：第一行序号，第二行标签。序号没变说明是同一条，不重复记。 */
-    static void onMarkerFile(java.io.File f) {
+    private static volatile java.io.File markerFile;
+    private static long markerOff = -1;
+    private static volatile long baseUntil;   // 基线自动结束的单调时刻；0 = 等“基线结束”标记
+
+    /**
+     * 标记文件 markers.log 是追加的：一行一条「序号|发送时刻毫秒|内容」。
+     * 以前是覆盖同一个文件，目标进程读慢了就会漏掉中间几条（真机上主进程只收到第一条）；
+     * 现在记住读到哪里，每次把新增的行全读走；再加一个每 200ms 查一次文件长度的小线程，不单靠文件监听（监听线程可能被目标 App 自己的监听堵住）。
+     */
+    static void startMarkers(java.io.File dir) {
+        if (markerFile != null) return;
+        final java.io.File f = new java.io.File(dir, "markers.log");
+        markerFile = f;
+        markerOff = f.exists() ? f.length() : 0; // 以前留下的标记不要
+        Thread t = new Thread(new Runnable() {
+            @Override
+            public void run() {
+                while (true) {
+                    try {
+                        Thread.sleep(200);
+                        pollMarkers();
+                        checkBaselineEnd();
+                    } catch (InterruptedException e) {
+                        return;
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+        }, "TextRec-marker");
+        t.setDaemon(true);
+        t.start();
+    }
+
+    /** 读走 markers.log 里新增的行（文件监听也会调）。 */
+    static synchronized void pollMarkers() {
+        java.io.File f = markerFile;
+        if (f == null || !on) return;
         try {
-            byte[] b = new byte[(int) Math.min(f.length(), 2000)];
-            try (java.io.FileInputStream in = new java.io.FileInputStream(f)) {
+            long len = f.length();
+            if (len < markerOff) markerOff = 0; // 被删过重写
+            if (len == markerOff) return;
+            byte[] b = new byte[(int) Math.min(len - markerOff, 64 * 1024)];
+            try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
+                in.seek(markerOff);
                 int n = in.read(b);
                 if (n <= 0) return;
-                String s = new String(b, 0, n, java.nio.charset.StandardCharsets.UTF_8);
-                String[] ln = s.split("\n", 3);
-                if (ln.length < 3) return;
-                long seq = Long.parseLong(ln[0].trim());
-                long sendWall = Long.parseLong(ln[1].trim());
-                String label = ln[2].trim();
-                if (seq == lastMarkSeq) return;
-                lastMarkSeq = seq;
-                long nowW = System.currentTimeMillis();
-                long delay = nowW - sendWall;
-                if (delay < 0 || delay > 15000) delay = 0; // 两边时钟对不上就按收到的时刻
-                long t = SystemClock.uptimeMillis() - delay;
-                String suffix = delay > 0 ? "（TextRec 发出 " + delay + "ms 后收到，时间已按发出时刻推算）" : "";
-                if ("基线开始".equals(label)) {
-                    baseline = true;
-                    baseStart = t;
-                    addAt("BASE", "基线开始（请什么都不要操作）" + suffix, t, sendWall);
-                } else if ("基线结束".equals(label)) {
-                    baseline = false;
-                    baselineDone = true;
-                    baseEnd = t;
-                    addAt("BASE", "基线结束（共 " + (baseEnd - baseStart) + "ms）" + suffix, t, sendWall);
-                } else if (label.startsWith("任务")) {
-                    addAt("TASK", label + suffix, t, sendWall);
-                } else {
-                    addAt("MARK", label + suffix, t, sendWall);
-                }
+                // 只处理完整的行；最后不完整的那截留到下次
+                int end = n;
+                while (end > 0 && b[end - 1] != '\n') end--;
+                if (end == 0) return;
+                markerOff += end;
+                String s = new String(b, 0, end, java.nio.charset.StandardCharsets.UTF_8);
+                for (String line : s.split("\n")) onMarkerLine(line.trim());
             }
         } catch (Throwable ignored) {
         }
+    }
+
+    private static void onMarkerLine(String line) {
+        if (line.isEmpty()) return;
+        String[] ln = line.split("\\|", 3);
+        if (ln.length < 3) return;
+        long seq, sendWall;
+        try {
+            seq = Long.parseLong(ln[0].trim());
+            sendWall = Long.parseLong(ln[1].trim());
+        } catch (Throwable e) {
+            return;
+        }
+        String label = ln[2].trim();
+        if (seq <= lastMarkSeq) return;
+        lastMarkSeq = seq;
+        long delay = System.currentTimeMillis() - sendWall;
+        if (delay < 0 || delay > 15000) delay = 0; // 两边时钟对不上就按收到的时刻
+        long t = SystemClock.uptimeMillis() - delay;
+        String suffix = delay > 200 ? "（TextRec 发出 " + delay + "ms 后才收到，时间已按发出时刻推算）" : "";
+        if (label.startsWith("基线开始")) {
+            int secs = 0;
+            try {
+                secs = Integer.parseInt(label.substring(4).trim());
+            } catch (Throwable ignored) {
+            }
+            baseline = true;
+            baseStart = t;
+            baseUntil = secs > 0 ? t + secs * 1000L : 0;
+            addAt("BASE", "基线开始（请什么都不要操作" + (secs > 0 ? "，" + secs + " 秒后自动结束" : "") + "）" + suffix, t, sendWall);
+        } else if (label.startsWith("基线结束")) {
+            endBaseline(t, "基线结束" + suffix, sendWall);
+        } else if (label.startsWith("任务")) {
+            java.util.regex.Matcher m = java.util.regex.Pattern.compile("^任务(开始|重做) (\\d+)").matcher(label);
+            if (m.find()) curTask = Integer.parseInt(m.group(2));
+            else if (label.startsWith("任务结束") || label.startsWith("任务中止") || label.startsWith("任务全部完成")) curTask = 0;
+            addAt("TASK", label + suffix, t, sendWall);
+        } else {
+            addAt("MARK", label + suffix, t, sendWall);
+        }
+    }
+
+    private static synchronized void endBaseline(long t, String text, long wall) {
+        if (!baseline) return; // 没开始过（或已经自动结束了）就不再记
+        baseline = false;
+        baselineDone = true;
+        baseEnd = t;
+        baseUntil = 0;
+        addAt("BASE", text + "（共 " + (t - baseStart) + "ms）", t, wall);
+    }
+
+    /** 基线定了时长、结束标记没到（或丢了）：时间一到自动结束，免得后面所有记录都被算成基线。 */
+    private static void checkBaselineEnd() {
+        long u = baseUntil;
+        if (baseline && u > 0 && SystemClock.uptimeMillis() >= u) endBaseline(u, "基线自动结束（到时间了，没等到结束标记）", System.currentTimeMillis());
+    }
+
+    /** 现在算不算在基线里（Rec.stamp 每次调用都问）。 */
+    static boolean inBaseline() {
+        if (!baseline) return false;
+        long u = baseUntil;
+        return u == 0 || SystemClock.uptimeMillis() < u;
     }
 
     // ------------------------------------------------------------ 用户操作
@@ -339,6 +439,10 @@ final class Timeline {
                 o.put("t", e.t - START);
                 o.put("wall", e.wall);
                 o.put("kind", e.kind);
+                if (e.n > 1) {
+                    o.put("n", e.n);
+                    o.put("lastT", e.lastT - START);
+                }
                 o.put("text", e.text);
                 o.put("page", e.page);
                 if (!e.tag.isEmpty()) o.put("tag", e.tag);
@@ -366,6 +470,7 @@ final class Timeline {
         }
         KIND_N.clear();
         KIND_DROP.clear();
+        AGG.clear();
         DROPPED.set(0);
         KEYN.clear();
     }
