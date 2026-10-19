@@ -993,7 +993,10 @@ public class RecordsActivity extends Activity {
         final android.content.SharedPreferences sp = getSharedPreferences(Actions.PREFS, MODE_PRIVATE);
         LinearLayout body = Ui.vertical(this);
         helpItem(body, "怎么写", "一行一件事：名称|提示|秒数（后两项可省）。名称写 @基线 的是自动计时的基线，秒数是时长。"
-                + "每件事开始、结束、重做都会作为标记进目标 App 的时间线。");
+                + "每件事开始、结束、重做都会作为标记进目标 App 的时间线。\n"
+                + "先启动还是后启动目标 App：没写 ! 的清单，一律是「先启动目标 App、切到它的界面，再在浮窗点开始」；"
+                + "第一件的名称前写 !（如 !冷启动抖音），浮窗一打开就直接开始这件事，用于要在目标 App 还没运行时就开始的任务（冷启动）。\n"
+                + "点「下一件」时会检查这件事期间目标进程有没有记录到事件，没有就停在这件事上，用黄色字写原因，点「复制原因」发给 Claude。");
         final EditText et = Ui.field(this, "暂停|点一下视频暂停，停 3 秒", true, false);
         et.setText(sp.getString(GuideService.PREF_TASKS, GuideService.DEFAULT_TASKS));
         body.addView(et);
