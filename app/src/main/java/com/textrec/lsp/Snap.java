@@ -42,11 +42,14 @@ final class Snap {
         if (dr > 0) sb.append("  ⚠ 关键事件超过 3000 条，最早的 ").append(dr).append(" 条已丢");
         JSONObject kd = root.optJSONObject("timelineKindDropped");
         if (kd != null && kd.length() > 0) {
-            sb.append("  ⚠ 采样事件每种最多 400 条，超出没记：");
+            sb.append("  ⚠ 采样事件每种、每个任务阶段最多记 150 种不同的（完全相同的合并成 ×N，不占额度），超出没记的种数：");
             java.util.Iterator<String> it = kd.keys();
             while (it.hasNext()) {
                 String k = it.next();
-                sb.append(k).append(' ').append(kd.optInt(k)).append("  ");
+                int h = k.indexOf('#');
+                String seg = h > 0 ? k.substring(h + 1) : "0";
+                sb.append(h > 0 ? k.substring(0, h) : k).append(seg.equals("0") ? "(任务之外)" : "(任务" + seg + ")")
+                        .append(' ').append(kd.optInt(k)).append("  ");
             }
         }
         sb.append("\n（前一列是单调时钟毫秒，相对目标进程开始记录；同一毫秒内看序号 #；“✗”开头 = 被「重做」作废的那一次）\n");
@@ -65,6 +68,7 @@ final class Snap {
             l.append(String.format(Locale.US, "%8d #%-5d %-8s ", e.optLong("t"), e.optLong("seq"), e.optString("kind")))
                     .append(e.optString("text"));
             String tg = e.optString("tag");
+            if (e.optInt("n") > 1) l.append("  ×").append(e.optInt("n")).append("（最后一次 +").append(e.optLong("lastT")).append("）");
             if (!tg.isEmpty()) l.append("   <标识 ").append(tg).append('>');
             l.append("   [").append(e.optString("page")).append("]\n");
             lines[i] = l.toString();
