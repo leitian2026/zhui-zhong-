@@ -410,6 +410,11 @@ final class RecFormat {
             sb.append(ob.length() == 1 && om == 0 ? "   → 每次都是同一个对象" : om > 0 ? "   → 多个不同对象（超出 8 个后另有 ≥" + om + " 次新对象，多半是列表项 / 每次新建）" : "   → " + ob.length() + " 个不同对象");
             sb.append('\n');
         }
+        JSONArray cd = r.optJSONArray("composeDumps");
+        if (cd != null && cd.length() > 0) {
+            sb.append("Compose 文字对象的字段展开（paint 的 this，最多 6 份；找文字 / 颜色存在哪个字段）：\n");
+            for (int i = 0; i < cd.length(); i++) sb.append("  ─ 第 ").append(i + 1).append(" 份 ").append(cd.optString(i)).append('\n');
+        }
         String hi = r.optString("hookInfo");
         if (!hi.isEmpty()) sb.append("钩点信息: ").append(hi).append('\n');
         JSONArray fa = r.optJSONArray("frames");
