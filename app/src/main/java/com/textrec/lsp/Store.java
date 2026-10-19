@@ -205,7 +205,7 @@ final class Store {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.22.2");
+        root.put("module", "TextRec 1.22.4");
         root.put("env", envJson());
         root.put("monoNow", android.os.SystemClock.uptimeMillis() - Timeline.START);
         root.put("pkg", pkg);
@@ -340,6 +340,11 @@ final class Store {
         if (r.minGap != Long.MAX_VALUE) {
             j.put("minGap", r.minGap);
             j.put("maxGap", r.maxGap);
+        }
+        if (Timeline.curTask > 0 || r.segCounts().size() > 1 || (r.segCounts().size() == 1 && !r.segCounts().containsKey(0))) {
+            JSONObject sc = new JSONObject();
+            for (java.util.Map.Entry<Integer, Integer> e : r.segCounts().entrySet()) sc.put(String.valueOf(e.getKey()), e.getValue());
+            j.put("segCounts", sc);
         }
         j.put("baseHits", r.baseHits);
         j.put("liveHits", r.liveHits);
