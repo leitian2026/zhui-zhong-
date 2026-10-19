@@ -22,7 +22,9 @@ public class MainActivity extends Activity {
     private Switch swEnabled, swRegex, swSet, swDraw, swColor, swIcons, swAuto, swSetOnly, swState;
     // 采集过滤：开关 / 分段选择
     private Ui.Seg segWindow, segThread;
-    private Switch swWindowAll, swInfra, swClock, swQuiet, swDump, swChain, swChainAsync, swChainFx, swChainDown, swTl, swTlOps, swTlSamples;
+    private final java.util.LinkedHashMap<String, Switch> fine = new java.util.LinkedHashMap<>();
+    private EditText etTraceDepth;
+    private Switch swWindowAll, swInfra, swClock, swQuiet, swDump, swChain, swChainAsync, swChainFx, swChainDown, swTl, swTlOps, swTlSamples, swRecOutside;
     private static final int[] WINDOW_MS = {0, 1500, 3000, 5000};
     // 手写的过滤条件（可选，放在「高级」里）
     private EditText etThread, etPageF, etViewF, etExclude, etValue;
@@ -56,6 +58,7 @@ public class MainActivity extends Activity {
         buildRangeCard(root);
         buildFilterCard(root);
         buildAdvancedCard(root);
+        buildFineCard(root);
 
         // ---- 底部固定操作栏
         LinearLayout bottom = Ui.bottomBar(this);
@@ -315,6 +318,10 @@ public class MainActivity extends Activity {
         swDump = dp.sw;
         card.addView(dp.row);
         card.addView(Ui.divider(this));
+        Ui.Sw ro = Ui.switchRow(this, "任务外也记录", "默认关：用任务浮窗录的时候，只有「任务开始 → 任务结束」之间才记录，任务之间（含「暂停记录」期间）只维持“控件是被哪行代码设置的”这个对应，不建记录、不记样本，记录最干净。打开后任务外也记，但单独一桶存（各自上限、各自文件），记录页顶部可切换看任务内 / 任务外 / 全部。不用任务浮窗时不受影响，照常全记");
+        swRecOutside = ro.sw;
+        card.addView(ro.row);
+        card.addView(Ui.divider(this));
         Ui.Sw tl = Ui.switchRow(this, "时间线（总开关）", "把用户操作、页面切换、各位置的记录样本按毫秒排成一条时间线；在记录页「更多」里还能打标记、录安静基线。导出里有时间线一段，记录会带上调用间隔和当前标识。开销很小，默认开");
         swTl = tl.sw;
         card.addView(tl.row);
@@ -337,7 +344,59 @@ public class MainActivity extends Activity {
         Ui.Sw cF = Ui.switchRow(this, "　下游：界面效果", "锚点执行期间（含它投递的异步任务稍后跑起来时）发生的 setText / 清空 / 图标 / 状态变化");
         swChainFx = cF.sw;
         card.addView(cF.row);
+        card.addView(Ui.divider(this));
+        String[][] fs = {
+                {"tlTouch", "　　时间线：触摸", "触摸（点击 / 滑动）事件"},
+                {"tlKey", "　　时间线：按键", "返回键等按键"},
+                {"tlPage", "　　时间线：页面切换", "Activity / Fragment 切换"},
+                {"tlViewTree", "　　时间线：控件增删", "ViewGroup.addView / removeView 样本，量大，只想看弹幕类记录时可关"},
+                {"smpText", "　　样本：设文字 / 清空", "setText / 清空 的样本"},
+                {"smpState", "　　样本：状态变化", "setVisibility / setSelected 等"},
+                {"smpIcon", "　　样本：图标", "setImageDrawable 等"},
+                {"smpTrace", "　　样本：方法追踪调用", "追踪方法的调用样本"},
+                {"traceCompose", "Compose 文字绘制", "钩 MultiParagraph.paint*（颜色 / 描边 / 填充），Compose 才有"},
+                {"composeObj", "　　Compose：记对象身份", "每条 Compose 记录记下 MultiParagraph 对象的身份哈希（看是同一个对象反复画还是每次新建）"},
+                {"composeDump", "　　Compose：展开对象字段", "每条 Compose 记录展开一次 MultiParagraph 的字段（含文字），androidx.compose.ui.text 内的类也会展开"},
+        };
+        for (String[] f : fs) {
+            Ui.Sw x = Ui.switchRow(this, f[1], f[2]);
+            fine.put(f[0], x.sw);
+            card.addView(x.row);
+        }
+        etTraceDepth = numberRowIn(card, "方法追踪栈层数", "方法追踪的调用栈保存多少层。默认 30（其他记录用上面的「调用栈深度」）");
         root.addView(card);
+    }
+
+    private static boolean getFine(RecConfig c, String k) {
+        switch (k) {
+            case "tlTouch": return c.tlTouch;
+            case "tlKey": return c.tlKey;
+            case "tlPage": return c.tlPage;
+            case "tlViewTree": return c.tlViewTree;
+            case "smpText": return c.smpText;
+            case "smpState": return c.smpState;
+            case "smpIcon": return c.smpIcon;
+            case "smpTrace": return c.smpTrace;
+            case "traceCompose": return c.traceCompose;
+            case "composeObj": return c.composeObj;
+            default: return c.composeDump;
+        }
+    }
+
+    private static void setFine(RecConfig c, String k, boolean v) {
+        switch (k) {
+            case "tlTouch": c.tlTouch = v; break;
+            case "tlKey": c.tlKey = v; break;
+            case "tlPage": c.tlPage = v; break;
+            case "tlViewTree": c.tlViewTree = v; break;
+            case "smpText": c.smpText = v; break;
+            case "smpState": c.smpState = v; break;
+            case "smpIcon": c.smpIcon = v; break;
+            case "smpTrace": c.smpTrace = v; break;
+            case "traceCompose": c.traceCompose = v; break;
+            case "composeObj": c.composeObj = v; break;
+            default: c.composeDump = v; break;
+        }
     }
 
     /** 标题 + 说明 + 分段选择（几选一）。 */
@@ -394,6 +453,109 @@ public class MainActivity extends Activity {
         col.addView(e);
         parent.addView(col);
         return e;
+    }
+
+    // ------------------------------------------------------------ 细分开关 / 各自上限 / 各自栈深（1.24）
+
+    private final java.util.LinkedHashMap<String, Switch> fineSw = new java.util.LinkedHashMap<>();
+    private final java.util.LinkedHashMap<String, EditText> fineNum = new java.util.LinkedHashMap<>();
+    private EditText etDumpPrefix;
+    private LinearLayout fineBody;
+    private TextView fineHeader;
+
+    private void fineSwitch(String field, String title, String desc) {
+        Ui.Sw s = Ui.switchRow(this, title, desc);
+        fineSw.put(field, s.sw);
+        fineBody.addView(s.row);
+    }
+
+    private void fineNumber(String field, String title, String desc) {
+        fineNum.put(field, numberRowIn(fineBody, title, desc));
+    }
+
+    private void fineGroup(String title, String desc) {
+        fineBody.addView(Ui.divider(this), Ui.lpM(this, -1, Ui.dp(this, 1), 0, 10, 0, 10));
+        fineBody.addView(Ui.tv(this, title, 14.5f, R.color.text, true));
+        if (desc != null) {
+            TextView d = Ui.tv(this, desc, 12, R.color.text_sub, false);
+            d.setLineSpacing(0, 1.1f);
+            d.setPadding(0, Ui.dp(this, 2), 0, Ui.dp(this, 2));
+            fineBody.addView(d);
+        }
+    }
+
+    private void buildFineCard(LinearLayout root) {
+        root.addView(Ui.section(this, "更多细分项",
+                "上面的总开关开着时，这里的子开关才起作用，默认全开。关掉用不上的项，记录更干净、文件更小。"
+                        + "每种记录各自一个文件、各自有上限，一种灌满不会挤掉别的。"));
+        LinearLayout card = Ui.card(this);
+        fineHeader = Ui.tv(this, "", 15.5f, R.color.text, true);
+        fineHeader.setPadding(0, Ui.dp(this, 4), 0, Ui.dp(this, 4));
+        fineHeader.setClickable(true);
+        fineHeader.setOnClickListener(v -> openFine(fineBody.getVisibility() != View.VISIBLE));
+        card.addView(fineHeader);
+        fineBody = Ui.vertical(this);
+
+        fineGroup("文字是谁设置的", "总开关「文字是谁设置的」的子项");
+        fineSwitch("setText", "setText / append / setHint", "记下文字被设置成什么、由哪行代码设置");
+        fineSwitch("setClear", "文字被清空", "setText 空串或 null：谁把这段文字清掉了");
+
+        fineGroup("文字是谁画的", "总开关「文字是谁画的」的子项");
+        fineSwitch("drawTextView", "TextView 的绘制", "普通控件里的文字");
+        fineSwitch("drawCanvas", "自绘（非 Compose）", "直接画在 Canvas 上的文字");
+        fineSwitch("drawCompose", "Compose 的绘制", "Compose 画的文字（弹幕就是这一类）。和上面「Compose 文字绘制」不同：那个管 paint 参数的观察，这个管绘制记录本身");
+
+        fineGroup("文字颜色", "总开关「文字颜色」的子项");
+        fineSwitch("colorPaint", "画笔颜色", "每次画文字时画笔的颜色、字号、描边或填充");
+        fineSwitch("colorSet", "setTextColor 设置位置", "谁调用了 setTextColor、改成了什么颜色");
+
+        fineGroup("Compose 字段展开", "「Compose：展开对象字段」的细项。把 MultiParagraph 里的字段名、类型、值列出来，找文字 / 颜色存在哪个字段，每条记录最多 6 份");
+        fineNumber("composeDumpEvery", "展开间隔", "前 3 份每次都展开，之后每隔多少次再展开一份。默认 50");
+        fineNumber("composeDumpLines", "一份最多多少行", "默认 60");
+        etDumpPrefix = textRowIn(fineBody, "额外放行的类",
+                "字段展开默认只进 App 自己的类。这里的包名 / 类名前缀也会进，逗号或换行分隔。默认 androidx.compose.ui.text.；想看更多再加，如 androidx.compose.ui.platform.",
+                "androidx.compose.ui.text.", true);
+
+        fineGroup("图标", "总开关「图标和按钮图片」的子项");
+        fineSwitch("iconImage", "ImageView 设置图片", "setImageDrawable / setImageResource / setImageBitmap 等");
+        fineSwitch("iconDesc", "设置内容描述", "View.setContentDescription");
+
+        fineGroup("状态变化", "总开关「状态变化」的子项");
+        fineSwitch("stateAlpha", "透明度 setAlpha", "动画会很频繁，按 0.1 一档去重");
+        fineSwitch("stateVisible", "可见性 setVisibility", "显示 / 隐藏 / 占位隐藏");
+        fineSwitch("stateSelected", "选中态 setSelected", "底部标签、点赞这类的选中效果");
+
+        fineGroup("时间线", "补上「钩点可用」");
+        fineSwitch("tlClass", "钩点可用", "方法追踪的类什么时候可用、第几次尝试");
+
+        fineGroup("链路追踪", "总开关「链路追踪」的子项");
+        fineSwitch("chainCoroutine", "上游：协程调度", "钩 kotlinx 的 CoroutineScheduler，补上协程投递的来源。尽力而为：类被混淆或没用协程时找不到，只写一行日志");
+
+        fineGroup("每种记录各自的上限", "各种记录分开计数，互不挤占。满了会在记录页顶部写出哪一种丢了多少");
+        fineSwitch("splitFiles", "分文件存", "每种记录一个快照文件、时间线一个文件，各自独立；关掉 = 回到一个文件 + 总上限（「高级」里的最多保存记录数）");
+        fineNumber("capTextView", "TextView 文字记录", "默认 800");
+        fineNumber("capCanvas", "自绘文字记录", "默认 300");
+        fineNumber("capCompose", "Compose 文字记录", "默认 400");
+        fineNumber("capClear", "文字清空记录", "默认 300");
+        fineNumber("capIcon", "图标记录", "默认 300");
+        fineNumber("capState", "状态变化记录", "默认 300");
+        fineNumber("capTrace", "方法追踪记录", "默认 600；「没显示出来的文字」上限在「高级」里");
+
+        fineGroup("每种栈各自的深度", "0 = 用「高级」里的调用栈保存层数。范围 1–60。方法追踪的栈层数在上面单独设");
+        fineNumber("depthSet", "设置栈（setText / 清空）", "默认 0");
+        fineNumber("depthDraw", "绘制栈", "默认 0");
+        fineNumber("depthColor", "颜色设置栈", "默认 0");
+        fineNumber("depthIcon", "图标设置栈", "默认 0");
+        fineNumber("depthState", "状态变化栈", "默认 0");
+
+        card.addView(fineBody);
+        root.addView(card);
+        openFine(false);
+    }
+
+    private void openFine(boolean open) {
+        fineBody.setVisibility(open ? View.VISIBLE : View.GONE);
+        fineHeader.setText((open ? "▾  " : "▸  ") + "每一项单独开关 / 每种记录的上限 / 每种栈的深度");
     }
 
     private void buildAdvancedCard(LinearLayout root) {
@@ -558,6 +720,22 @@ public class MainActivity extends Activity {
         swTl.setChecked(c.tlOn);
         swTlOps.setChecked(c.tlOps);
         swTlSamples.setChecked(c.tlSamples);
+        swRecOutside.setChecked(c.recOutside);
+        for (java.util.Map.Entry<String, Switch> e : fine.entrySet()) e.getValue().setChecked(getFine(c, e.getKey()));
+        etTraceDepth.setText(String.valueOf(c.traceStackDepth));
+        for (java.util.Map.Entry<String, Switch> e : fineSw.entrySet()) {
+            try {
+                e.getValue().setChecked(RecConfig.class.getField(e.getKey()).getBoolean(c));
+            } catch (Throwable ignored) {
+            }
+        }
+        for (java.util.Map.Entry<String, EditText> e : fineNum.entrySet()) {
+            try {
+                e.getValue().setText(String.valueOf(RecConfig.class.getField(e.getKey()).getInt(c)));
+            } catch (Throwable ignored) {
+            }
+        }
+        etDumpPrefix.setText(c.dumpPrefixes);
         swChain.setChecked(c.chainOn);
         swChainAsync.setChecked(c.chainAsync);
         swChainDown.setChecked(c.chainDown);
@@ -608,6 +786,23 @@ public class MainActivity extends Activity {
         c.tlOn = swTl.isChecked();
         c.tlOps = swTlOps.isChecked();
         c.tlSamples = swTlSamples.isChecked();
+        c.recOutside = swRecOutside.isChecked();
+        for (java.util.Map.Entry<String, Switch> e : fine.entrySet()) setFine(c, e.getKey(), e.getValue().isChecked());
+        c.traceStackDepth = RecConfig.clamp(parse(etTraceDepth, 30), 1, 80);
+        for (java.util.Map.Entry<String, Switch> e : fineSw.entrySet()) {
+            try {
+                RecConfig.class.getField(e.getKey()).setBoolean(c, e.getValue().isChecked());
+            } catch (Throwable ignored) {
+            }
+        }
+        for (java.util.Map.Entry<String, EditText> e : fineNum.entrySet()) {
+            try {
+                java.lang.reflect.Field f = RecConfig.class.getField(e.getKey());
+                f.setInt(c, Math.max(0, parse(e.getValue(), f.getInt(c))));
+            } catch (Throwable ignored) {
+            }
+        }
+        c.dumpPrefixes = etDumpPrefix.getText().toString();
         c.chainOn = swChain.isChecked();
         c.chainAsync = swChainAsync.isChecked();
         c.chainDown = swChainDown.isChecked();
