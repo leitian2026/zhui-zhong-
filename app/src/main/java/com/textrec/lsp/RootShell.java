@@ -154,7 +154,7 @@ final class RootShell {
                 + "[ -d $T ] || continue\n"
                 + "U=$(stat -c %u $D)\n"
                 + "cat > $T/marker.txt <<'TEXTREC_EOF'\n"
-                + seq + "\n" + lb.toString().trim() + "\n"
+                + seq + "\n" + System.currentTimeMillis() + "\n" + lb.toString().trim() + "\n"
                 + "TEXTREC_EOF\n"
                 + "chown $U:$U $T/marker.txt\n"
                 + "chmod 600 $T/marker.txt\n"
