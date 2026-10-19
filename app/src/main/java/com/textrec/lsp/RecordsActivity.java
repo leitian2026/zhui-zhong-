@@ -969,6 +969,42 @@ public class RecordsActivity extends Activity {
 
     private long markerSeq = System.currentTimeMillis();
 
+    /** 打开任务浮窗：先要“显示在其他应用上层”权限，没有就跳到系统设置。 */
+    private void startGuide() {
+        if (!android.provider.Settings.canDrawOverlays(this)) {
+            toast("先给 TextRec 开「显示在其他应用上层」，开完回来再点一次");
+            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    android.net.Uri.parse("package:" + getPackageName())));
+            return;
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1); // 不给也能用，只是看不到“运行中”通知
+        }
+        if (GuideService.isRunning()) {
+            toast("浮窗已经开着了");
+            return;
+        }
+        startForegroundService(new Intent(this, GuideService.class));
+        toast("浮窗已打开：切到目标 App，按浮窗上的提示做");
+    }
+
+    private void editTasks() {
+        final android.content.SharedPreferences sp = getSharedPreferences(Actions.PREFS, MODE_PRIVATE);
+        LinearLayout body = Ui.vertical(this);
+        helpItem(body, "怎么写", "一行一件事：名称|提示|秒数（后两项可省）。名称写 @基线 的是自动计时的基线，秒数是时长。"
+                + "每件事开始、结束、重做都会作为标记进目标 App 的时间线。");
+        final EditText et = Ui.field(this, "暂停|点一下视频暂停，停 3 秒", true, false);
+        et.setText(sp.getString(GuideService.PREF_TASKS, GuideService.DEFAULT_TASKS));
+        body.addView(et);
+        new Ui.Dlg(this, "任务清单", null).keyboard()
+                .body(body, true)
+                .button("取消", false, null)
+                .button("恢复默认", false, () -> sp.edit().remove(GuideService.PREF_TASKS).apply())
+                .button("保存", true, () -> sp.edit().putString(GuideService.PREF_TASKS, et.getText().toString()).apply())
+                .show();
+    }
+
     private void askMarker() {
         LinearLayout body = Ui.vertical(this);
         helpItem(body, "标记", "写下接下来要做的事，比如“开始划到下一个视频”“点进评论”。点“记下”后马上去做，时间线里这一笔之后的记录就属于这件事。");
@@ -1015,6 +1051,8 @@ public class RecordsActivity extends Activity {
         PopupMenu pm = new PopupMenu(this, anchor);
         pm.getMenu().add(0, 1, 0, "这些筛选是什么意思");
         pm.getMenu().add(0, 3, 1, "粘贴命令…");
+        pm.getMenu().add(0, 8, 2, "任务浮窗（一步一步提示要做什么）");
+        pm.getMenu().add(0, 9, 2, "编辑任务清单…");
         pm.getMenu().add(0, 4, 3, "打标记…（时间线上记一笔“现在开始做某某”）");
         pm.getMenu().add(0, 5, 4, "基线：开始（什么都不操作）");
         pm.getMenu().add(0, 6, 5, "基线：结束");
@@ -1023,6 +1061,8 @@ public class RecordsActivity extends Activity {
         pm.setOnMenuItemClickListener(item -> {
             if (item.getItemId() == 1) showHelp();
             else if (item.getItemId() == 4) askMarker();
+            else if (item.getItemId() == 8) startGuide();
+            else if (item.getItemId() == 9) editTasks();
             else if (item.getItemId() == 5) sendMarker("基线开始");
             else if (item.getItemId() == 6) sendMarker("基线结束");
             else if (item.getItemId() == 7) showTimeline();
