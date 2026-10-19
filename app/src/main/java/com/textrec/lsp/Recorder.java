@@ -1090,7 +1090,8 @@ final class Recorder {
             Object v;
             if (idx < 0) v = p.getResult();
             else v = p.args != null && idx < p.args.length ? p.args[idx] : null;
-            if (v instanceof CharSequence || v instanceof Number) Timeline.setTag(String.valueOf(v));
+            // 只认字符串 / 整数 id；浮点数（进度之类）不是标识，进度回调的另一个重载会传浮点
+            if (v instanceof CharSequence || v instanceof Long || v instanceof Integer) Timeline.setTag(String.valueOf(v));
         } catch (Throwable ignored) {
         }
     }
