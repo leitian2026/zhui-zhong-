@@ -90,6 +90,7 @@ final class Rec {
     private volatile int frameN;
     private final java.util.LinkedHashMap<String, int[]> frameCnt = new java.util.LinkedHashMap<>();
     private volatile int frameOverflow;
+    private final int[] segCnt = new int[40];
     volatile String hookInfo;
     volatile String retType;
 
@@ -104,6 +105,8 @@ final class Rec {
             if (g > maxGap) maxGap = g;
         }
         lastMono = now;
+        int sg = Timeline.curTask;
+        if (sg >= 0 && sg < segCnt.length) segCnt[sg]++; // 按任务阶段分别计数（0 = 任务之外）
         if (Timeline.inBaseline()) baseHits++;
         else liveHits++;
         String t = Timeline.tag;
@@ -115,6 +118,13 @@ final class Rec {
                 }
             }
         }
+    }
+
+    /** 各任务阶段的调用次数：下标 = 任务序号（0 = 任务之外），只列非 0 的。 */
+    java.util.LinkedHashMap<Integer, Integer> segCounts() {
+        java.util.LinkedHashMap<Integer, Integer> m = new java.util.LinkedHashMap<>();
+        for (int i = 0; i < segCnt.length; i++) if (segCnt[i] > 0) m.put(i, segCnt[i]);
+        return m;
     }
 
     java.util.List<String> tagList() {
