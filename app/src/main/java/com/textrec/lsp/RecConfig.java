@@ -70,6 +70,109 @@ public final class RecConfig {
     public boolean tlOn = true;
     public boolean tlOps = true;
     public boolean tlSamples = true;
+    /** 任务外也记录（默认关）：任务浮窗的流程进行中，只有「任务开始 → 任务结束」之间才建记录；打开后任务外也记，但单独一桶存（各自上限、各自文件）。没用任务浮窗时不受影响，照常全记。 */
+    public boolean recOutside = false;
+    /** Compose 文字绘制（MultiParagraph.paint*） */
+    public boolean traceCompose = true;
+    /** Compose 记 MultiParagraph 对象身份 */
+    public boolean composeObj = true;
+    /** Compose 展开 MultiParagraph 字段（含文字） */
+    public boolean composeDump = true;
+    /** 时间线：触摸 */
+    public boolean tlTouch = true;
+    /** 时间线：按键 */
+    public boolean tlKey = true;
+    /** 时间线：页面切换 */
+    public boolean tlPage = true;
+    /** 时间线：控件增删 */
+    public boolean tlViewTree = true;
+    /** 样本：设文字/清空 */
+    public boolean smpText = true;
+    /** 样本：状态变化 */
+    public boolean smpState = true;
+    /** 样本：图标 */
+    public boolean smpIcon = true;
+    /** 样本：方法追踪调用 */
+    public boolean smpTrace = true;
+    /** 方法追踪保存的调用栈最大层数 */
+    public int traceStackDepth = 30;
+    /** 每种记录类型（TextView/ICON/STATE/TRACE…）各自最多多少条，一种灌满不会挤掉别的种类 */
+    public int maxPerKind = 500;
+
+    // ---- 1.24 更细的开关 / 每种记录各自的上限 / 每种栈各自的深度 / 分文件存 ----
+    /** 文字是谁设置的：setText / append / setHint（总开关 traceSet 开着时才起作用，下同） */
+    public boolean setText = true;
+    /** 文字被清空（setText 空串 / null） */
+    public boolean setClear = true;
+    /** 文字是谁画的：TextView 的绘制 */
+    public boolean drawTextView = true;
+    /** 文字是谁画的：自绘（非 Compose 的 Canvas） */
+    public boolean drawCanvas = true;
+    /** 文字是谁画的：Compose（这个关掉，Compose 文字的绘制记录就不记；traceCompose 管的是 paint 参数的观察） */
+    public boolean drawCompose = true;
+    /** 文字颜色：画笔颜色 */
+    public boolean colorPaint = true;
+    /** 文字颜色：TextView 的 setTextColor 设置位置 */
+    public boolean colorSet = true;
+    /** 图标：ImageView 的 setImage* */
+    public boolean iconImage = true;
+    /** 图标：View.setContentDescription */
+    public boolean iconDesc = true;
+    /** 状态变化：透明度 / 可见性 / 选中态各自一个 */
+    public boolean stateAlpha = true;
+    public boolean stateVisible = true;
+    public boolean stateSelected = true;
+    /** 时间线：方法追踪的钩点什么时候可用 */
+    public boolean tlClass = true;
+    /** 链路追踪的上游：协程调度（kotlinx CoroutineScheduler）。尽力而为，类被混淆或没用协程时找不到 */
+    public boolean chainCoroutine = true;
+    /** Compose 字段展开：一条记录里，第一次之后每隔多少次再展开一份（一条记录最多 6 份） */
+    public int composeDumpEvery = 50;
+    /** Compose 字段展开：一份最多多少行 */
+    public int composeDumpLines = 60;
+    /** 字段展开默认只进 App 自己的类；这里列出的包 / 类名前缀也进（逗号或换行分隔）。默认放开 Compose 文字类 */
+    public String dumpPrefixes = "androidx.compose.ui.text.";
+    // 每种记录各自的上限（互不挤占）。maxPerKind 已废弃，只给没有单独上限的种类用
+    public int capTextView = 800;
+    public int capCanvas = 300;
+    public int capCompose = 400;
+    public int capClear = 300;
+    public int capIcon = 300;
+    public int capState = 300;
+    public int capTrace = 600;
+    // 每种栈各自的深度；0 = 用 stackDepth（方法追踪另有 traceStackDepth）
+    public int depthSet = 0;
+    public int depthDraw = 0;
+    public int depthColor = 0;
+    public int depthIcon = 0;
+    public int depthState = 0;
+    /** 分文件存：每种记录一个快照文件、时间线一个文件，各自独立；关掉 = 回到一个文件 + 总上限 maxRecords */
+    public boolean splitFiles = true;
+
+    /** 某种记录的上限。 */
+    int capFor(String kind) {
+        if (Rec.TEXTVIEW.equals(kind)) return capTextView;
+        if (Rec.CANVAS.equals(kind)) return capCanvas;
+        if (Rec.COMPOSE.equals(kind)) return capCompose;
+        if (Rec.TEXTCLEAR.equals(kind)) return capClear;
+        if (Rec.TEXTSET.equals(kind)) return maxSetOnly;
+        if (Rec.STATE.equals(kind)) return capState;
+        if (Rec.ICON.equals(kind)) return capIcon;
+        if (Rec.TRACE.equals(kind)) return capTrace;
+        return maxPerKind;
+    }
+
+    /** 某种栈的深度：set / draw / color / icon / state；方法追踪用 traceStackDepth。 */
+    int depthFor(String which) {
+        int d;
+        if ("set".equals(which)) d = depthSet;
+        else if ("draw".equals(which)) d = depthDraw;
+        else if ("color".equals(which)) d = depthColor;
+        else if ("icon".equals(which)) d = depthIcon;
+        else if ("state".equals(which)) d = depthState;
+        else d = 0;
+        return d > 0 ? clamp(d, 1, 60) : stackDepth;
+    }
     public boolean chainOn = false;
     public boolean chainAsync = true;
     public boolean chainEffects = true;
@@ -245,6 +348,20 @@ public final class RecConfig {
             p.setProperty("tlOn", String.valueOf(tlOn));
             p.setProperty("tlOps", String.valueOf(tlOps));
             p.setProperty("tlSamples", String.valueOf(tlSamples));
+            p.setProperty("recOutside", String.valueOf(recOutside));
+            p.setProperty("traceCompose", String.valueOf(traceCompose));
+            p.setProperty("composeObj", String.valueOf(composeObj));
+            p.setProperty("composeDump", String.valueOf(composeDump));
+            p.setProperty("tlTouch", String.valueOf(tlTouch));
+            p.setProperty("tlKey", String.valueOf(tlKey));
+            p.setProperty("tlPage", String.valueOf(tlPage));
+            p.setProperty("tlViewTree", String.valueOf(tlViewTree));
+            p.setProperty("smpText", String.valueOf(smpText));
+            p.setProperty("smpState", String.valueOf(smpState));
+            p.setProperty("smpIcon", String.valueOf(smpIcon));
+            p.setProperty("smpTrace", String.valueOf(smpTrace));
+            p.setProperty("traceStackDepth", String.valueOf(traceStackDepth));
+            p.setProperty("maxPerKind", String.valueOf(maxPerKind));
             p.setProperty("chainOn", String.valueOf(chainOn));
             p.setProperty("chainAsync", String.valueOf(chainAsync));
             p.setProperty("chainEffects", String.valueOf(chainEffects));
@@ -264,6 +381,36 @@ public final class RecConfig {
             p.setProperty("stacksPerSec", String.valueOf(stacksPerSec));
             p.setProperty("maxRecords", String.valueOf(maxRecords));
             p.setProperty("flushSec", String.valueOf(flushSec));
+            p.setProperty("setText", String.valueOf(setText));
+            p.setProperty("setClear", String.valueOf(setClear));
+            p.setProperty("drawTextView", String.valueOf(drawTextView));
+            p.setProperty("drawCanvas", String.valueOf(drawCanvas));
+            p.setProperty("drawCompose", String.valueOf(drawCompose));
+            p.setProperty("colorPaint", String.valueOf(colorPaint));
+            p.setProperty("colorSet", String.valueOf(colorSet));
+            p.setProperty("iconImage", String.valueOf(iconImage));
+            p.setProperty("iconDesc", String.valueOf(iconDesc));
+            p.setProperty("stateAlpha", String.valueOf(stateAlpha));
+            p.setProperty("stateVisible", String.valueOf(stateVisible));
+            p.setProperty("stateSelected", String.valueOf(stateSelected));
+            p.setProperty("tlClass", String.valueOf(tlClass));
+            p.setProperty("chainCoroutine", String.valueOf(chainCoroutine));
+            p.setProperty("splitFiles", String.valueOf(splitFiles));
+            p.setProperty("composeDumpEvery", String.valueOf(composeDumpEvery));
+            p.setProperty("composeDumpLines", String.valueOf(composeDumpLines));
+            p.setProperty("capTextView", String.valueOf(capTextView));
+            p.setProperty("capCanvas", String.valueOf(capCanvas));
+            p.setProperty("capCompose", String.valueOf(capCompose));
+            p.setProperty("capClear", String.valueOf(capClear));
+            p.setProperty("capIcon", String.valueOf(capIcon));
+            p.setProperty("capState", String.valueOf(capState));
+            p.setProperty("capTrace", String.valueOf(capTrace));
+            p.setProperty("depthSet", String.valueOf(depthSet));
+            p.setProperty("depthDraw", String.valueOf(depthDraw));
+            p.setProperty("depthColor", String.valueOf(depthColor));
+            p.setProperty("depthIcon", String.valueOf(depthIcon));
+            p.setProperty("depthState", String.valueOf(depthState));
+            p.setProperty("dumpPrefixes", dumpPrefixes);
             p.setProperty("epoch", String.valueOf(epoch));
             ByteArrayOutputStream bo = new ByteArrayOutputStream();
             p.store(bo, null);
@@ -322,6 +469,20 @@ public final class RecConfig {
         c.tlOn = bool(p, "tlOn", c.tlOn);
         c.tlOps = bool(p, "tlOps", c.tlOps);
         c.tlSamples = bool(p, "tlSamples", c.tlSamples);
+        c.recOutside = bool(p, "recOutside", c.recOutside);
+        c.traceCompose = bool(p, "traceCompose", c.traceCompose);
+        c.composeObj = bool(p, "composeObj", c.composeObj);
+        c.composeDump = bool(p, "composeDump", c.composeDump);
+        c.tlTouch = bool(p, "tlTouch", c.tlTouch);
+        c.tlKey = bool(p, "tlKey", c.tlKey);
+        c.tlPage = bool(p, "tlPage", c.tlPage);
+        c.tlViewTree = bool(p, "tlViewTree", c.tlViewTree);
+        c.smpText = bool(p, "smpText", c.smpText);
+        c.smpState = bool(p, "smpState", c.smpState);
+        c.smpIcon = bool(p, "smpIcon", c.smpIcon);
+        c.smpTrace = bool(p, "smpTrace", c.smpTrace);
+        c.traceStackDepth = clamp(num(p, "traceStackDepth", c.traceStackDepth), 1, 80);
+        c.maxPerKind = clamp(num(p, "maxPerKind", c.maxPerKind), 20, 20000);
         c.chainOn = bool(p, "chainOn", c.chainOn);
         c.chainAsync = bool(p, "chainAsync", c.chainAsync);
         c.chainEffects = bool(p, "chainEffects", c.chainEffects);
@@ -341,6 +502,36 @@ public final class RecConfig {
         c.stacksPerSec = clamp(num(p, "stacksPerSec", c.stacksPerSec), 1, 5000);
         c.maxRecords = clamp(num(p, "maxRecords", c.maxRecords), 10, 20000);
         c.flushSec = clamp(num(p, "flushSec", c.flushSec), 1, 60);
+        c.setText = bool(p, "setText", c.setText);
+        c.setClear = bool(p, "setClear", c.setClear);
+        c.drawTextView = bool(p, "drawTextView", c.drawTextView);
+        c.drawCanvas = bool(p, "drawCanvas", c.drawCanvas);
+        c.drawCompose = bool(p, "drawCompose", c.drawCompose);
+        c.colorPaint = bool(p, "colorPaint", c.colorPaint);
+        c.colorSet = bool(p, "colorSet", c.colorSet);
+        c.iconImage = bool(p, "iconImage", c.iconImage);
+        c.iconDesc = bool(p, "iconDesc", c.iconDesc);
+        c.stateAlpha = bool(p, "stateAlpha", c.stateAlpha);
+        c.stateVisible = bool(p, "stateVisible", c.stateVisible);
+        c.stateSelected = bool(p, "stateSelected", c.stateSelected);
+        c.tlClass = bool(p, "tlClass", c.tlClass);
+        c.chainCoroutine = bool(p, "chainCoroutine", c.chainCoroutine);
+        c.splitFiles = bool(p, "splitFiles", c.splitFiles);
+        c.composeDumpEvery = clamp(num(p, "composeDumpEvery", c.composeDumpEvery), 1, 100000);
+        c.composeDumpLines = clamp(num(p, "composeDumpLines", c.composeDumpLines), 5, 300);
+        c.capTextView = clamp(num(p, "capTextView", c.capTextView), 10, 20000);
+        c.capCanvas = clamp(num(p, "capCanvas", c.capCanvas), 10, 20000);
+        c.capCompose = clamp(num(p, "capCompose", c.capCompose), 10, 20000);
+        c.capClear = clamp(num(p, "capClear", c.capClear), 10, 20000);
+        c.capIcon = clamp(num(p, "capIcon", c.capIcon), 10, 20000);
+        c.capState = clamp(num(p, "capState", c.capState), 10, 20000);
+        c.capTrace = clamp(num(p, "capTrace", c.capTrace), 10, 20000);
+        c.depthSet = clamp(num(p, "depthSet", c.depthSet), 0, 60);
+        c.depthDraw = clamp(num(p, "depthDraw", c.depthDraw), 0, 60);
+        c.depthColor = clamp(num(p, "depthColor", c.depthColor), 0, 60);
+        c.depthIcon = clamp(num(p, "depthIcon", c.depthIcon), 0, 60);
+        c.depthState = clamp(num(p, "depthState", c.depthState), 0, 60);
+        c.dumpPrefixes = p.getProperty("dumpPrefixes", c.dumpPrefixes);
         try {
             c.epoch = Long.parseLong(p.getProperty("epoch", "0").trim());
         } catch (Throwable ignored) {
