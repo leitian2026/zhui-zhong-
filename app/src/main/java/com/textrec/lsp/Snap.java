@@ -39,17 +39,48 @@ final class Snap {
         StringBuilder sb = new StringBuilder();
         sb.append("进程 ").append(proc).append("：").append(tl.length()).append(" 条");
         long dr = root.optLong("timelineDropped");
-        if (dr > 0) sb.append("  ⚠ 超过 3000 条上限，最早的 ").append(dr).append(" 条已丢（环形保留最近的）");
-        sb.append("  （前一列是单调时钟毫秒，相对目标进程开始记录；同一毫秒内看序号 #）\n");
-        for (int i = 0; i < tl.length(); i++) {
+        if (dr > 0) sb.append("  ⚠ 关键事件超过 3000 条，最早的 ").append(dr).append(" 条已丢");
+        JSONObject kd = root.optJSONObject("timelineKindDropped");
+        if (kd != null && kd.length() > 0) {
+            sb.append("  ⚠ 采样事件每种最多 400 条，超出没记：");
+            java.util.Iterator<String> it = kd.keys();
+            while (it.hasNext()) {
+                String k = it.next();
+                sb.append(k).append(' ').append(kd.optInt(k)).append("  ");
+            }
+        }
+        sb.append("\n（前一列是单调时钟毫秒，相对目标进程开始记录；同一毫秒内看序号 #；“✗”开头 = 被「重做」作废的那一次）\n");
+        int n = tl.length();
+        String[] lines = new String[n];
+        boolean[] voided = new boolean[n];
+        java.util.HashMap<Integer, Integer> startIdx = new java.util.HashMap<>();
+        java.util.regex.Pattern pt = java.util.regex.Pattern.compile("任务(开始|重做) (\\d+)");
+        for (int i = 0; i < n; i++) {
             JSONObject e = tl.optJSONObject(i);
-            if (e == null) continue;
-            sb.append(String.format(Locale.US, "%8d #%-5d %-8s ", e.optLong("t"), e.optLong("seq"), e.optString("kind")))
+            if (e == null) {
+                lines[i] = "";
+                continue;
+            }
+            StringBuilder l = new StringBuilder();
+            l.append(String.format(Locale.US, "%8d #%-5d %-8s ", e.optLong("t"), e.optLong("seq"), e.optString("kind")))
                     .append(e.optString("text"));
             String tg = e.optString("tag");
-            if (!tg.isEmpty()) sb.append("   <标识 ").append(tg).append('>');
-            sb.append("   [").append(e.optString("page")).append("]\n");
+            if (!tg.isEmpty()) l.append("   <标识 ").append(tg).append('>');
+            l.append("   [").append(e.optString("page")).append("]\n");
+            lines[i] = l.toString();
+            if ("TASK".equals(e.optString("kind"))) {
+                java.util.regex.Matcher m = pt.matcher(e.optString("text"));
+                if (m.find()) {
+                    int no = Integer.parseInt(m.group(2));
+                    if ("重做".equals(m.group(1))) {
+                        Integer st = startIdx.get(no);
+                        if (st != null) for (int k = st; k < i; k++) voided[k] = true;
+                    }
+                    startIdx.put(no, i);
+                }
+            }
         }
+        for (int i = 0; i < n; i++) sb.append(voided[i] ? "✗" : " ").append(lines[i]);
         return sb.toString();
     }
 
