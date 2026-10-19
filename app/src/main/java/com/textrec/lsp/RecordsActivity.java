@@ -46,7 +46,7 @@ import java.util.regex.Pattern;
  * 导出和清空收在顶栏图标里。每个芯片点开都有说明。
  */
 public class RecordsActivity extends Activity {
-    private static final int REQ_TXT = 2001, REQ_JSON = 2002, REQ_HTML = 2003, REQ_HOOK = 2004;
+    private static final int REQ_TXT = 2001, REQ_JSON = 2002, REQ_HTML = 2003, REQ_HOOK = 2004, REQ_TASK = 2005;
     private static final String[] SORTS = {"最近更新", "次数最多", "最早出现"};
     private static final String[] SORT_DESC = {"最近一次出现的排前面", "出现 / 绘制次数多的排前面", "最早被记录到的排前面"};
     /**
@@ -85,7 +85,10 @@ public class RecordsActivity extends Activity {
     private ImageView btnClearSearch;
     private Ui.Bar bar;
     private ProgressBar progress;
-    private TextView chType, chPage, chCat, chSort, chScreen, chCommon;
+    private TextView chType, chPage, chCat, chSort, chScreen, chCommon, chBucket;
+    /** 看哪一桶：0 = 任务内（默认），1 = 任务外，2 = 全部。没用任务浮窗录的记录全在任务内。 */
+    private int bucketSel = 0;
+    private static final String[] BUCKETS = {"任务内", "任务外", "全部"};
     private TextView tvLegend, tvBanner, emptyTitle, emptyDesc, emptyBtn;
     /** 分类筛选（空 = 不限），维度见 RecFormat.CAT_DIMS，几项同时选是“且”。 */
     private final String[] catVal = new String[RecFormat.CAT_DIMS.length];
@@ -178,6 +181,16 @@ public class RecordsActivity extends Activity {
         chPage = Ui.chip(this, "", false, v -> choosePage());
         chCat = Ui.chip(this, "", false, v -> chooseCat());
         chSort = Ui.chip(this, "", false, v -> chooseSort());
+        chBucket = Ui.chip(this, "", false, v -> {
+            bucketSel = (bucketSel + 1) % 3;
+            int n1 = 0;
+            for (Snap.Item it : all) if (it.o.optInt("bucket") == 1) n1++;
+            toast(bucketSel == 0 ? "只看任务内的记录（任务清单上各件事期间记到的）"
+                    : bucketSel == 1 ? "只看任务外的记录（共 " + n1 + " 条；0 条说明「任务外也记录」没开，或没录到）"
+                    : "任务内 + 任务外都显示");
+            updateChips();
+            applyFilter();
+        });
         chScreen = Ui.chip(this, "", false, v -> {
             onlyOnScreen = !onlyOnScreen;
             toast(onlyOnScreen ? "只显示此刻在屏幕上的内容" : "连不在屏幕上的（预加载 / 已离开页面的）也显示");
@@ -190,7 +203,7 @@ public class RecordsActivity extends Activity {
             updateChips();
             applyFilter();
         });
-        for (TextView c : new TextView[]{chType, chPage, chCat, chSort, chScreen, chCommon}) {
+        for (TextView c : new TextView[]{chBucket, chType, chPage, chCat, chSort, chScreen, chCommon}) {
             chips.addView(c, Ui.lpM(this, -2, -2, 0, 0, 8, 0));
         }
         hs.addView(chips);
@@ -430,6 +443,7 @@ public class RecordsActivity extends Activity {
     // ------------------------------------------------------------ 筛选芯片 / 清除
 
     private void updateChips() {
+        Ui.setChip(chBucket, bucketSel != 0, "范围：" + BUCKETS[bucketSel] + " ▾");
         Ui.setChip(chType, kindManual, "类型：" + kindChipText() + " ▾");
         String pg = pageFilter.isEmpty() ? "全部" : pageFilter;
         Ui.setChip(chPage, !pageFilter.isEmpty(), "页面：" + pg + " ▾");
@@ -443,6 +457,7 @@ public class RecordsActivity extends Activity {
     private void clearFilters() {
         etSearch.setText("");
         pageFilter = "";
+        bucketSel = 0;
         fullIds.clear();
         java.util.Arrays.fill(catVal, "");
         kindManual = false;
@@ -750,6 +765,7 @@ public class RecordsActivity extends Activity {
         int hiddenC = 0;
         for (Snap.Item it : all) {
             final String kind = it.o.optString("kind");
+            if (bucketSel != 2 && it.o.optInt("bucket") != bucketSel) continue; // 任务内 / 任务外分桶
             if (common != null && !"TRACE".equals(kind) && common.contains(commonKey(it.o))) { // 方法追踪不算公共控件
                 if (kindOk(kind)) hiddenC++;
                 continue;
@@ -1304,14 +1320,19 @@ public class RecordsActivity extends Activity {
     // ------------------------------------------------------------ 导出
 
     private void showExport() {
-        if (shown.isEmpty()) {
+        if (all.isEmpty()) {
             toast("当前没有可导出的记录");
             return;
         }
-        final Ui.Dlg d = new Ui.Dlg(this, "导出", "导出当前筛选后的 " + shown.size() + " 条记录（先在列表里筛好再导出）");
+        final Ui.Dlg d = new Ui.Dlg(this, "导出", "导出当前筛选后的 " + shown.size() + " 条记录（先在列表里筛好再导出）；「任务清单的记录」不看筛选");
         LinearLayout body = Ui.vertical(this);
+        body.addView(Ui.actionRow(this, R.drawable.ic_file, "任务清单的记录（txt）",
+                "只导出任务清单上写的所有任务期间记到的记录（不看当前筛选，不含任务外），每条标出在哪几件事里出现了几次", true, v -> {
+                    d.dismiss();
+                    export(REQ_TASK);
+                }));
         body.addView(Ui.actionRow(this, R.drawable.ic_code, "hook 清单（txt）",
-                "每个控件只写它是什么和可以 hook 的方法，最适合直接拿去写模块", true, v -> {
+                "每个控件只写它是什么和可以 hook 的方法，最适合直接拿去写模块", false, v -> {
                     d.dismiss();
                     export(REQ_HOOK);
                 }));
@@ -1340,8 +1361,12 @@ public class RecordsActivity extends Activity {
 
     /** 导出顺序：选了某个页面就是当前列表顺序；选“全部页面”就按页面名分组（组内保持当前排序）。 */
     private List<Snap.Item> exportOrder() {
-        ArrayList<Snap.Item> out = new ArrayList<>(shown);
-        if (pageFilter.isEmpty()) {
+        return exportOrder(shown, pageFilter.isEmpty());
+    }
+
+    private List<Snap.Item> exportOrder(List<Snap.Item> src, boolean groupByPage) {
+        ArrayList<Snap.Item> out = new ArrayList<>(src);
+        if (groupByPage) {
             final java.util.LinkedHashMap<String, Integer> rank = new java.util.LinkedHashMap<>();
             for (Snap.Item it : out) {
                 String p = RecFormat.pageOf(it.o);
@@ -1430,18 +1455,96 @@ public class RecordsActivity extends Activity {
     }
 
     private int countPage(String page) {
+        return countPage(shown, page);
+    }
+
+    private static int countPage(List<Snap.Item> src, String page) {
         int n = 0;
-        for (Snap.Item it : shown) if (page.equals(RecFormat.pageOf(it.o))) n++;
+        for (Snap.Item it : src) if (page.equals(RecFormat.pageOf(it.o))) n++;
         return n;
     }
 
+    /** 任务清单的记录：任务内桶里、在任务清单上某件事（序号 ≥ 1）期间被调用过的记录。不看当前的类型 / 页面 / 屏幕筛选，免得漏。 */
+    private List<Snap.Item> taskRecords() {
+        ArrayList<Snap.Item> out = new ArrayList<>();
+        for (Snap.Item it : all) {
+            if (it.o.optInt("bucket") != 0) continue;
+            JSONObject sg = it.o.optJSONObject("segCounts");
+            if (sg == null) continue;
+            boolean inTask = false;
+            java.util.Iterator<String> ks = sg.keys();
+            while (ks.hasNext()) {
+                String k = ks.next();
+                try {
+                    if (Integer.parseInt(k) > 0 && sg.optInt(k) > 0) inTask = true;
+                } catch (Throwable ignored) {
+                }
+            }
+            if (inTask) out.add(it);
+        }
+        return out;
+    }
+
+    private String buildTaskTxt(List<Snap.Item> items) {
+        StringBuilder sb = new StringBuilder();
+        sb.append("TextRec 任务清单记录  ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
+                .append("  共 ").append(items.size()).append(" 条（全部记录 ").append(all.size()).append(" 条）\n");
+        sb.append("只含任务内：任务清单上每一件事期间被调用过的记录；任务外的记录不在这个文件里。不套当前的类型 / 页面 / 屏幕上 / 公共控件筛选。\n");
+        sb.append("每条记录里的「按任务阶段的调用次数」写明它在哪几件事里出现了几次，没出现的任务 = 0 次。\n");
+        List<GuideService.Task> ts = GuideService.parse(getSharedPreferences(Actions.PREFS, MODE_PRIVATE).getString(GuideService.PREF_TASKS, GuideService.DEFAULT_TASKS));
+        sb.append("任务清单（共 ").append(ts.size()).append(" 件）：\n");
+        for (int i = 0; i < ts.size(); i++) {
+            GuideService.Task t = ts.get(i);
+            sb.append("  任务").append(i + 1).append("  ").append(t.name);
+            if (!t.hint.isEmpty()) sb.append("  —  ").append(t.hint);
+            sb.append('\n');
+        }
+        // 没有任何记录出现在某件事里，导出里写明，免得以为是漏导
+        java.util.HashSet<Integer> seen = new java.util.HashSet<>();
+        for (Snap.Item it : items) {
+            JSONObject sg = it.o.optJSONObject("segCounts");
+            if (sg == null) continue;
+            java.util.Iterator<String> ks = sg.keys();
+            while (ks.hasNext()) {
+                try {
+                    int k = Integer.parseInt(ks.next());
+                    if (k > 0) seen.add(k);
+                } catch (Throwable ignored) {
+                }
+            }
+        }
+        StringBuilder none = new StringBuilder();
+        for (int i = 1; i <= ts.size(); i++) if (!seen.contains(i)) none.append(" 任务").append(i);
+        if (none.length() > 0) sb.append("⚠ 这几件事期间一条记录都没有：").append(none).append("（没做 / 目标进程没收到标记 / 被筛选开关挡掉了，看下面的概况）\n");
+        if (!infoBase.isEmpty()) sb.append(infoBase);
+        if (!Snap.timelineText.isEmpty()) sb.append("\n══ 时间线 ══\n").append(Snap.timelineText).append("══ 时间线结束 ══\n");
+        sb.append('\n');
+        RecFormat.Dedup dd = new RecFormat.Dedup();
+        String curPage = null;
+        for (Snap.Item it : exportOrder(items, true)) {
+            String pg = RecFormat.pageOf(it.o);
+            if (!pg.equals(curPage)) {
+                curPage = pg;
+                sb.append("\n████ 页面：").append(pg).append("（").append(countPage(items, pg)).append(" 条）████\n\n");
+            }
+            sb.append(RecFormat.full(it, dd)).append("\n==========================================\n\n");
+        }
+        return sb.toString();
+    }
+
     private void export(int req) {
-        if (shown.isEmpty()) {
+        String content;
+        if (req == REQ_TASK) {
+            List<Snap.Item> ti = taskRecords();
+            if (ti.isEmpty()) {
+                toast("没有任务清单的记录（用任务浮窗录过、并且刷新过吗？）");
+                return;
+            }
+            content = buildTaskTxt(ti);
+        } else if (shown.isEmpty()) {
             toast("没有可导出的内容");
             return;
-        }
-        String content;
-        if (req == REQ_TXT) {
+        } else if (req == REQ_TXT) {
             StringBuilder sb = new StringBuilder();
             sb.append("TextRec 导出  ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
                     .append("  共 ").append(shown.size()).append(" 条\n");
@@ -1514,16 +1617,16 @@ public class RecordsActivity extends Activity {
         pendingExport = content;
         Intent i = new Intent(Intent.ACTION_CREATE_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
-        i.setType(req == REQ_TXT || req == REQ_HOOK ? "text/plain" : req == REQ_HTML ? "text/html" : "application/json");
-        i.putExtra(Intent.EXTRA_TITLE, "textrec-" + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date())
-                + (req == REQ_TXT || req == REQ_HOOK ? ".txt" : req == REQ_HTML ? ".html" : ".json"));
+        i.setType(req == REQ_TXT || req == REQ_HOOK || req == REQ_TASK ? "text/plain" : req == REQ_HTML ? "text/html" : "application/json");
+        i.putExtra(Intent.EXTRA_TITLE, (req == REQ_TASK ? "textrec-tasks-" : "textrec-") + new SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(new Date())
+                + (req == REQ_TXT || req == REQ_HOOK || req == REQ_TASK ? ".txt" : req == REQ_HTML ? ".html" : ".json"));
         startActivityForResult(i, req);
     }
 
     @Override
     protected void onActivityResult(int req, int res, Intent data) {
         super.onActivityResult(req, res, data);
-        if ((req != REQ_TXT && req != REQ_JSON && req != REQ_HTML && req != REQ_HOOK) || res != RESULT_OK || data == null || data.getData() == null) return;
+        if ((req != REQ_TXT && req != REQ_JSON && req != REQ_HTML && req != REQ_HOOK && req != REQ_TASK) || res != RESULT_OK || data == null || data.getData() == null) return;
         final Uri uri = data.getData();
         final String content = pendingExport;
         if (content == null) return;
