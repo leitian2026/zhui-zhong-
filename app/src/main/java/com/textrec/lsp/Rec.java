@@ -59,6 +59,8 @@ final class Rec {
     final int id;
     final String key;
     final String kind;
+    /** 0 = 任务内桶（含没用任务浮窗时的全部记录），1 = 任务外桶（只有开了「任务外也记录」才有） */
+    volatile int bucket;
     final String viewClass;
     final String viewId;
     final String activity;
@@ -135,6 +137,31 @@ final class Rec {
 
     String lastTag() {
         return lastTag;
+    }
+
+    // ---- Compose：MultiParagraph（paint 的 this）字段展开，最多 6 份（1.24）
+    private final java.util.ArrayList<String> cDumps = new java.util.ArrayList<>();
+    private volatile int cDumpTick;
+
+    /** 该不该再展开一份：前 3 份每次都做，之后每 every 次一份，最多 6 份。 */
+    boolean composeDumpDue(int every) {
+        synchronized (cDumps) {
+            int n = ++cDumpTick;
+            if (cDumps.size() >= 6) return false;
+            return cDumps.size() < 3 || n % Math.max(1, every) == 0;
+        }
+    }
+
+    void addComposeDump(String d) {
+        synchronized (cDumps) {
+            if (cDumps.size() < 6) cDumps.add(d);
+        }
+    }
+
+    java.util.List<String> composeDumps() {
+        synchronized (cDumps) {
+            return new java.util.ArrayList<>(cDumps);
+        }
     }
 
     void noteObj(Object o) {
