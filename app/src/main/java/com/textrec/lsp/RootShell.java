@@ -144,7 +144,7 @@ final class RootShell {
         return run(script, 60);
     }
 
-    /** 给目标进程发一条标记（时间线 / 基线用）：写 marker.txt，第一行序号，第二行内容；目标进程用文件监听读到。 */
+    /** 给目标进程发一条标记（时间线 / 基线用）：往 markers.log 追加一行「序号|发送时刻|内容」；目标进程读走新增的行。 */
     static Result pushMarker(String pkg, long seq, String label) {
         StringBuilder lb = new StringBuilder();
         for (String line : label.split("[\\r\\n]+")) if (!line.trim().equals("TEXTREC_EOF")) lb.append(line).append(' ');
@@ -153,12 +153,12 @@ final class RootShell {
                 + "T=$D/files/textrec\n"
                 + "[ -d $T ] || continue\n"
                 + "U=$(stat -c %u $D)\n"
-                + "cat > $T/marker.txt <<'TEXTREC_EOF'\n"
-                + seq + "\n" + System.currentTimeMillis() + "\n" + lb.toString().trim() + "\n"
+                + "cat >> $T/markers.log <<'TEXTREC_EOF'\n"
+                + seq + "|" + System.currentTimeMillis() + "|" + lb.toString().trim().replace("|", "/") + "\n"
                 + "TEXTREC_EOF\n"
-                + "chown $U:$U $T/marker.txt\n"
-                + "chmod 600 $T/marker.txt\n"
-                + "restorecon $T/marker.txt 2>/dev/null\n"
+                + "chown $U:$U $T/markers.log\n"
+                + "chmod 600 $T/markers.log\n"
+                + "restorecon $T/markers.log 2>/dev/null\n"
                 + "done\n"
                 + "echo __OK__\n";
         return run(script, 20);
