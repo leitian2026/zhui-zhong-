@@ -49,9 +49,34 @@ final class Store {
     final AtomicLong drawEvents = new AtomicLong();
     final AtomicLong droppedRate = new AtomicLong();
     final AtomicLong droppedCap = new AtomicLong();
+    static final String[] KINDS = {Rec.TEXTVIEW, Rec.CANVAS, Rec.COMPOSE, Rec.TEXTCLEAR, Rec.TEXTSET, Rec.STATE, Rec.ICON, Rec.TRACE};
+
     /** TEXTSET 记录数（单独限额）及因限额丢弃的数量 */
     final AtomicInteger setOnlyCount = new AtomicInteger();
     final AtomicLong droppedSetOnly = new AtomicLong();
+    /** 每种记录类型各自的条数 / 因该类型额度满被丢的次数：一种灌满只挤自己，不挤别的种类 */
+    private final java.util.concurrent.ConcurrentHashMap<String, AtomicInteger> kindN = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<String, AtomicLong> kindDrop = new java.util.concurrent.ConcurrentHashMap<>();
+
+    AtomicInteger kindCount(String k) {
+        AtomicInteger a = kindN.get(k);
+        if (a == null) {
+            a = new AtomicInteger();
+            AtomicInteger o = kindN.putIfAbsent(k, a);
+            if (o != null) a = o;
+        }
+        return a;
+    }
+
+    AtomicLong kindDropped(String k) {
+        AtomicLong a = kindDrop.get(k);
+        if (a == null) {
+            a = new AtomicLong();
+            AtomicLong o = kindDrop.putIfAbsent(k, a);
+            if (o != null) a = o;
+        }
+        return a;
+    }
     /** 采集端过滤：各个开关各挡掉了多少次调用（挡掉的不抓栈、不建记录），以及持续型降频后只计数的次数 */
     final AtomicLong blkWindow = new AtomicLong();
     final AtomicLong blkThread = new AtomicLong();
@@ -111,6 +136,8 @@ final class Store {
         droppedCap.set(0);
         setOnlyCount.set(0);
         droppedSetOnly.set(0);
+        kindN.clear();
+        kindDrop.clear();
         blkWindow.set(0);
         blkThread.set(0);
         blkPage.set(0);
@@ -137,6 +164,7 @@ final class Store {
 
     SetProxy setProxy(long key) {
         key ^= Recorder.pageHash; // 换页面后重新抓栈、另建记录
+        if (Timeline.bucket() != 0) key ^= 0x5DEECE66DL; // 任务外另算一份：记录在哪一桶，代理里缓存的记录就在哪一桶
         SetProxy p = setProxies.get(key);
         if (p != null) return p;
         if (setProxies.size() > PROXY_CAP) setProxies.clear();
@@ -147,6 +175,7 @@ final class Store {
 
     DrawProxy drawProxy(long key) {
         key ^= Recorder.pageHash;
+        if (Timeline.bucket() != 0) key ^= 0x5DEECE66DL; // 同上：任务内 / 任务外各缓存各的记录
         DrawProxy p = drawProxies.get(key);
         if (p != null) return p;
         if (drawProxies.size() > PROXY_CAP) drawProxies.clear();
@@ -185,11 +214,53 @@ final class Store {
             if (d == null) return;
             d.mkdirs();
             String safe = proc.replaceAll("[^A-Za-z0-9_.-]", "_");
-            File dest = new File(d, "snapshot-" + safe + ".json");
-            File tmp = new File(d, "snapshot-" + safe + ".json.tmp");
-            byte[] data = buildJson().getBytes(StandardCharsets.UTF_8);
+            RecConfig c = conf;
+            Snapped sn = snapRecords();
+            if (!c.splitFiles) {
+                // 旧方式：一个文件装全部（总上限 maxRecords）；顺手删掉分文件留下的旧文件
+                writeFile(d, "snapshot-" + safe + ".json", buildMainJson(sn, false, Timeline.toJson()).toString());
+                deletePartFiles(d, safe);
+                return;
+            }
+            // 新方式：主文件（概况 / 配置 / 统计）+ 每种记录一个文件 + 时间线一个文件，各写各的、互不影响
+            writeFile(d, "snapshot-" + safe + ".json", buildMainJson(sn, true, null).toString());
+            for (String k : sn.by.keySet()) {
+                JSONArray arr = sn.by.get(k);
+                File f = new File(d, "snapshot-" + safe + "." + k + ".json");
+                if (arr.length() == 0) {
+                    f.delete();
+                    continue;
+                }
+                try {
+                    JSONObject pj = partHead(k);
+                    pj.put("records", arr);
+                    writeFile(d, f.getName(), pj.toString());
+                } catch (Throwable t) {
+                    XposedBridge.log("[TextRec] part " + k + " failed: " + t);
+                }
+            }
+            try {
+                JSONObject tj = partHead("TIMELINE");
+                tj.put("timeline", Timeline.toJson());
+                tj.put("timelineDropped", Timeline.dropped());
+                tj.put("timelineKindDropped", Timeline.kindDropped());
+                tj.put("baselineDone", Timeline.baselineDone);
+                writeFile(d, "snapshot-" + safe + ".TIMELINE.json", tj.toString());
+            } catch (Throwable t) {
+                XposedBridge.log("[TextRec] part TIMELINE failed: " + t);
+            }
+        } catch (Throwable t) {
+            XposedBridge.log("[TextRec] flush failed: " + t);
+        }
+    }
+
+    private static void writeFile(File d, String name, String data) {
+        try {
+            File dest = new File(d, name);
+            File tmp = new File(d, name + ".tmp");
+            byte[] bytes = data.getBytes(StandardCharsets.UTF_8);
             try (FileOutputStream os = new FileOutputStream(tmp)) {
-                os.write(data);
+                os.write(bytes);
                 os.flush();
             }
             if (!tmp.renameTo(dest)) {
@@ -197,15 +268,74 @@ final class Store {
                 tmp.renameTo(dest);
             }
         } catch (Throwable t) {
-            XposedBridge.log("[TextRec] flush failed: " + t);
+            XposedBridge.log("[TextRec] write " + name + " failed: " + t);
         }
     }
 
-    private String buildJson() throws Exception {
+    private static void deletePartFiles(File d, String safe) {
+        for (String k : KINDS) {
+            new File(d, "snapshot-" + safe + "." + k + ".json").delete();
+            new File(d, "snapshot-" + safe + "." + k + ".OUT.json").delete();
+        }
+        new File(d, "snapshot-" + safe + ".TIMELINE.json").delete();
+    }
+
+    private JSONObject partHead(String part) throws Exception {
+        JSONObject j = new JSONObject();
+        j.put("schema", 1);
+        j.put("module", "TextRec 1.25.0");
+        j.put("part", part);
+        j.put("pkg", pkg);
+        j.put("process", proc);
+        j.put("snapshotTime", System.currentTimeMillis());
+        return j;
+    }
+
+    /** 一次快照里按种类分好的记录 JSON。 */
+    private static final class Snapped {
+        final java.util.LinkedHashMap<String, JSONArray> by = new java.util.LinkedHashMap<>();
+        final JSONArray all = new JSONArray();
+        int total;
+        int setOnlyShown;
+    }
+
+    private Snapped snapRecords() throws Exception {
+        Snapped sn = new Snapped();
+        for (String k : KINDS) {
+            sn.by.put(k, new JSONArray());
+            sn.by.put(k + ".OUT", new JSONArray()); // 任务外那一桶：单独的文件，文件名带 .OUT
+        }
+        ArrayList<Rec> list = new ArrayList<>(recs.values());
+        Collections.sort(list, new Comparator<Rec>() {
+            @Override
+            public int compare(Rec a, Rec b) {
+                return Integer.compare(a.id, b.id);
+            }
+        });
+        final long now = System.currentTimeMillis();
+        for (Rec r : list) {
+            JSONObject j = recJson(r, now);
+            if (j == null) continue; // TEXTSET 且其控件都已经画过了：已有对应的 TEXTVIEW 记录，不重复
+            if (Rec.TEXTSET.equals(r.kind)) sn.setOnlyShown++;
+            String bk = r.bucket == 0 ? r.kind : r.kind + ".OUT";
+            JSONArray a = sn.by.get(bk);
+            if (a == null) {
+                a = new JSONArray();
+                sn.by.put(bk, a);
+            }
+            a.put(j);
+            sn.all.put(j);
+            sn.total++;
+        }
+        return sn;
+    }
+
+    private JSONObject buildMainJson(Snapped sn, boolean split, JSONArray legacyTimeline) throws Exception {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.22.4");
+        root.put("module", "TextRec 1.25.0");
+        root.put("splitFiles", split);
         root.put("env", envJson());
         root.put("monoNow", android.os.SystemClock.uptimeMillis() - Timeline.START);
         root.put("pkg", pkg);
@@ -230,6 +360,14 @@ final class Store {
         cj.put("traceSetOnly", c.traceSetOnly);
         cj.put("traceState", c.traceState);
         cj.put("maxSetOnly", c.maxSetOnly);
+        cj.put("splitFiles", c.splitFiles);
+        cj.put("capTextView", c.capTextView);
+        cj.put("capCanvas", c.capCanvas);
+        cj.put("capCompose", c.capCompose);
+        cj.put("capClear", c.capClear);
+        cj.put("capIcon", c.capIcon);
+        cj.put("capState", c.capState);
+        cj.put("capTrace", c.capTrace);
         cj.put("traceMethods", c.traceMethods);
         cj.put("windowMs", c.windowMs);
         cj.put("windowAll", c.windowAll);
@@ -242,32 +380,23 @@ final class Store {
         cj.put("quietSpanMs", c.quietSpanMs);
         root.put("config", cj);
 
-        ArrayList<Rec> list = new ArrayList<>(recs.values());
-        Collections.sort(list, new Comparator<Rec>() {
-            @Override
-            public int compare(Rec a, Rec b) {
-                return Integer.compare(a.id, b.id);
-            }
-        });
-
-        final long now = System.currentTimeMillis();
-        JSONArray arr = new JSONArray();
-        int setOnlyShown = 0;
-        for (Rec r : list) {
-            JSONObject j = recJson(r, now);
-            if (j == null) continue; // TEXTSET 且其控件都已经画过了：已有对应的 TEXTVIEW 记录，不重复
-            if (Rec.TEXTSET.equals(r.kind)) setOnlyShown++;
-            arr.put(j);
-        }
+        JSONArray arr = split ? new JSONArray() : sn.all; // 分文件时记录在各自的文件里
+        int setOnlyShown = sn.setOnlyShown;
 
         JSONObject st = new JSONObject();
-        st.put("records", arr.length());
+        st.put("records", sn.total);
         st.put("setOnly", setOnlyShown);
         st.put("setEvents", setEvents.get());
         st.put("drawEvents", drawEvents.get());
         st.put("droppedByRateLimit", droppedRate.get());
         st.put("droppedByRecordCap", droppedCap.get());
         st.put("droppedBySetOnlyCap", droppedSetOnly.get());
+        JSONObject kc = new JSONObject();
+        for (java.util.Map.Entry<String, AtomicInteger> e : kindN.entrySet()) kc.put(e.getKey(), e.getValue().get());
+        st.put("recordsByKind", kc);
+        JSONObject kd = new JSONObject();
+        for (java.util.Map.Entry<String, AtomicLong> e : kindDrop.entrySet()) if (e.getValue().get() > 0) kd.put(e.getKey(), e.getValue().get());
+        st.put("droppedByKindCap", kd);
         st.put("blockedByWindow", blkWindow.get());
         st.put("blockedByThread", blkThread.get());
         st.put("blockedByPage", blkPage.get());
@@ -277,13 +406,14 @@ final class Store {
         st.put("quietCounted", quietCnt.get());
         root.put("stats", st);
         root.put("records", arr);
-        JSONArray tl = Timeline.toJson();
-        root.put("timeline", tl);
-        root.put("timelineDropped", Timeline.dropped());
-        root.put("timelineKindDropped", Timeline.kindDropped());
+        if (!split) {
+            root.put("timeline", legacyTimeline);
+            root.put("timelineDropped", Timeline.dropped());
+            root.put("timelineKindDropped", Timeline.kindDropped());
+        }
         root.put("baselineDone", Timeline.baselineDone);
         root.put("baselineMs", Timeline.baselineDone ? Timeline.baseEnd - Timeline.baseStart : 0);
-        return root.toString();
+        return root;
     }
 
     private JSONObject envJson() throws Exception {
@@ -318,6 +448,7 @@ final class Store {
         }
         JSONObject j = new JSONObject();
         j.put("id", r.id);
+        j.put("bucket", r.bucket); // 0 = 任务内，1 = 任务外
         j.put("kind", r.kind);
         j.put("view", r.viewClass);
         j.put("viewId", r.viewId);
@@ -341,7 +472,7 @@ final class Store {
             j.put("minGap", r.minGap);
             j.put("maxGap", r.maxGap);
         }
-        if (Timeline.curTask > 0 || r.segCounts().size() > 1 || (r.segCounts().size() == 1 && !r.segCounts().containsKey(0))) {
+        if (Timeline.curTask > 0 || Timeline.flowActive || r.segCounts().size() > 1 || (r.segCounts().size() == 1 && !r.segCounts().containsKey(0))) {
             JSONObject sc = new JSONObject();
             for (java.util.Map.Entry<Integer, Integer> e : r.segCounts().entrySet()) sc.put(String.valueOf(e.getKey()), e.getValue());
             j.put("segCounts", sc);
@@ -470,6 +601,8 @@ final class Store {
             String rt = Recorder.hookRetOf(tk);
             if (rt != null) j.put("ret", rt);
         }
+        java.util.List<String> cdl = r.composeDumps();
+        if (!cdl.isEmpty()) j.put("composeDumps", new JSONArray(cdl));
         if (r.frameSamples() > 0) {
             JSONArray fa = new JSONArray();
             for (java.util.Map.Entry<String, Integer> fe : r.frameStats().entrySet()) {
