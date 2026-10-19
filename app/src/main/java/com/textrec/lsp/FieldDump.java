@@ -15,6 +15,25 @@ final class FieldDump {
 
     private static final Object NONE = new Object();
 
+    /** 额外放行的包 / 类名前缀（默认 androidx.compose.ui.text.）；由 Recorder 在读配置时设置。 */
+    private static volatile String[] extra = new String[]{"androidx.compose.ui.text."};
+
+    static void setExtra(String csv) {
+        java.util.ArrayList<String> l = new java.util.ArrayList<>();
+        if (csv != null) {
+            for (String t : csv.split("[,\\n\\r]+")) {
+                t = t.trim();
+                if (!t.isEmpty()) l.add(t);
+            }
+        }
+        extra = l.toArray(new String[0]);
+    }
+
+    private static boolean isExtra(String cn) {
+        for (String x : extra) if (cn.startsWith(x)) return true;
+        return false;
+    }
+
     static String dump(Object o, int maxLines) {
         StringBuilder sb = new StringBuilder();
         try {
@@ -45,6 +64,19 @@ final class FieldDump {
     }
 
     private static void object(Object v, String p, int depth, IdentityHashMap<Object, Boolean> seen, StringBuilder sb, int[] left) {
+        if (v instanceof java.util.List) { // 列表：只看前 3 个元素（Compose 的 paragraphInfoList 之类）
+            int cnt = 0;
+            for (Object e : (java.util.List<?>) v) {
+                if (cnt >= 3 || left[0] <= 0) break;
+                String ep = p + "[" + cnt + "]";
+                cnt++;
+                if (e == null) continue;
+                if (e instanceof Number || e instanceof Boolean) line(sb, left, ep + " = " + e);
+                else if (e instanceof CharSequence) line(sb, left, ep + " = \"" + cut(e.toString(), 30) + "\"");
+                else object(e, ep, depth, seen, sb, left);
+            }
+            return;
+        }
         Class<?> k = v.getClass();
         String n = k.getName();
         if (n.contains("Lazy")) {
@@ -82,6 +114,7 @@ final class FieldDump {
     }
 
     private static boolean skip(String cn) {
+        if (isExtra(cn)) return false;
         return cn.startsWith("android.") || cn.startsWith("java.") || cn.startsWith("javax.") || cn.startsWith("dalvik.")
                 || cn.startsWith("kotlin.") || cn.startsWith("kotlinx.") || cn.startsWith("androidx.")
                 || cn.startsWith("de.robv.android.xposed.") || cn.startsWith("org.lsposed.") || cn.startsWith("com.textrec.lsp.");
