@@ -97,10 +97,11 @@ final class Snap {
             try {
                 JSONObject root = new JSONObject(line);
                 String proc = root.optString("process", "?");
+                final boolean part = root.has("part"); // 分文件存的一部分（某一种记录 / 时间线）：概况只在主文件里显示一次
                 JSONArray rs = root.optJSONArray("records");
                 JSONObject st = root.optJSONObject("stats");
                 String warn = root.optString("warn", "");
-                infos.add(proc + "  版本 " + root.optString("appVersion", "?")
+                if (!part) infos.add(proc + "  版本 " + root.optString("appVersion", "?")
                         + "  记录 " + (st == null ? 0 : st.optInt("records"))
                         + (st != null && st.optInt("setOnly") > 0 ? "（含仅设置未绘制 " + st.optInt("setOnly") + "）" : "")
                         + "  设置事件 " + (st == null ? 0 : st.optLong("setEvents"))
@@ -111,12 +112,13 @@ final class Snap {
                         + blocked(st)
                         + "  快照 " + RecFormat.time(root.optLong("snapshotTime"))
                         + (warn.isEmpty() ? "" : "\n⚠ " + warn.trim()));
+                if (!part) kindInfo(infos, proc, st, root.optBoolean("splitFiles"));
                 JSONObject env = root.optJSONObject("env");
-                if (env != null) {
+                if (!part && env != null) {
                     infos.add(proc + "  环境：" + env.optString("model") + "  Android " + env.optString("release") + "(API " + env.optInt("sdk")
                             + ")  " + env.optString("abi") + "  App " + env.optString("appVersion") + "  模块 " + root.optString("module"));
                 }
-                if (root.optBoolean("baselineDone")) infos.add(proc + "  基线：已录 " + root.optLong("baselineMs") + "ms（记录里标了“基线里也在调用”的是周期性噪声）");
+                if (!part && root.optBoolean("baselineDone")) infos.add(proc + "  基线：已录 " + root.optLong("baselineMs") + "ms（记录里标了“基线里也在调用”的是周期性噪声）");
                 String tlx = timelineOf(root, proc);
                 if (!tlx.isEmpty()) timelineText = timelineText + tlx + "\n";
                 if (rs == null) continue;
@@ -130,6 +132,32 @@ final class Snap {
             }
         }
         return items;
+    }
+
+    /** 每种记录各自的条数；哪一种满了（丢了记录）单独写出来。 */
+    private static void kindInfo(List<String> infos, String proc, JSONObject st, boolean split) {
+        if (st == null) return;
+        JSONObject kc = st.optJSONObject("recordsByKind");
+        JSONObject kd = st.optJSONObject("droppedByKindCap");
+        if (kc == null) return;
+        StringBuilder sb = new StringBuilder(proc).append("  各类记录").append(split ? "（分文件存，各自独立）：" : "（一个文件）：");
+        java.util.Iterator<String> it = kc.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            int n = kc.optInt(k);
+            long d = kd == null ? 0 : kd.optLong(k);
+            sb.append(k.endsWith(".OUT") ? k.substring(0, k.length() - 4) + "(任务外)" : k).append(' ').append(n);
+            if (d > 0) sb.append("（⚠满了，丢了 ").append(d).append(" 条新位置）");
+            sb.append("  ");
+        }
+        if (kd != null) {
+            java.util.Iterator<String> di = kd.keys();
+            while (di.hasNext()) {
+                String k = di.next();
+                if (!kc.has(k) && kd.optLong(k) > 0) sb.append(k.endsWith(".OUT") ? k.substring(0, k.length() - 4) + "(任务外)" : k).append(" 0（⚠满了，丢了 ").append(kd.optLong(k)).append(" 条新位置）  ");
+            }
+        }
+        infos.add(sb.toString().trim());
     }
 
     /** 采集端过滤各挡掉了多少次；全是 0 就不显示。用来判断“记录不够”是不是被某个开关挡掉了。 */
