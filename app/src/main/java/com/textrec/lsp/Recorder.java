@@ -251,6 +251,7 @@ final class Recorder {
         SigResolver.addLoader(lp.classLoader);
         reload(true);
         watchConfig(d);
+        Timeline.startMarkers(d);
         hookActivity();
         hookTextViewDraw();
         hookSetText();
@@ -560,8 +561,8 @@ final class Recorder {
                     FileObserver.CLOSE_WRITE | FileObserver.MOVED_TO | FileObserver.CREATE) {
                 @Override
                 public void onEvent(int event, String path) {
-                    if (path != null && path.equals("marker.txt")) {
-                        Timeline.onMarkerFile(new File(dir, "marker.txt"));
+                    if (path != null && path.equals("markers.log")) {
+                        Timeline.pollMarkers();
                         return;
                     }
                     if (path == null || !path.equals("config.properties")) return;
