@@ -197,7 +197,8 @@ final class Timeline {
         if (markerFile != null) return;
         final java.io.File f = new java.io.File(dir, "markers.log");
         markerFile = f;
-        markerOff = f.exists() ? f.length() : 0; // 以前留下的标记不要
+        markerOff = 0;
+        replayEarlier(f); // 目标进程是在标记之后才启动的（比如冷启动任务）：把这一轮已经发出的标记补进来
         Thread t = new Thread(new Runnable() {
             @Override
             public void run() {
@@ -216,6 +217,40 @@ final class Timeline {
         t.setDaemon(true);
         t.start();
     }
+
+    /** 从最近一条「任务流程开始」开始补读（5 分钟内发出的才算，免得读到上一轮的）；之后的新增行照常读。 */
+    private static void replayEarlier(java.io.File f) {
+        try {
+            if (!f.exists() || f.length() == 0) return;
+            long len = f.length();
+            byte[] b = new byte[(int) Math.min(len, 64 * 1024)];
+            try (java.io.RandomAccessFile in = new java.io.RandomAccessFile(f, "r")) {
+                in.seek(len - b.length);
+                in.readFully(b);
+            }
+            markerOff = len;
+            String all = new String(b, java.nio.charset.StandardCharsets.UTF_8);
+            String[] lines = all.split("\n");
+            int from = -1;
+            long now = System.currentTimeMillis();
+            for (int i = 0; i < lines.length; i++) {
+                String[] p = lines[i].split("\\|", 3);
+                if (p.length < 3 || !p[2].trim().startsWith("任务流程开始")) continue;
+                try {
+                    if (now - Long.parseLong(p[1].trim()) <= 5 * 60 * 1000L) from = i;
+                } catch (Throwable ignored) {
+                }
+            }
+            if (from < 0) return;
+            replaying = true;
+            for (int i = from; i < lines.length; i++) onMarkerLine(lines[i].trim());
+        } catch (Throwable ignored) {
+        } finally {
+            replaying = false;
+        }
+    }
+
+    private static volatile boolean replaying;
 
     /** 读走 markers.log 里新增的行（文件监听也会调）。 */
     static synchronized void pollMarkers() {
@@ -257,9 +292,9 @@ final class Timeline {
         if (seq <= lastMarkSeq) return;
         lastMarkSeq = seq;
         long delay = System.currentTimeMillis() - sendWall;
-        if (delay < 0 || delay > 15000) delay = 0; // 两边时钟对不上就按收到的时刻
+        if (delay < 0 || delay > (replaying ? 300000 : 15000)) delay = 0; // 两边时钟对不上就按收到的时刻；补读的标记允许更早（时间会是负数 = 进程启动前）
         long t = SystemClock.uptimeMillis() - delay;
-        String suffix = delay > 200 ? "（TextRec 发出 " + delay + "ms 后才收到，时间已按发出时刻推算）" : "";
+        String suffix = replaying ? "（进程启动前发出，启动后补读，时间按发出时刻推算）" : delay > 200 ? "（TextRec 发出 " + delay + "ms 后才收到，时间已按发出时刻推算）" : "";
         if (label.startsWith("基线开始")) {
             int secs = 0;
             try {
