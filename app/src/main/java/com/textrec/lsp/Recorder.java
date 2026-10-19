@@ -219,11 +219,14 @@ final class Recorder {
         final String name;
         final Object[] args;
         final long key;
+        /** MultiParagraph 自己（paint* 的 this）：用来记对象身份、读文字/字段 */
+        final Object self;
 
-        PaintCtx(String name, Object[] args, long key) {
+        PaintCtx(String name, Object[] args, long key, Object self) {
             this.name = name;
             this.args = args;
             this.key = key;
+            this.self = self;
         }
     }
 
@@ -285,6 +288,7 @@ final class Recorder {
             cfgMtime = m;
             RecConfig c = (m == 0) ? new RecConfig() : RecConfig.read(f);
             cfg = c;
+            FieldDump.setExtra(c.dumpPrefixes);
             KeywordFilter kf = new KeywordFilter(c);
             filter = kf;
             gate = new Gate(c);
@@ -329,6 +333,7 @@ final class Recorder {
                         SigResolver.addLoader(acl);
                         maybeReload();
                         ensureComposeHook(acl);
+                        Chain.coroutineHook(acl);
                         ensureAppCompatHook(acl);
                         retryTraceInstall();
                         if (store.appVersion.isEmpty()) {
@@ -626,7 +631,7 @@ final class Recorder {
 
     private static void scanIcon(View v) {
         RecConfig c = cfg;
-        if (!c.enabled || !c.traceIcons) return;
+        if (!c.enabled || Timeline.skip() || !c.traceIcons) return;
         CharSequence cd = v.getContentDescription();
         boolean hasDesc = cd != null && cd.length() > 0;
         if (!(v instanceof ImageView) && !hasDesc) return;
@@ -720,7 +725,11 @@ final class Recorder {
 
     private static void onState(XC_MethodHook.MethodHookParam p) {
         RecConfig c = cfg;
-        if (!c.enabled || !c.traceState) return;
+        if (!c.enabled || Timeline.skip() || !c.traceState) return;
+        {
+            String sm = p.method.getName();
+            if ("setAlpha".equals(sm) ? !c.stateAlpha : "setVisibility".equals(sm) ? !c.stateVisible : !c.stateSelected) return;
+        }
         if (!(p.thisObject instanceof View) || p.args == null || p.args.length < 1) return;
         View v = (View) p.thisObject;
         // 默认只记“已经记过文字 / 图标”的控件；在「高级」里填了「控件包含」时，匹配的任何控件都记（不再依赖文字 / 图标开关）
@@ -762,7 +771,7 @@ final class Recorder {
         String desc = whoDesc(v) + " " + m + "(" + val + ")";
         boolean want = r == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
         if (want && store.allowStack(c.stacksPerSec)) {
-            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.stackDepth, false);
+            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.depthFor("state"), false);
             SetStack ss = store.internSet(new SetStack(stk, Thread.currentThread().getName()), v.getClass().getClassLoader());
             ss.count.incrementAndGet();
             Rec nr = obtain(Rec.STATE, cls, idName(v), m, ss, EMPTY, v, desc, shape, c);
@@ -785,7 +794,7 @@ final class Recorder {
         protected void beforeHookedMethod(MethodHookParam p) {
             try {
                 RecConfig c = cfg;
-                if (!c.enabled || !c.autoParams || !c.traceDraw) {
+                if (!c.enabled || Timeline.skip() || !c.autoParams || !c.traceDraw || !c.traceCompose) {
                     PAINT.remove();
                     return;
                 }
@@ -800,7 +809,7 @@ final class Recorder {
                         else k = mix(k, o.getClass().hashCode());
                     }
                 }
-                PAINT.set(new PaintCtx(name, a, k));
+                PAINT.set(new PaintCtx(name, a, k, p.thisObject));
             } catch (Throwable ignored) {
             }
         }
@@ -838,7 +847,7 @@ final class Recorder {
     private static final XC_MethodHook TRACE_HOOK = new XC_MethodHook() {
         @Override
         protected void beforeHookedMethod(MethodHookParam p) {
-            if (!Chain.on) return; // 链路追踪没开：这里什么都不做
+            if (!Chain.on || Timeline.skip()) return; // 链路追踪没开 / 暂停中：这里什么都不做
             try {
                 String tk = traceKey(p.method);
                 if (isTraceTarget(p.method, tk)) Chain.enter(p.method, tk);
@@ -1111,7 +1120,8 @@ final class Recorder {
         }
         RecConfig.TraceOpt opt0 = traceOpts.get(tkey);
         if (opt0 == null && wild) opt0 = traceOpts.get(cn + "#*");
-        if (opt0 != null && opt0.tagArg > -2) tagFrom(p, opt0.tagArg);
+        if (opt0 != null && opt0.tagArg > -2) tagFrom(p, opt0.tagArg); // 标识（视频 id）任务外也要更新，免得任务里第一条记录带着旧标识
+        if (Timeline.skip()) return; // 任务外 / 暂停：不建记录、不记样本
         // ---- 采集端过滤：全部在抓栈之前判断，被挡掉的调用不抓栈、不建记录，只在 Store 里累加挡掉的次数
         Gate g = gate;
         if (g.excluded(cn, mn) || (g.excludeInfra && Stacks.isGenericInfra(cn))) {
@@ -1190,7 +1200,7 @@ final class Recorder {
                 store.markDirty();
                 return;
             }
-            int depth = opt != null && opt.depth > 0 ? opt.depth : Math.max(c.stackDepth, 30); // 方法追踪的栈放宽到 30 层
+            int depth = opt != null && opt.depth > 0 ? opt.depth : c.traceStackDepth; // 方法追踪的栈层数（默认 30，可设）
             int every = opt != null && opt.every > 0 ? opt.every : c.sampleEvery;
             boolean want = r == null || n <= c.perKeyStacks || n % every == 0;
             if (want && store.allowStack(c.stacksPerSec)) {
@@ -1336,8 +1346,9 @@ final class Recorder {
     private static void recordClear(TextView v) {
         maybeReload();
         RecConfig c = cfg;
-        if (!c.enabled || !c.traceSet) return;
+        if (!c.enabled || !c.traceSet || !c.setClear) return;
         VIEW_SET.remove(v); // 不让后面的绘制和更早的设置栈错误配对
+        if (Timeline.skip()) return; // 任务外 / 暂停：只维护对应，不建记录
         if (c.keywordMode) return; // 只记关键字时，空串不会命中关键字
         if (!allowAll(v)) return;
         store.setEvents.incrementAndGet();
@@ -1350,7 +1361,7 @@ final class Recorder {
         SetStack ss = sp.last;
         boolean want = ss == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
         if (want && store.allowStack(c.stacksPerSec)) {
-            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.stackDepth, false);
+            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.depthFor("set"), false);
             ss = store.internSet(new SetStack(stk, Thread.currentThread().getName()), v.getClass().getClassLoader());
             sp.last = ss;
         }
@@ -1374,13 +1385,16 @@ final class Recorder {
     private static void recordSet(TextView v, String text) {
         maybeReload();
         RecConfig c = cfg;
-        if (!c.enabled || !c.traceSet) return;
+        if (!c.enabled || !c.traceSet || !c.setText) return;
+        // 轻模式（任务外 / 暂停）：照常维护“控件 ← 设置栈”的对应，否则任务里画出来的文字查不到是谁设置的；
+        // 但不记设置事件、不累加次数、不登记「没显示的文字」、不进时间线
+        final boolean light = Timeline.skip();
         if (!allowAll(v)) return;
         if (text == null || text.isEmpty() || !filter.accept(text)) {
             VIEW_SET.remove(v); // 不让它和更早的设置栈错误配对
             return;
         }
-        store.setEvents.incrementAndGet();
+        if (!light) store.setEvents.incrementAndGet();
 
         String cls = v.getClass().getName();
         long key = mix(mix(mix(SEED, cls.hashCode()), v.getId()), shapeHash(text));
@@ -1389,18 +1403,18 @@ final class Recorder {
         SetStack ss = sp.last;
         boolean want = ss == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
         if (want && store.allowStack(c.stacksPerSec)) {
-            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.stackDepth, false);
+            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.depthFor("set"), false);
             ss = store.internSet(new SetStack(stk, Thread.currentThread().getName()), v.getClass().getClassLoader());
             sp.last = ss;
         }
         if (ss != null) {
-            ss.count.incrementAndGet();
+            if (!light) ss.count.incrementAndGet();
             VIEW_SET.put(v, ss);
-            if (c.traceSetOnly) noteSetOnly(c, v, text, ss);
+            if (!light && c.traceSetOnly) noteSetOnly(c, v, text, ss);
         } else {
             VIEW_SET.remove(v);
         }
-        store.markDirty();
+        if (!light) store.markDirty();
     }
 
     /**
@@ -1463,7 +1477,7 @@ final class Recorder {
         if (!(p.thisObject instanceof TextView)) return;
         maybeReload();
         RecConfig c = cfg;
-        if (!c.enabled || !c.traceColor) return;
+        if (!c.enabled || Timeline.skip() || !c.traceColor || !c.colorSet) return;
         TextView v = (TextView) p.thisObject;
         if (!allowAll(v)) return;
         int color = v.getCurrentTextColor();
@@ -1474,7 +1488,7 @@ final class Recorder {
         SetStack ss = sp.last;
         boolean want = ss == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
         if (want && store.allowStack(c.stacksPerSec)) {
-            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.stackDepth, false);
+            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.depthFor("color"), false);
             ss = store.internSet(new SetStack(stk, Thread.currentThread().getName()), v.getClass().getClassLoader());
             sp.last = ss;
         }
@@ -1559,7 +1573,8 @@ final class Recorder {
         if (Chain.effects && Chain.cur() != null) Chain.effect("图标/描述 " + whoDesc(v) + " " + p.method.getName());
         maybeReload();
         RecConfig c = cfg;
-        if (!c.enabled || !c.traceIcons) return;
+        if (!c.enabled || Timeline.skip() || !c.traceIcons) return;
+        if ("setContentDescription".equals(p.method.getName()) ? !c.iconDesc : !c.iconImage) return;
         if (!allowAll(v)) return;
 
         Object[] a = p.args;
@@ -1593,7 +1608,7 @@ final class Recorder {
         long shape = shapeHash(desc);
         store.setEvents.incrementAndGet();
         if (store.allowStack(c.stacksPerSec)) {
-            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.stackDepth, false);
+            Stacks.Stk stk = Stacks.build(Stacks.capture(true), c.depthFor("icon"), false);
             SetStack ss = store.internSet(new SetStack(stk, Thread.currentThread().getName()), v.getClass().getClassLoader());
             ss.count.incrementAndGet();
             ICON_SET.put(v, ss);
@@ -1652,7 +1667,7 @@ final class Recorder {
     private static void onDrawText(XC_MethodHook.MethodHookParam p) {
         maybeReload();
         RecConfig c = cfg;
-        if (!c.enabled || !c.traceDraw) return;
+        if (!c.enabled || Timeline.skip() || !c.traceDraw) return;
         Object[] a = p.args;
         if (a == null || a.length < 1) return;
 
@@ -1667,6 +1682,7 @@ final class Recorder {
         if (text == null) text = drawnText(a);
         if (text == null || text.isEmpty() || !filter.accept(text)) return;
 
+        if (v != null && !c.drawTextView) return;
         store.drawEvents.incrementAndGet();
         Paint pt = paintOf(a);
         if (v != null) drawTextView(c, v, text, pt);
@@ -1686,7 +1702,7 @@ final class Recorder {
         boolean want = r == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
         if (want && store.allowStack(c.stacksPerSec)) {
             // 抓完整栈再裁成“这个 View 自己的绘制”，去掉祖先 dispatchDraw 带来的布局位置噪声
-            Stacks.Stk d = Stacks.build(Stacks.trimToViewDraw(Stacks.capture(false)), c.stackDepth, true);
+            Stacks.Stk d = Stacks.build(Stacks.trimToViewDraw(Stacks.capture(false)), c.depthFor("draw"), true);
             Rec nr = obtain(Rec.TEXTVIEW, cls, idName(v), ss, d, v, text, shape, c);
             if (nr != null) {
                 dp.rec = nr;
@@ -1697,9 +1713,11 @@ final class Recorder {
             r.touch(text, shape);
             r.trackView(v);
             if (c.traceColor) {
-                notePaint(r, pt);
-                ColorSet cs = VIEW_COLOR.get(v);
-                if (cs != null) r.colorSet = cs;
+                if (c.colorPaint) notePaint(r, pt);
+                if (c.colorSet) {
+                    ColorSet cs = VIEW_COLOR.get(v);
+                    if (cs != null) r.colorSet = cs;
+                }
             }
         }
     }
@@ -1707,6 +1725,7 @@ final class Recorder {
     private static void drawCanvas(RecConfig c, String text, Paint pt, Object[] a) {
         long shape = shapeHash(text);
         PaintCtx ctx = PAINT.get();
+        if (ctx != null ? !c.drawCompose : !c.drawCanvas) return; // 有 MultiParagraph.paint 上下文 = Compose
         long key = mix(mix(mix(mix(SEED, Thread.currentThread().getName().hashCode()), shape),
                 ctx == null ? 0 : ctx.key), 3);
         Store.DrawProxy dp = store.drawProxy(key);
@@ -1714,10 +1733,10 @@ final class Recorder {
         Rec r = dp.rec;
         boolean want = r == null || n <= c.perKeyStacks || n % c.sampleEvery == 0;
         if (want && store.allowStack(c.stacksPerSec)) {
-            Stacks.Stk d = Stacks.build(Stacks.capture(true), c.stackDepth, true);
+            Stacks.Stk d = Stacks.build(Stacks.capture(true), c.depthFor("draw"), true);
             String kind = d.compose ? Rec.COMPOSE : Rec.CANVAS;
             String cls = d.top.length > 0 ? d.top[0][0] : "(系统绘制)";
-            Rec nr = obtain(kind, cls, "", null, d, null, text, shape, c);
+            Rec nr = (d.compose ? c.drawCompose : c.drawCanvas) ? obtain(kind, cls, "", null, d, null, text, shape, c) : null;
             if (nr != null) {
                 dp.rec = nr;
                 r = nr;
@@ -1726,7 +1745,23 @@ final class Recorder {
         if (r != null) {
             r.touch(text, shape);
             setPos(r, a);
-            if (c.traceColor) notePaint(r, pt);
+            if (c.traceColor && c.colorPaint) notePaint(r, pt);
+            if (ctx != null && ctx.self != null && c.composeDump) noteComposeDump(c, r, ctx, text);
+        }
+    }
+
+    /** Compose 文字：按次数展开 this（MultiParagraph）的字段，找文字 / 颜色存在哪。独立存在记录的 composeDumps 里。 */
+    private static void noteComposeDump(RecConfig c, Rec r, PaintCtx ctx, String text) {
+        Object self = ctx.self;
+        if (self == null || !r.composeDumpDue(c.composeDumpEvery)) return;
+        boolean[] busy = BUSY.get();
+        if (busy[0]) return;
+        busy[0] = true;
+        try {
+            String d = FieldDump.dump(self, c.composeDumpLines);
+            r.addComposeDump(self.getClass().getName() + "（文字「" + clip(text, 30) + "」）\n" + (d.isEmpty() ? "    (没有可列出的字段：类被跳过，或字段都是空值)\n" : d));
+        } finally {
+            busy[0] = false;
         }
     }
 
@@ -1742,6 +1777,7 @@ final class Recorder {
             key = mix(key, st == null ? 0 : st.ordinal());
         }
         if (ctx != null) key = mix(key, ctx.key);
+        if (ctx != null && ctx.self != null && cfg.composeObj) r.noteObj(ctx.self);
         if (r.knowsPaint(key)) return;
         boolean[] busy = BUSY.get();
         if (busy[0]) return;
@@ -1853,29 +1889,37 @@ final class Recorder {
      */
     private static Rec obtain(String kind, String viewCls, String viewId, String keyExtra, SetStack ss,
                               Stacks.Stk d, View v, String text, long shape, RecConfig c) {
-        String key = kind + '|' + pageName + '|' + viewCls + '|' + keyExtra + '|' + (ss == null ? 0 : ss.stk.sig) + '|' + d.sig;
+        // 任务内 / 任务外分两桶：同一个位置在两桶里各有一条记录（key 带桶号），各自计数、各自上限、各自文件
+        final int bucket = Timeline.bucket();
+        String key = (bucket == 0 ? "" : "O|") + kind + '|' + pageName + '|' + viewCls + '|' + keyExtra + '|' + (ss == null ? 0 : ss.stk.sig) + '|' + d.sig;
         Rec r = store.recs.get(key);
         if (r != null) {
             r.addId(viewId);
             return r;
         }
         final boolean setOnly = Rec.TEXTSET.equals(kind);
-        if (store.recs.size() >= c.maxRecords) {
-            store.droppedCap.incrementAndGet();
+        if (Timeline.skip()) return null;
+        // 每种记录各有各的上限（互不挤占）；总数只在关掉分文件时才是上限，分文件时只留一个很大的安全阀
+        final String kk = bucket == 0 ? kind : kind + ".OUT"; // 计数的名字：任务外的各种记录另外计数
+        if (store.kindCount(kk).get() >= c.capFor(kind)) {
+            store.kindDropped(kk).incrementAndGet();
+            if (setOnly) store.droppedSetOnly.incrementAndGet();
             return null;
         }
-        if (setOnly && store.setOnlyCount.get() >= c.maxSetOnly) {
-            store.droppedSetOnly.incrementAndGet();
+        if (c.splitFiles ? store.recs.size() >= 30000 : store.recs.size() >= c.maxRecords) {
+            store.droppedCap.incrementAndGet();
             return null;
         }
         Rec nr = new Rec(store.nextId.getAndIncrement(), key, kind, viewCls, viewId, activityName, pageName,
                 v == null ? new String[0] : parentsOf(v), ss, d, Thread.currentThread().getName(), text, shape);
+        nr.bucket = bucket;
         Rec old = store.recs.putIfAbsent(key, nr);
         if (old != null) {
             old.addId(viewId);
             return old;
         }
         if (setOnly) store.setOnlyCount.incrementAndGet();
+        store.kindCount(kk).incrementAndGet();
         SigResolver.resolveRec(nr, v == null ? null : v.getClass().getClassLoader());
         return nr;
     }
