@@ -513,6 +513,10 @@ public class MainActivity extends Activity {
         fineSwitch("colorPaint", "画笔颜色", "每次画文字时画笔的颜色、字号、描边或填充");
         fineSwitch("colorSet", "setTextColor 设置位置", "谁调用了 setTextColor、改成了什么颜色");
 
+        fineGroup("方法追踪字段快照", "「记录对象字段值」（traceDump）的细项。找某个对象里有哪些字段时，行数调大、层数调 0，就只列它自己的数值和文字字段");
+        fineNumber("traceDumpLines", "一份最多多少行", "默认 40，可调到 2000。用完调回 40，否则导出文件会很大");
+        fineNumber("traceDumpDepth", "往子对象里展开几层", "默认 3；0 = 只列对象自己的字段，不进子对象");
+
         fineGroup("Compose 字段展开", "「Compose：展开对象字段」的细项。把 MultiParagraph 里的字段名、类型、值列出来，找文字 / 颜色存在哪个字段，每条记录最多 6 份");
         fineNumber("composeDumpEvery", "展开间隔", "前 3 份每次都展开，之后每隔多少次再展开一份。默认 50");
         fineNumber("composeDumpLines", "一份最多多少行", "默认 60");
