@@ -118,6 +118,12 @@ final class Snap {
                     infos.add(proc + "  环境：" + env.optString("model") + "  Android " + env.optString("release") + "(API " + env.optInt("sdk")
                             + ")  " + env.optString("abi") + "  App " + env.optString("appVersion") + "  模块 " + root.optString("module"));
                 }
+                JSONObject effCfg = root.optJSONObject("config");
+                if (!part && effCfg != null) {
+                    infos.add(proc + "  字段快照（目标进程实际生效）：traceDump=" + effCfg.optBoolean("traceDump") + "  traceDumpEvery=" + effCfg.optInt("traceDumpEvery")
+                            + "  traceDumpLines=" + effCfg.optInt("traceDumpLines", -1) + "  traceDumpDepth=" + effCfg.optInt("traceDumpDepth", -1)
+                            + (effCfg.has("traceDumpLines") ? "" : "  （这份快照里没有这两项：目标进程里跑的是旧版模块，请强杀目标 App 重开）"));
+                }
                 if (!part && root.optBoolean("baselineDone")) infos.add(proc + "  基线：已录 " + root.optLong("baselineMs") + "ms（记录里标了“基线里也在调用”的是周期性噪声）");
                 String tlx = timelineOf(root, proc);
                 if (!tlx.isEmpty()) timelineText = timelineText + tlx + "\n";
