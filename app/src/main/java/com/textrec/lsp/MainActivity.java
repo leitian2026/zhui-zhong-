@@ -24,7 +24,7 @@ public class MainActivity extends Activity {
     private Ui.Seg segWindow, segThread;
     private final java.util.LinkedHashMap<String, Switch> fine = new java.util.LinkedHashMap<>();
     private EditText etTraceDepth;
-    private Switch swWindowAll, swInfra, swClock, swQuiet, swDump, swChain, swChainAsync, swChainFx, swChainDown, swTl, swTlOps, swTlSamples, swRecOutside;
+    private Switch swWindowAll, swInfra, swClock, swQuiet, swDump, swChain, swChainAsync, swChainFx, swChainDown, swTl, swTlOps, swTlSamples, swRecOutside, swTraceExclusive;
     private static final int[] WINDOW_MS = {0, 1500, 3000, 5000};
     // 手写的过滤条件（可选，放在「高级」里）
     private EditText etThread, etPageF, etViewF, etExclude, etValue;
@@ -42,7 +42,6 @@ public class MainActivity extends Activity {
         LinearLayout page = Ui.vertical(this);
         page.setBackgroundColor(Ui.col(this, R.color.bg));
         Ui.Bar bar = Ui.topBar(this, "TextRec", "只读记录：屏幕上的文字 / 图标是谁设置的、谁画的", false);
-        bar.actions.addView(Ui.iconBtn(this, R.drawable.ic_code, "粘贴配置", v -> showPasteConfig()));
         page.addView(bar.root);
 
         ScrollView sv = new ScrollView(this);
@@ -52,6 +51,7 @@ public class MainActivity extends Activity {
         sv.addView(root);
         page.addView(sv, new LinearLayout.LayoutParams(-1, 0, 1f));
 
+        buildPasteCard(root); // 顶部常驻：粘贴「采集配置 + 任务清单」、打开浮窗
         buildFlowCard(root);
         buildTargetCard(root);
         buildContentCard(root);
@@ -321,6 +321,10 @@ public class MainActivity extends Activity {
         Ui.Sw ro = Ui.switchRow(this, "任务外也记录", "默认关：用任务浮窗录的时候，只有「任务开始 → 任务结束」之间才记录，任务之间（含「暂停记录」期间）只维持“控件是被哪行代码设置的”这个对应，不建记录、不记样本，记录最干净。打开后任务外也记，但单独一桶存（各自上限、各自文件），记录页顶部可切换看任务内 / 任务外 / 全部。不用任务浮窗时不受影响，照常全记");
         swRecOutside = ro.sw;
         card.addView(ro.row);
+        card.addView(Ui.divider(this));
+        Ui.Sw te = Ui.switchRow(this, "方法追踪时只记方法追踪", "默认开：「高级」里填了要追踪的方法时，文字 / 图标 / 颜色 / 状态 / 绘制这些记录开关自动当成关闭（只在目标 App 里生效，上面的开关不会被改，方法清单清空后自动恢复），记录里只剩方法追踪，更干净。想让方法追踪和其他记录一起记，就关掉它");
+        swTraceExclusive = te.sw;
+        card.addView(te.row);
         card.addView(Ui.divider(this));
         Ui.Sw tl = Ui.switchRow(this, "时间线（总开关）", "把用户操作、页面切换、各位置的记录样本按毫秒排成一条时间线；在记录页「更多」里还能打标记、录安静基线。导出里有时间线一段，记录会带上调用间隔和当前标识。开销很小，默认开");
         swTl = tl.sw;
@@ -721,6 +725,7 @@ public class MainActivity extends Activity {
         swTlOps.setChecked(c.tlOps);
         swTlSamples.setChecked(c.tlSamples);
         swRecOutside.setChecked(c.recOutside);
+        swTraceExclusive.setChecked(c.traceExclusive);
         for (java.util.Map.Entry<String, Switch> e : fine.entrySet()) e.getValue().setChecked(getFine(c, e.getKey()));
         etTraceDepth.setText(String.valueOf(c.traceStackDepth));
         for (java.util.Map.Entry<String, Switch> e : fineSw.entrySet()) {
@@ -787,6 +792,7 @@ public class MainActivity extends Activity {
         c.tlOps = swTlOps.isChecked();
         c.tlSamples = swTlSamples.isChecked();
         c.recOutside = swRecOutside.isChecked();
+        c.traceExclusive = swTraceExclusive.isChecked();
         for (java.util.Map.Entry<String, Switch> e : fine.entrySet()) setFine(c, e.getKey(), e.getValue().isChecked());
         c.traceStackDepth = RecConfig.clamp(parse(etTraceDepth, 30), 1, 80);
         for (java.util.Map.Entry<String, Switch> e : fineSw.entrySet()) {
@@ -821,29 +827,83 @@ public class MainActivity extends Activity {
         return c;
     }
 
+    private EditText etPaste;
+
     /**
-     * 顶栏「粘贴配置」：贴一段 Java Properties 格式的文本（字段名见 README「采集配置」一节，
-     * 和 config.properties、导出用的是同一套字段名），只回填表单，不直接推送——推不推、推之前再看一眼，
-     * 照常走下面已有的「只应用设置」「应用并重新记录」按钮。
+     * 首页顶部常驻的「粘贴」卡片（在「目标 App」上面，不折叠、不藏进菜单，免得 AI 漏写任务清单）：
+     * 一个输入框同时接收「采集配置（key=value，一行一个）」和「任务清单（名称|提示|秒数，一行一件）」，
+     * 拆分规则见 {@link RecConfig#splitPaste(String)}。「回填并保存」= 配置回填进下面的表单（不推送）+ 任务清单存起来；
+     * 「打开浮窗」= 先把输入框里的内容照同样方式保存一遍，再打开任务浮窗，所以粘贴完直接点它也行。
      */
-    private void showPasteConfig() {
-        LinearLayout body = Ui.vertical(this);
-        TextView desc = Ui.tv(this,
-                "粘贴 key=value（一行一个），字段名见仓库 README「采集配置」一节；任何 AI 都能照着那张表拼，不用来问开发者。"
-                        + "没写的字段保持默认值，不是保持当前表单的值。粘贴后只回填下面的开关/输入框，不会直接推送到目标 App。",
-                13, R.color.text_sub, false);
-        desc.setLineSpacing(0, 1.15f);
-        body.addView(desc);
-        final EditText et = Ui.field(this, "keywordMode=true\nkeywords=福利,红包\ntraceIcons=true", true, false);
-        body.addView(et);
-        new Ui.Dlg(this, "粘贴配置", null).keyboard()
-                .body(body, true)
-                .button("取消", false, null)
-                .button("回填表单", true, () -> {
-                    applyToUi(RecConfig.fromText(et.getText().toString()));
-                    toast("已回填，检查一遍没问题再点下面的按钮推送");
-                })
-                .show();
+    private void buildPasteCard(LinearLayout root) {
+        root.addView(Ui.section(this, "粘贴配置和任务清单", "一个框全搞定：采集配置（key=value）和任务清单（名称|提示|秒数）一起粘贴，不用分两次。"));
+        LinearLayout card = Ui.card(this);
+        TextView d = Ui.tv(this,
+                "采集配置：字段名见 README「采集配置」，没写的字段用默认值。\n"
+                        + "任务清单：一行一件事，名称|提示|秒数（后两项可省），名称写 @基线 是自动计时的基线，第一件名称前写 ! 表示冷启动。\n"
+                        + "两种行可以混着写，程序按行自动区分；任务清单不能漏，浮窗要靠它一步一步提示。",
+                12.5f, R.color.text_sub, false);
+        d.setLineSpacing(0, 1.15f);
+        d.setPadding(0, 0, 0, Ui.dp(this, 8));
+        card.addView(d);
+        etPaste = Ui.field(this, "keywordMode=true\ntraceMethods=类#方法\n\n暂停|点一下视频暂停，停 3 秒|\n继续播放|再点一下继续播放|", true, false);
+        card.addView(etPaste);
+        LinearLayout row = new LinearLayout(this);
+        row.setOrientation(LinearLayout.HORIZONTAL);
+        row.addView(Ui.button(this, "回填并保存", Ui.PRIMARY, v -> applyPaste(false)), new LinearLayout.LayoutParams(0, -2, 1f));
+        row.addView(Ui.button(this, "打开浮窗", Ui.OUTLINE, v -> applyPaste(true)), Ui.lpM(this, 0, -2, 10, 0, 0, 0));
+        ((LinearLayout.LayoutParams) row.getChildAt(1).getLayoutParams()).weight = 1f;
+        card.addView(row, Ui.lpM(this, -1, -2, 0, 10, 0, 0));
+        // 把整份《AI使用说明》复制到剪贴板：粘给任何窗口里的 AI，它不用读源码就知道怎么用本模块
+        TextView cp = Ui.button(this, "复制 AI 说明（发给 AI 先读）", Ui.TEXT, v -> copyAiGuide());
+        card.addView(cp, Ui.lpM(this, -2, -2, -8, 4, 0, 0));
+        root.addView(card);
+    }
+
+    /**
+     * 【给其他 AI / 维护者】「复制 AI 说明」：读 assets/ai_guide.md（内容和仓库根目录的 AI使用说明.md 完全相同，改文档时两处一起改），
+     * 放进剪贴板。assets 里的文件打进 APK，所以不依赖网络和仓库。
+     */
+    private void copyAiGuide() {
+        try (java.io.InputStream in = getAssets().open("ai_guide.md")) {
+            java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+            byte[] buf = new byte[8192];
+            int n;
+            while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+            String text = bo.toString("UTF-8");
+            android.content.ClipboardManager cm = (android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("TextRec AI 说明", text));
+            toast("已复制 AI 说明（" + text.length() + " 字），粘贴发给 AI 即可");
+        } catch (Throwable t) {
+            toast("复制失败：" + t.getMessage());
+        }
+    }
+
+    /** 处理粘贴框：拆开配置和任务清单，各自生效；openGuide = true 时接着打开浮窗。 */
+    private void applyPaste(boolean openGuide) {
+        String[] parts = RecConfig.splitPaste(etPaste.getText().toString());
+        StringBuilder msg = new StringBuilder();
+        if (!parts[0].trim().isEmpty()) {
+            applyToUi(RecConfig.fromText(parts[0])); // 只回填下面的开关 / 输入框，不推送；没写的字段是默认值，不是当前表单的值
+            save(false, false);
+            msg.append("配置已回填（还没推送，检查后点下面的按钮）");
+        }
+        if (!parts[1].trim().isEmpty()) {
+            int n = GuideService.parse(parts[1]).size();
+            getSharedPreferences(Actions.PREFS, MODE_PRIVATE).edit().putString(GuideService.PREF_TASKS, parts[1]).apply();
+            msg.append(msg.length() > 0 ? "；" : "").append("任务清单已保存（").append(n).append(" 件）");
+        }
+        if (msg.length() == 0) {
+            String saved = getSharedPreferences(Actions.PREFS, MODE_PRIVATE).getString(GuideService.PREF_TASKS, "");
+            msg.append(saved.trim().isEmpty() ? "框里没有内容；浮窗会用默认任务清单" : "框里没有内容；浮窗会用上次保存的任务清单");
+        }
+        if (openGuide) {
+            if (GuideService.isRunning() && !parts[1].trim().isEmpty()) msg.append("；浮窗已开着，要用新清单请先在浮窗上点 ✕ 再打开");
+            toast(msg.toString());
+            GuideService.open(this);
+        } else {
+            toast(msg.toString());
+        }
     }
 
     private static int parse(EditText e, int d) {
