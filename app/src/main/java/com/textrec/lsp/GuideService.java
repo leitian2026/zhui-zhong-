@@ -102,12 +102,38 @@ public class GuideService extends Service {
         return running;
     }
 
+    /**
+     * 打开任务浮窗（首页顶部和记录页菜单共用）：先要“显示在其他应用上层”权限，没有就跳到系统设置。
+     * 要用最新的任务清单：浮窗启动时从 SharedPreferences 的 PREF_TASKS 读。
+     */
+    static void open(android.app.Activity a) {
+        if (!android.provider.Settings.canDrawOverlays(a)) {
+            android.widget.Toast.makeText(a, "先给 TextRec 开「显示在其他应用上层」，开完回来再点一次", android.widget.Toast.LENGTH_LONG).show();
+            a.startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                    android.net.Uri.parse("package:" + a.getPackageName())));
+            return;
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && a.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            a.requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1); // 不给也能用，只是看不到“运行中”通知
+        }
+        if (isRunning()) {
+            android.widget.Toast.makeText(a, "浮窗已经开着了（要用新清单，先在浮窗上点 ✕ 再重新打开）", android.widget.Toast.LENGTH_SHORT).show();
+            return;
+        }
+        a.startForegroundService(new Intent(a, GuideService.class));
+        android.widget.Toast.makeText(a, "浮窗已打开：切到目标 App，按浮窗上的提示做", android.widget.Toast.LENGTH_SHORT).show();
+    }
+
     private final Handler ui = new Handler(Looper.getMainLooper());
     private final ExecutorService sender = Executors.newSingleThreadExecutor();
     private WindowManager wm;
     private View root;
     private WindowManager.LayoutParams lp;
     private TextView tvStep, tvTitle, tvHint, tvTimer;
+    /** 「正在做」面板（绿色调）：标签 + 名称 + 提示 + 计时；「下一件」面板（灰蓝调）：让用户提前为下一件做准备 */
+    private LinearLayout curPanel, nextPanel;
+    private TextView tvCurLabel, tvNextLabel, tvNextTitle, tvNextHint;
     private LinearLayout rowRun, rowReady, rowDone, rowPaused;
     private TextView btnPause, btnNext;
     private volatile int token;
@@ -218,9 +244,42 @@ public class GuideService extends Service {
         tvTimer.setTextSize(22);
         tvTimer.setTypeface(Typeface.DEFAULT_BOLD);
         box.addView(tvStep);
-        box.addView(tvTitle);
-        box.addView(tvHint);
-        box.addView(tvTimer);
+        // 正在做的这件：绿色底 + 绿色标签；下一件：灰蓝底 + 蓝色标签，一眼分得清
+        curPanel = new LinearLayout(this);
+        curPanel.setOrientation(LinearLayout.VERTICAL);
+        curPanel.setPadding(dp(10), dp(6), dp(10), dp(6));
+        tvCurLabel = new TextView(this);
+        tvCurLabel.setTextSize(11);
+        tvCurLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        curPanel.addView(tvCurLabel);
+        curPanel.addView(tvTitle);
+        curPanel.addView(tvHint);
+        curPanel.addView(tvTimer);
+        box.addView(curPanel);
+        nextPanel = new LinearLayout(this);
+        nextPanel.setOrientation(LinearLayout.VERTICAL);
+        nextPanel.setPadding(dp(10), dp(6), dp(10), dp(6));
+        GradientDrawable nbg = new GradientDrawable();
+        nbg.setColor(0x33FFFFFF);
+        nbg.setCornerRadius(dp(8));
+        nextPanel.setBackground(nbg);
+        tvNextLabel = new TextView(this);
+        tvNextLabel.setTextSize(11);
+        tvNextLabel.setTypeface(Typeface.DEFAULT_BOLD);
+        tvNextLabel.setTextColor(0xFF8FB8FF);
+        tvNextTitle = new TextView(this);
+        tvNextTitle.setTextColor(0xFFB8C6E0);
+        tvNextTitle.setTextSize(14);
+        tvNextTitle.setTypeface(Typeface.DEFAULT_BOLD);
+        tvNextHint = new TextView(this);
+        tvNextHint.setTextColor(0xFF8D9BB5);
+        tvNextHint.setTextSize(11.5f);
+        nextPanel.addView(tvNextLabel);
+        nextPanel.addView(tvNextTitle);
+        nextPanel.addView(tvNextHint);
+        LinearLayout.LayoutParams nlp = new LinearLayout.LayoutParams(-1, -2);
+        nlp.setMargins(0, dp(6), 0, 0);
+        box.addView(nextPanel, nlp);
         tvWarn = new TextView(this);
         tvWarn.setTextColor(0xFFFFD84D);
         tvWarn.setTextSize(12.5f);
@@ -344,8 +403,44 @@ public class GuideService extends Service {
         return sb.length() == 0 ? "目标 App" : sb.toString();
     }
 
+    /**
+     * 当前面板换颜色 + 标签：绿 = 正在做，黄 = 暂停 / 准备，亮绿 = 已完成。
+     * 【给其他 AI】面板颜色只在这里改，调用处只传标签和颜色。
+     */
+    private void setCur(String label, int labelColor, int tint) {
+        tvCurLabel.setText(label);
+        tvCurLabel.setTextColor(labelColor);
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(tint);
+        g.setCornerRadius(dp(8));
+        curPanel.setBackground(g);
+    }
+
+    /** 「下一件」面板：after = 当前下标，显示 after+1 那件；传 -1 表示显示第一件；没有下一件就写“没有了”；hide 时整块隐藏。 */
+    private void showNext(int after, boolean hide) {
+        if (hide) {
+            nextPanel.setVisibility(View.GONE);
+            return;
+        }
+        nextPanel.setVisibility(View.VISIBLE);
+        int n = after + 1;
+        if (n >= 0 && n < tasks.size()) {
+            Task t = tasks.get(n);
+            tvNextLabel.setText(after < 0 ? "第一件（先看一眼）" : "下一件 " + (n + 1) + " / " + tasks.size() + "（提前准备）");
+            tvNextTitle.setText(t.name);
+            tvNextHint.setText(t.hint);
+            tvNextHint.setVisibility(t.hint.isEmpty() ? View.GONE : View.VISIBLE);
+        } else {
+            tvNextLabel.setText("下一件");
+            tvNextTitle.setText("没有了，这是最后一件");
+            tvNextHint.setVisibility(View.GONE);
+        }
+    }
+
     private void showReady() {
         ready = true;
+        setCur("准备", 0xFFFFC857, 0x33FFC857);
+        showNext(-1, false);
         rowRun.setVisibility(View.GONE);
         rowReady.setVisibility(View.VISIBLE);
         tvStep.setText("准备    按住这里可拖动");
@@ -406,6 +501,8 @@ public class GuideService extends Service {
         if (to >= tasks.size()) {
             finished = true;
             idx = tasks.size();
+            setCur("全部完成 ✓", 0xFF7EE787, 0x337EE787);
+            showNext(0, true);
             tvStep.setText("全部完成");
             tvTitle.setText("录完了");
             tvHint.setText("回 TextRec 点刷新、导出。点 ✕ 关闭浮窗。");
@@ -431,6 +528,8 @@ public class GuideService extends Service {
 
     private void beginTask() {
         Task t = tasks.get(idx);
+        setCur("● 正在做", 0xFF4ADE80, 0x332E9E5A);
+        showNext(idx, false);
         tvStep.setText((idx + 1) + " / " + tasks.size() + "    按住这里可拖动");
         tvTitle.setText(t.name);
         tvHint.setText(t.hint);
@@ -525,6 +624,8 @@ public class GuideService extends Service {
         rowPaused.setVisibility(View.GONE);
         rowDone.setVisibility(View.VISIBLE);
         boolean last = idx >= tasks.size() - 1;
+        setCur("已完成 ✓", 0xFF7EE787, 0x337EE787);
+        showNext(idx, false);
         btnPause.setVisibility(last ? View.GONE : View.VISIBLE);
         btnNext.setText(last ? "▶ 完成" : "▶ 下一件");
         tvStep.setText((idx + 1) + " / " + tasks.size() + "    按住这里可拖动");
@@ -546,6 +647,8 @@ public class GuideService extends Service {
         rowDone.setVisibility(View.GONE);
         rowPaused.setVisibility(View.VISIBLE);
         Task nx = tasks.get(idx + 1);
+        setCur("⏸ 暂停中，下一件准备", 0xFFFFC857, 0x33FFC857);
+        showNext(idx, true); // 暂停时下一件已经显示在上面的大面板里
         tvStep.setText("已暂停记录    按住这里可拖动");
         tvTimer.setTextColor(0xFFFFC857);
         tvTimer.setText("暂停中，不记录");
