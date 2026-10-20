@@ -72,6 +72,12 @@ public final class RecConfig {
     public boolean tlSamples = true;
     /** 任务外也记录（默认关）：任务浮窗的流程进行中，只有「任务开始 → 任务结束」之间才建记录；打开后任务外也记，但单独一桶存（各自上限、各自文件）。没用任务浮窗时不受影响，照常全记。 */
     public boolean recOutside = false;
+    /**
+     * 方法追踪独占（默认开）：「方法追踪」里填了方法时，运行时自动把文字 / 图标 / 颜色 / 状态 / 绘制 / Compose 观察这些记录开关全部当成关闭，
+     * 记录里只剩方法追踪（更干净，也更省性能）。只改目标 App 里读到的配置副本，不改界面上的开关和配置文件；方法清单清空后立刻恢复。
+     * 关掉它 = 方法追踪和其他记录可以同时开。见 {@link #applyTraceExclusive()}。
+     */
+    public boolean traceExclusive = true;
     /** Compose 文字绘制（MultiParagraph.paint*） */
     public boolean traceCompose = true;
     /** Compose 记 MultiParagraph 对象身份 */
@@ -208,6 +214,69 @@ public final class RecConfig {
             if (!t.trim().isEmpty()) out.add(t);
         }
         return out;
+    }
+
+    /**
+     * 【给其他 AI / 维护者】首页顶部「粘贴」框里的一份文本同时装采集配置和任务清单，这里把它拆成两段：返回 {配置文本, 任务清单文本}。
+     * 规则（逐行判断，不需要分隔标记）：
+     *  - 以 `字母或下划线开头的标识符 =` 开头的行是配置行（Properties 的 key=value）；行尾是奇数个反斜杠表示下一行是它的续行，续行也归配置。
+     *  - 其余的非空行、非 `#` 注释行是任务清单行（格式「名称|提示|秒数」，见 GuideService 的类注释），`//` 开头的任务注释原样保留给 GuideService 去处理。
+     *  - 也可以显式写一行 `[任务清单]` / `[tasks]`，之后的所有行都算任务清单（任务名恰好像 key= 时用）。
+     * 配置段为空 = 这次没带配置，界面开关保持不动；任务段为空 = 没带任务清单，保留原来存的清单。
+     */
+    public static String[] splitPaste(String text) {
+        StringBuilder cfg = new StringBuilder(), tasks = new StringBuilder();
+        boolean forceTasks = false, cont = false;
+        if (text == null) text = "";
+        for (String line : text.split("\\r?\\n")) {
+            String t = line.trim();
+            if (cont) { // 上一条配置行以反斜杠结尾，这一行是它的续行
+                cfg.append(line).append('\n');
+                cont = endsWithOddBackslash(line);
+                continue;
+            }
+            if (t.equalsIgnoreCase("[tasks]") || t.equals("[任务清单]")) {
+                forceTasks = true;
+                continue;
+            }
+            if (t.isEmpty()) continue;
+            if (!forceTasks && t.matches("^[A-Za-z_][A-Za-z0-9_]*\\s*[=:].*") && !t.startsWith("//")) {
+                cfg.append(line).append('\n');
+                cont = endsWithOddBackslash(line);
+            } else if (t.startsWith("#") && !forceTasks) {
+                cfg.append(line).append('\n'); // Properties 注释
+            } else {
+                tasks.append(line).append('\n');
+            }
+        }
+        return new String[]{cfg.toString(), tasks.toString()};
+    }
+
+    private static boolean endsWithOddBackslash(String s) {
+        int n = 0;
+        for (int i = s.length() - 1; i >= 0 && s.charAt(i) == '\\'; i--) n++;
+        return n % 2 == 1;
+    }
+
+    /**
+     * 【给其他 AI / 维护者】方法追踪独占：只在目标 App 的 Recorder.reload() 里、读完配置后调用一次。
+     * 条件：traceExclusive 开着，并且 traceMethods 里至少有一个有效目标（非空、非 // 注释）。
+     * 效果：把下面这些“其他记录”的开关在内存副本里全部置 false，让记录里只剩 kind=TRACE。
+     * 为什么在这里改而不是在界面改：界面上用户勾的开关要原样保留，清空方法清单后就自动恢复；
+     * 各个 hook 在每次调用时都会读 cfg 里的这些字段（见 Recorder 里 c.traceIcons / c.traceState 等判断），所以改完立即生效，不用重装钩子。
+     * 不受影响的：时间线的用户操作 / 页面 / 标记（它们不是“记录”）、链路追踪（以方法追踪为锚点）、任务浮窗的任务内 / 任务外逻辑（Timeline.skip）。
+     * 注意：这个方法会改 this，所以只能对「刚读出来、还没发布给 Hook 用」的实例调用。
+     */
+    public void applyTraceExclusive() {
+        if (!traceExclusive || splitTargets(traceMethods).isEmpty()) return;
+        traceSet = false;
+        traceDraw = false;
+        traceColor = false;
+        traceIcons = false;
+        autoParams = false;
+        traceSetOnly = false;
+        traceState = false;
+        traceCompose = false;
     }
 
     /** 方法追踪目标：只按换行拆，去掉参数括号和 // 注释。 */
@@ -349,6 +418,7 @@ public final class RecConfig {
             p.setProperty("tlOps", String.valueOf(tlOps));
             p.setProperty("tlSamples", String.valueOf(tlSamples));
             p.setProperty("recOutside", String.valueOf(recOutside));
+            p.setProperty("traceExclusive", String.valueOf(traceExclusive));
             p.setProperty("traceCompose", String.valueOf(traceCompose));
             p.setProperty("composeObj", String.valueOf(composeObj));
             p.setProperty("composeDump", String.valueOf(composeDump));
@@ -470,6 +540,7 @@ public final class RecConfig {
         c.tlOps = bool(p, "tlOps", c.tlOps);
         c.tlSamples = bool(p, "tlSamples", c.tlSamples);
         c.recOutside = bool(p, "recOutside", c.recOutside);
+        c.traceExclusive = bool(p, "traceExclusive", c.traceExclusive);
         c.traceCompose = bool(p, "traceCompose", c.traceCompose);
         c.composeObj = bool(p, "composeObj", c.composeObj);
         c.composeDump = bool(p, "composeDump", c.composeDump);
