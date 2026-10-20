@@ -1310,7 +1310,7 @@ final class Recorder {
             }
             if (s.n > 0 && n % Math.max(1, c.traceDumpEvery) != 0) return;
             if (p.thisObject == null) return;
-            s.dump = FieldDump.dump(p.thisObject, 40);
+            s.dump = FieldDump.dump(p.thisObject, c.traceDumpLines, c.traceDumpDepth);
             s.n++;
             store.markDirty();
         } catch (Throwable ignored) {
