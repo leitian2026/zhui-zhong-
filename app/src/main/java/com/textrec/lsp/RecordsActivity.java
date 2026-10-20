@@ -987,22 +987,7 @@ public class RecordsActivity extends Activity {
 
     /** 打开任务浮窗：先要“显示在其他应用上层”权限，没有就跳到系统设置。 */
     private void startGuide() {
-        if (!android.provider.Settings.canDrawOverlays(this)) {
-            toast("先给 TextRec 开「显示在其他应用上层」，开完回来再点一次");
-            startActivity(new Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
-                    android.net.Uri.parse("package:" + getPackageName())));
-            return;
-        }
-        if (android.os.Build.VERSION.SDK_INT >= 33
-                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{android.Manifest.permission.POST_NOTIFICATIONS}, 1); // 不给也能用，只是看不到“运行中”通知
-        }
-        if (GuideService.isRunning()) {
-            toast("浮窗已经开着了");
-            return;
-        }
-        startForegroundService(new Intent(this, GuideService.class));
-        toast("浮窗已打开：切到目标 App，按浮窗上的提示做");
+        GuideService.open(this); // 逻辑和首页顶部的「打开浮窗」共用
     }
 
     private void editTasks() {
