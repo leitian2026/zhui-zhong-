@@ -65,6 +65,10 @@ public final class RecConfig {
     /** 开关：方法追踪时，每隔 traceDumpEvery 次调用把 this 周围的字段值记一份（找进度 / 时长这类状态存在哪里），同时统计第一个数值参数的 last / min / max */
     public boolean traceDump = false;
     public int traceDumpEvery = 25;
+    /** 方法追踪的字段快照：一份最多多少行（默认 40） */
+    public int traceDumpLines = 40;
+    /** 方法追踪的字段快照：往子对象里最多展开几层，0 = 只列对象自己的数值和文字字段（默认 3） */
+    public int traceDumpDepth = 3;
     /** 链路追踪：以方法追踪的方法为锚点，串起上游（异步来源）和下游（被调用的方法、界面效果）。总开关 + 三个子开关 */
     /** 时间线：用户操作 / 页面 / 各位置的记录样本，按毫秒排成一条；标记和基线从记录页发来 */
     public boolean tlOn = true;
@@ -414,6 +418,8 @@ public final class RecConfig {
             p.setProperty("valueClock", String.valueOf(valueClock));
             p.setProperty("traceDump", String.valueOf(traceDump));
             p.setProperty("traceDumpEvery", String.valueOf(traceDumpEvery));
+            p.setProperty("traceDumpLines", String.valueOf(traceDumpLines));
+            p.setProperty("traceDumpDepth", String.valueOf(traceDumpDepth));
             p.setProperty("tlOn", String.valueOf(tlOn));
             p.setProperty("tlOps", String.valueOf(tlOps));
             p.setProperty("tlSamples", String.valueOf(tlSamples));
@@ -536,6 +542,8 @@ public final class RecConfig {
         c.valueClock = bool(p, "valueClock", c.valueClock);
         c.traceDump = bool(p, "traceDump", c.traceDump);
         c.traceDumpEvery = clamp(num(p, "traceDumpEvery", c.traceDumpEvery), 1, 1000);
+        c.traceDumpLines = clamp(num(p, "traceDumpLines", c.traceDumpLines), 10, 2000);
+        c.traceDumpDepth = clamp(num(p, "traceDumpDepth", c.traceDumpDepth), 0, 6);
         c.tlOn = bool(p, "tlOn", c.tlOn);
         c.tlOps = bool(p, "tlOps", c.tlOps);
         c.tlSamples = bool(p, "tlSamples", c.tlSamples);
