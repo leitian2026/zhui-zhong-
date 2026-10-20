@@ -5,7 +5,7 @@ import java.lang.reflect.Modifier;
 import java.util.IdentityHashMap;
 
 /**
- * 把一个对象周围的状态列出来（方法追踪里「记对象字段值」用）：沿字段往下最多 4 层，
+ * 把一个对象周围的状态列出来（方法追踪里「记对象字段值」用）：沿字段往下最多 maxDepth 层（默认 3，0 = 只列自己的字段），
  * 数值 / 布尔 / 文字直接写；LiveData 写它当前的值；kotlin Lazy 取值后继续往下。
  * 只进 App 自己的类，框架类、kotlin、androidx 一律不进。每行以空格开头。
  * 调用前 Recorder 已经设了 BUSY，读 LiveData 时再触发被追踪的方法也不会递归记录。
@@ -35,16 +35,21 @@ final class FieldDump {
     }
 
     static String dump(Object o, int maxLines) {
+        return dump(o, maxLines, 3);
+    }
+
+    /** maxDepth：往子对象里最多展开几层；0 = 只列 o 自己的数值 / 布尔 / 文字字段，不进子对象。 */
+    static String dump(Object o, int maxLines, int maxDepth) {
         StringBuilder sb = new StringBuilder();
         try {
-            into(o, "this", 0, new IdentityHashMap<Object, Boolean>(), sb, new int[]{maxLines});
+            into(o, "this", 0, maxDepth, new IdentityHashMap<Object, Boolean>(), sb, new int[]{maxLines});
         } catch (Throwable ignored) {
         }
         return sb.toString();
     }
 
-    private static void into(Object o, String path, int depth, IdentityHashMap<Object, Boolean> seen, StringBuilder sb, int[] left) {
-        if (o == null || left[0] <= 0 || depth > 3 || seen.put(o, Boolean.TRUE) != null) return;
+    private static void into(Object o, String path, int depth, int maxDepth, IdentityHashMap<Object, Boolean> seen, StringBuilder sb, int[] left) {
+        if (o == null || left[0] <= 0 || depth > maxDepth || seen.put(o, Boolean.TRUE) != null) return;
         for (Class<?> c = o.getClass(); c != null && c != Object.class && !skip(c.getName()); c = c.getSuperclass()) {
             for (Field f : c.getDeclaredFields()) {
                 if (left[0] <= 0) return;
@@ -56,14 +61,14 @@ final class FieldDump {
                     String p = path + "." + f.getName();
                     if (v instanceof Number || v instanceof Boolean) line(sb, left, p + " = " + v);
                     else if (v instanceof CharSequence) line(sb, left, p + " = \"" + cut(v.toString(), 30) + "\"");
-                    else object(v, p, depth, seen, sb, left);
+                    else object(v, p, depth, maxDepth, seen, sb, left);
                 } catch (Throwable ignored) {
                 }
             }
         }
     }
 
-    private static void object(Object v, String p, int depth, IdentityHashMap<Object, Boolean> seen, StringBuilder sb, int[] left) {
+    private static void object(Object v, String p, int depth, int maxDepth, IdentityHashMap<Object, Boolean> seen, StringBuilder sb, int[] left) {
         if (v instanceof java.util.List) { // 列表：只看前 3 个元素（Compose 的 paragraphInfoList 之类）
             int cnt = 0;
             for (Object e : (java.util.List<?>) v) {
@@ -73,7 +78,7 @@ final class FieldDump {
                 if (e == null) continue;
                 if (e instanceof Number || e instanceof Boolean) line(sb, left, ep + " = " + e);
                 else if (e instanceof CharSequence) line(sb, left, ep + " = \"" + cut(e.toString(), 30) + "\"");
-                else object(e, ep, depth, seen, sb, left);
+                else object(e, ep, depth, maxDepth, seen, sb, left);
             }
             return;
         }
@@ -81,7 +86,7 @@ final class FieldDump {
         String n = k.getName();
         if (n.contains("Lazy")) {
             try {
-                object(k.getMethod("getValue").invoke(v), p, depth, seen, sb, left);
+                object(k.getMethod("getValue").invoke(v), p, depth, maxDepth, seen, sb, left);
             } catch (Throwable ignored) {
             }
             return;
@@ -99,11 +104,11 @@ final class FieldDump {
                 line(sb, left, p + " (LiveData) = " + cut(String.valueOf(lv), 40));
             } else {
                 line(sb, left, p + " (LiveData) = " + lv.getClass().getName());
-                into(lv, p + ".value", depth + 1, seen, sb, left);
+                into(lv, p + ".value", depth + 1, maxDepth, seen, sb, left);
             }
             return;
         }
-        if (!skip(n)) into(v, p, depth + 1, seen, sb, left);
+        if (!skip(n)) into(v, p, depth + 1, maxDepth, seen, sb, left);
     }
 
     private static boolean isLiveData(Class<?> k) {
