@@ -92,7 +92,7 @@ final class Rec {
     private volatile int frameN;
     private final java.util.LinkedHashMap<String, int[]> frameCnt = new java.util.LinkedHashMap<>();
     private volatile int frameOverflow;
-    private final int[] segCnt = new int[40];
+    private final int[] segCnt = new int[200];
     volatile String hookInfo;
     volatile String retType;
 
