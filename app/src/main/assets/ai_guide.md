@@ -147,7 +147,7 @@ traceState=false
 - 类还没加载时进入相关页面后会自动重试（最多 40 次）；装不上的原因显示在记录页顶部的 ⚠ 里（类没找到 / 方法不存在 / hook 失败）。
 - 追踪每秒调用上千次的方法会拖慢目标 App；超过 3000 次后自动降为每 10 次取一次样。打开「压低高频方法」（`quietCount`）更稳。
 - 混淆名换版本会变；每个快照带 App 版本号。
-- 只对方法追踪生效的辅助项：`windowMs`（触发窗口）、`excludeInfra`、`valueClock`、`valueFilter`、`excludeList`、`quietCount`、`traceDump`。
+- 只对方法追踪生效的辅助项：`windowMs`（触发窗口）、`excludeInfra`、`valueClock`、`valueFilter`、`excludeList`、`quietCount`、`traceDump`（含 `traceDumpEvery` `traceDumpLines` `traceDumpDepth`）。
 - 方法追踪的记录里有：调用栈（谁调用了它）、参数→返回值的各种取值变体、this 的对象身份、钩点信息（重载、final / 静态 / 抽象、是否疑似混淆、类加载器、第几次尝试时可用）。
 
 **例：找评论列表项被谁调用：**
@@ -285,6 +285,7 @@ quietCount=50
 | `traceMethods` | 空 | 方法追踪清单，见第 5 章（多行用 `\n` 或续行写进 Properties） |
 | `traceStackDepth` | 30 | 方法追踪栈层数 |
 | `traceDump` `traceDumpEvery` | false / 25 | 记录 this 周围的字段值和第一个数值参数的 last / min / max |
+| `traceDumpLines` `traceDumpDepth` | 40 / 3 | 字段快照一份最多多少行（10~2000）、往子对象里展开几层（0~6，0 = 只列对象自己的数值和文字字段）。找某个对象有哪些字段时用 `2000`/`0`，用完调回默认，否则导出文件很大 |
 | `windowMs` `windowAll` | 0 / false | 触发窗口 |
 | `excludeInfra` `threadMode` `valueClock` | false / 0 / false | 见 7.2 |
 | `excludeList` `threadFilter` `pageFilter` `viewFilter` `valueFilter` | 空 | 见 7.2 |
