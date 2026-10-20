@@ -41,7 +41,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * 进它的时间线。浮窗在 TextRec 自己的进程里，不往目标 App 里画任何东西。
  *
  * 四个键：✕ 关闭　↺ 重做（这一件重来，上一次作废）　◀ 上一件　▶ 下一件。
- * 清单每行一件：「名称|提示|秒数」；名称以 @基线 开头的是自动计时的基线（开始时自动发“基线开始”，倒计时到 0 自动发“基线结束”）。
+ * 清单每行一件：「名称|提示|秒数|空」（第 4 段写「空」= 对照任务，允许 0 条记录）；名称以 @基线 开头的是自动计时的基线（开始时自动发“基线开始”，倒计时到 0 自动发“基线结束”）。
  */
 public class GuideService extends Service {
     static final String PREF_TASKS = "tasks";
@@ -60,8 +60,11 @@ public class GuideService extends Service {
         final boolean baseline;
         /** 名称前写 !：这件事要在目标 App 还没运行时就开始（比如冷启动）；只对清单第一件有意义 */
         final boolean noWait;
+        /** 第 4 段写「空」（或 0 / 可空 / 对照）：对照任务，方法追踪独占时这件事本来就不该触发任何被追踪的方法，0 条记录是正常结果，不算没通过 */
+        final boolean allowEmpty;
 
-        Task(String name, String hint, int secs, boolean baseline, boolean noWait) {
+        Task(String name, String hint, int secs, boolean baseline, boolean noWait, boolean allowEmpty) {
+            this.allowEmpty = allowEmpty;
             this.name = name;
             this.hint = hint;
             this.secs = secs;
@@ -90,7 +93,9 @@ public class GuideService extends Service {
                 }
             }
             if (base && secs <= 0) secs = 10;
-            out.add(new Task(name, hint, secs, base, noWait));
+            String f4 = p.length > 3 ? p[3].trim() : "";
+            boolean allowEmpty = f4.equals("空") || f4.equals("0") || f4.equals("可空") || f4.equals("对照");
+            out.add(new Task(name, hint, secs, base, noWait, allowEmpty));
         }
         return out;
     }
@@ -841,7 +846,7 @@ public class GuideService extends Service {
             why = "目标进程没收到「任务开始 " + n + "」标记：目标 App 当时没在运行，或进程是在标记发出之后才启动的";
         } else if (!t.baseline && bestEvents == 0) {
             why = "这件事期间目标进程一个事件都没记到：操作没触发已设的钩子 / 采集开关或过滤（页面、线程、触发窗口）挡掉了 / 做的不是这件事";
-        } else if (!t.baseline && n < 200 && taskRecs == 0) {
+        } else if (!t.baseline && !t.allowEmpty && n < 200 && taskRecs == 0) {
             // 以前只数时间线事件（点击、页面切换也算），所以一条记录都没有也会显示「已记录完成」；现在必须真有记录
             why = "这件事期间有 " + bestEvents + " 个操作事件，但一条记录都没记到：多半是关键字 / 过滤挡掉了"
                     + "（多个关键字要写在同一行，用 \\n 隔开）、采集开关没开、或应用设置后没有强杀目标 App 重开";
@@ -849,7 +854,7 @@ public class GuideService extends Service {
         if (why == null) {
             res.ok = true;
             res.entries = bestEntries;
-            res.okText = t.baseline ? "基线已记录" : "这件事期间记到 " + taskRecs + " 条记录、" + bestEvents + " 个事件 " + bestKinds;
+            res.okText = t.baseline ? "基线已记录" : (t.allowEmpty && taskRecs == 0) ? "对照任务：这件事期间 0 条记录（符合预期），" + bestEvents + " 个操作事件" : "这件事期间记到 " + taskRecs + " 条记录、" + bestEvents + " 个事件 " + bestKinds;
             return res;
         }
         d.append("原因：").append(why).append('\n');
