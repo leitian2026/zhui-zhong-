@@ -505,7 +505,7 @@ public class GuideService extends Service {
             showNext(0, true);
             tvStep.setText("全部完成");
             tvTitle.setText("录完了");
-            tvHint.setText("回 TextRec 点刷新、导出。点 ✕ 关闭浮窗。");
+            tvHint.setText("回 TextRec 点刷新，看每件事有没有记录再导出（某件事显示没记到就重做那件）。点 ✕ 关闭浮窗。");
             tvTimer.setText("");
             marker("任务全部完成");
             buzz();
@@ -739,6 +739,7 @@ public class GuideService extends Service {
         d.append("TextRec 任务检查未通过\n任务 ").append(n).append("「").append(t.name).append("」\n");
         boolean anySnap = false, gotStart = false, gotEnd = false;
         int bestEvents = -1, bestEntries = 0;
+        int taskRecs = 0; // 这件事期间被调用过的记录条数（来自每条记录的 segCounts），0 = 有操作但一条记录都没记到
         String bestKinds = "";
         String cfgInfo = "", warn = "";
         long bestRecs = -1;
@@ -765,6 +766,16 @@ public class GuideService extends Service {
                     JSONObject st = root.optJSONObject("stats");
                     long recs = st == null ? 0 : st.optLong("records");
                     JSONArray tl = root.optJSONArray("timeline");
+                    // 数这件事期间出现过的记录：每条记录带「按任务阶段的调用次数」segCounts，key 是任务序号。
+                    // 只数 key 在 0..39 之内的任务（Rec 里按任务阶段计数的数组只有 40 格）
+                    JSONArray ra = root.optJSONArray("records");
+                    if (ra != null && n < 40) {
+                        for (int i = 0; i < ra.length(); i++) {
+                            JSONObject ro = ra.optJSONObject(i);
+                            JSONObject sc = ro == null ? null : ro.optJSONObject("segCounts");
+                            if (sc != null && sc.optInt(String.valueOf(n)) > 0) taskRecs++;
+                        }
+                    }
                     long startT = Long.MIN_VALUE, endT = Long.MAX_VALUE;
                     boolean s0 = false, e0 = false;
                     if (tl != null) {
@@ -830,11 +841,15 @@ public class GuideService extends Service {
             why = "目标进程没收到「任务开始 " + n + "」标记：目标 App 当时没在运行，或进程是在标记发出之后才启动的";
         } else if (!t.baseline && bestEvents == 0) {
             why = "这件事期间目标进程一个事件都没记到：操作没触发已设的钩子 / 采集开关或过滤（页面、线程、触发窗口）挡掉了 / 做的不是这件事";
+        } else if (!t.baseline && n < 40 && taskRecs == 0) {
+            // 以前只数时间线事件（点击、页面切换也算），所以一条记录都没有也会显示「已记录完成」；现在必须真有记录
+            why = "这件事期间有 " + bestEvents + " 个操作事件，但一条记录都没记到：多半是关键字 / 过滤挡掉了"
+                    + "（多个关键字要写在同一行，用 \\n 隔开）、采集开关没开、或应用设置后没有强杀目标 App 重开";
         }
         if (why == null) {
             res.ok = true;
             res.entries = bestEntries;
-            res.okText = t.baseline ? "基线已记录" : "这件事期间记到 " + bestEvents + " 个事件 " + bestKinds;
+            res.okText = t.baseline ? "基线已记录" : "这件事期间记到 " + taskRecs + " 条记录、" + bestEvents + " 个事件 " + bestKinds;
             return res;
         }
         d.append("原因：").append(why).append('\n');
