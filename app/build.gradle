@@ -8,8 +8,8 @@ android {
         applicationId 'com.textrec.lsp'
         minSdk 27
         targetSdk 34
-        versionCode 34
-        versionName '1.26.0'
+        versionCode 35
+        versionName '1.26.1'
     }
 
     signingConfigs {
