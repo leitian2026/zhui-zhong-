@@ -845,7 +845,7 @@ public class MainActivity extends Activity {
         LinearLayout card = Ui.card(this);
         TextView d = Ui.tv(this,
                 "采集配置：字段名见 README「采集配置」，没写的字段用默认值。\n"
-                        + "任务清单：一行一件事，名称|提示|秒数（后两项可省），名称写 @基线 是自动计时的基线，第一件名称前写 ! 表示冷启动。\n"
+                        + "任务清单：一行一件事，名称|提示|秒数（后两项可省），名称写 @基线 是自动计时的基线，第一件名称前写 ! 表示冷启动，第 4 段写「空」是对照任务（允许 0 条记录，如 单击一次|提示||空）。\n"
                         + "两种行可以混着写，程序按行自动区分；任务清单不能漏，浮窗要靠它一步一步提示。",
                 12.5f, R.color.text_sub, false);
         d.setLineSpacing(0, 1.15f);
