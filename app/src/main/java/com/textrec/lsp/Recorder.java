@@ -287,6 +287,7 @@ final class Recorder {
             if (m == cfgMtime) return;
             cfgMtime = m;
             RecConfig c = (m == 0) ? new RecConfig() : RecConfig.read(f);
+            c.applyTraceExclusive(); // 填了方法追踪就把其他记录开关在这份副本里全关（见 RecConfig.applyTraceExclusive）
             cfg = c;
             FieldDump.setExtra(c.dumpPrefixes);
             KeywordFilter kf = new KeywordFilter(c);
@@ -849,8 +850,8 @@ final class Recorder {
         protected void beforeHookedMethod(MethodHookParam p) {
             if (!Chain.on || Timeline.skip()) return; // 链路追踪没开 / 暂停中：这里什么都不做
             try {
-                String tk = traceKey(p.method);
-                if (isTraceTarget(p.method, tk)) Chain.enter(p.method, tk);
+                String tk = resolveTrace(p);
+                if (tk != null) Chain.enter(p.method, tk);
             } catch (Throwable ignored) {
             }
         }
@@ -861,8 +862,8 @@ final class Recorder {
             String tk = null;
             if (Chain.on) {
                 try {
-                    tk = traceKey(p.method);
-                    ch = Chain.exit(tk);
+                    tk = resolveTrace(p);
+                    if (tk != null) ch = Chain.exit(tk);
                 } catch (Throwable ignored) {
                 }
             }
@@ -885,8 +886,74 @@ final class Recorder {
         return m.getDeclaringClass().getName() + "#" + (m instanceof Constructor ? "<init>" : m.getName());
     }
 
-    private static boolean isTraceTarget(Member m, String tk) {
-        return traceActive.contains(tk) || traceWild.contains(m.getDeclaringClass().getName());
+    /**
+     * 【给其他 AI / 维护者】继承方法追踪：用户写的「子类#方法」，方法其实声明在父类（或接口的 default 方法）里时，
+     * 钩子只能挂在声明处。这张表记 “声明处 类#方法 → 用户写的那些子类”，命中时用 this 是否属于用户写的类来过滤，
+     * 记录仍然按用户写的「子类#方法」归档（不是声明处）。key = 声明类名#方法名。
+     */
+    private static final Map<String, java.util.List<Class<?>>> traceInherit = new ConcurrentHashMap<>();
+
+    /**
+     * 这次调用对应用户追踪清单里的哪一项？返回「类#方法」的 key；不是追踪目标返回 null。
+     * 顺序：声明处直接命中 → 整类 类#* 命中 → 继承命中（挂在父类上、this 是用户写的子类的实例）。
+     */
+    private static String resolveTrace(XC_MethodHook.MethodHookParam p) {
+        Member m = p.method;
+        String own = traceKey(m);
+        if (traceActive.contains(own) || traceWild.contains(m.getDeclaringClass().getName())) return own;
+        java.util.List<Class<?>> subs = traceInherit.get(own);
+        if (subs == null) return null;
+        String mn = m instanceof Constructor ? "<init>" : m.getName();
+        for (Class<?> k : subs) {
+            // 静态方法没有 this，没法区分子类，按第一个登记的子类算
+            if (p.thisObject == null || k.isInstance(p.thisObject)) return k.getName() + "#" + mn;
+        }
+        return null;
+    }
+
+    /** 挂上 c 自己声明的所有名叫 mn 的方法（跳过抽象方法），返回挂上几个。祖先类 / 接口 default 方法用。 */
+    private static int hookDeclaredNamed(Class<?> c, String mn) {
+        int cnt = 0;
+        try {
+            for (Method dm : c.getDeclaredMethods()) {
+                if (!dm.getName().equals(mn) || java.lang.reflect.Modifier.isAbstract(dm.getModifiers())) continue;
+                try {
+                    XposedBridge.hookMethod(dm, TRACE_HOOK);
+                    cnt++;
+                } catch (Throwable ignored) {
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return cnt;
+    }
+
+    /**
+     * k 自己没声明方法 mn 时，往上找：先沿父类链，再找接口（default 方法），挂在最近的声明处，并登记继承关系。
+     * 返回声明处的类，没找到返回 null。
+     */
+    private static Class<?> hookInherited(Class<?> k, String mn, String userKey) {
+        java.util.ArrayList<Class<?>> chain = new java.util.ArrayList<>();
+        for (Class<?> s = k.getSuperclass(); s != null && s != Object.class; s = s.getSuperclass()) chain.add(s);
+        java.util.ArrayDeque<Class<?>> q = new java.util.ArrayDeque<>();
+        for (Class<?> c = k; c != null; c = c.getSuperclass()) q.addAll(java.util.Arrays.asList(c.getInterfaces()));
+        while (!q.isEmpty()) {
+            Class<?> i = q.poll();
+            if (!chain.contains(i)) chain.add(i);
+            q.addAll(java.util.Arrays.asList(i.getInterfaces()));
+        }
+        for (Class<?> a : chain) {
+            if (hookDeclaredNamed(a, mn) > 0) {
+                java.util.List<Class<?>> l = traceInherit.get(a.getName() + "#" + mn);
+                if (l == null) {
+                    l = new java.util.concurrent.CopyOnWriteArrayList<>();
+                    traceInherit.put(a.getName() + "#" + mn, l);
+                }
+                if (!l.contains(k)) l.add(k);
+                return a;
+            }
+        }
+        return null;
     }
 
     static void markChainDirty() {
@@ -999,7 +1066,15 @@ final class Recorder {
                         : XposedBridge.hookAllMethods(k, mn, TRACE_HOOK);
                 markHooked(t);
                 if (hooked == null || hooked.isEmpty()) {
-                    traceMsg.put(t, "这个类里没有声明该方法（可能在父类，或方法名写错）");
+                    // 自己没声明：找父类 / 接口 default 方法，挂在声明处并用 this 过滤（<init> 不继承，不走这里）
+                    Class<?> decl = mn.equals("<init>") ? null : hookInherited(k, mn, t);
+                    if (decl != null) {
+                        traceMsg.remove(t);
+                        HOOK_INFO.merge(t, "\n    方法继承自 " + decl.getName() + "，钩子挂在那里，只记 this 是 " + cn + " 的调用",
+                                (a, b) -> a + b);
+                    } else {
+                        traceMsg.put(t, "类自己、父类和接口里都没有这个方法（方法名写错？）");
+                    }
                 } else {
                     traceMsg.remove(t);
                 }
@@ -1078,7 +1153,7 @@ final class Recorder {
                     else if (!ret.equals(rn)) mixedRet = true;
                 }
                 if (cnt == 0) {
-                    sb.append("；此类没有声明这个方法（可能在父类 / 接口，钩点会落空）");
+                    sb.append("；此类自己没有声明这个方法（会去父类 / 接口 default 方法里找，挂在声明处并按 this 过滤）");
                 } else {
                     sb.append("；同名重载 ").append(cnt).append(" 个（hookAll 会全部挂上）").append(ov);
                     if (ret != null && !mixedRet) HOOK_RET.put(t, ret);
@@ -1109,15 +1184,12 @@ final class Recorder {
     private static void onTraced(XC_MethodHook.MethodHookParam p) {
         RecConfig c = cfg;
         if (!c.enabled) return;
-        Member m = p.method;
-        String cn = m.getDeclaringClass().getName();
-        String mn = m instanceof Constructor ? "<init>" : m.getName();
-        String tkey = cn + "#" + mn;
-        boolean wild = false;
-        if (!traceActive.contains(tkey)) {
-            if (!traceWild.contains(cn)) return;
-            wild = true; // 「类#*」整类追踪命中的方法
-        }
+        String tkey = resolveTrace(p); // 声明处命中 / 整类命中 / 继承命中（后者 tkey 是用户写的子类#方法）
+        if (tkey == null) return;
+        int hs = tkey.indexOf('#');
+        String cn = tkey.substring(0, hs);
+        String mn = tkey.substring(hs + 1);
+        boolean wild = !traceActive.contains(tkey); // 「类#*」整类追踪命中的方法
         RecConfig.TraceOpt opt0 = traceOpts.get(tkey);
         if (opt0 == null && wild) opt0 = traceOpts.get(cn + "#*");
         if (opt0 != null && opt0.tagArg > -2) tagFrom(p, opt0.tagArg); // 标识（视频 id）任务外也要更新，免得任务里第一条记录带着旧标识
