@@ -283,7 +283,7 @@ final class Store {
     private JSONObject partHead(String part) throws Exception {
         JSONObject j = new JSONObject();
         j.put("schema", 1);
-        j.put("module", "TextRec 1.26.1");
+        j.put("module", "TextRec 1.26.2");
         j.put("part", part);
         j.put("pkg", pkg);
         j.put("process", proc);
@@ -334,7 +334,7 @@ final class Store {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.26.1");
+        root.put("module", "TextRec 1.26.2");
         root.put("splitFiles", split);
         root.put("env", envJson());
         root.put("monoNow", android.os.SystemClock.uptimeMillis() - Timeline.START);
