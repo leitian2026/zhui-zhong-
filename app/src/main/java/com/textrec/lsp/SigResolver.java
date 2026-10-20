@@ -96,6 +96,15 @@ final class SigResolver {
             } catch (Throwable ignored) {
             }
         }
+        // 兜底：系统 / 框架类（android.*、java.*）和 App 加载器还没登记上时，用系统加载器和 boot 加载器再找一遍，方法追踪才能追任何类
+        try {
+            return Class.forName(cn, false, ClassLoader.getSystemClassLoader());
+        } catch (Throwable ignored) {
+        }
+        try {
+            return Class.forName(cn, false, null);
+        } catch (Throwable ignored) {
+        }
         return null;
     }
 
