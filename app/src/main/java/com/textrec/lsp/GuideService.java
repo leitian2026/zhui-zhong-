@@ -767,9 +767,9 @@ public class GuideService extends Service {
                     long recs = st == null ? 0 : st.optLong("records");
                     JSONArray tl = root.optJSONArray("timeline");
                     // 数这件事期间出现过的记录：每条记录带「按任务阶段的调用次数」segCounts，key 是任务序号。
-                    // 只数 key 在 0..39 之内的任务（Rec 里按任务阶段计数的数组只有 40 格）
+                    // 只数 key 在 0..199 之内的任务（Rec 里按任务阶段计数的数组有 200 格）
                     JSONArray ra = root.optJSONArray("records");
-                    if (ra != null && n < 40) {
+                    if (ra != null && n < 200) {
                         for (int i = 0; i < ra.length(); i++) {
                             JSONObject ro = ra.optJSONObject(i);
                             JSONObject sc = ro == null ? null : ro.optJSONObject("segCounts");
@@ -841,7 +841,7 @@ public class GuideService extends Service {
             why = "目标进程没收到「任务开始 " + n + "」标记：目标 App 当时没在运行，或进程是在标记发出之后才启动的";
         } else if (!t.baseline && bestEvents == 0) {
             why = "这件事期间目标进程一个事件都没记到：操作没触发已设的钩子 / 采集开关或过滤（页面、线程、触发窗口）挡掉了 / 做的不是这件事";
-        } else if (!t.baseline && n < 40 && taskRecs == 0) {
+        } else if (!t.baseline && n < 200 && taskRecs == 0) {
             // 以前只数时间线事件（点击、页面切换也算），所以一条记录都没有也会显示「已记录完成」；现在必须真有记录
             why = "这件事期间有 " + bestEvents + " 个操作事件，但一条记录都没记到：多半是关键字 / 过滤挡掉了"
                     + "（多个关键字要写在同一行，用 \\n 隔开）、采集开关没开、或应用设置后没有强杀目标 App 重开";
