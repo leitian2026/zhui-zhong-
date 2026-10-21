@@ -193,6 +193,11 @@ final class Recorder {
             Collections.synchronizedMap(new WeakHashMap<View, SetStack>());
     private static volatile WeakReference<Activity> resumed;
 
+    /** 某个 TextView 最近一次 setText 的设置栈（视图树导出用）；没记到返回 null。 */
+    static SetStack setStackOf(TextView v) {
+        return v == null ? null : VIEW_SET.get(v);
+    }
+
     /** 最近一次 onResume 的 Activity（视图树导出用）；没有或已回收返回 null。 */
     static Activity topActivity() {
         WeakReference<Activity> w = resumed;
@@ -343,6 +348,7 @@ final class Recorder {
                         Chain.coroutineHook(acl);
                         ensureAppCompatHook(acl);
                         retryTraceInstall();
+                        ViewDump.ensureTouchHook();
                         if (store.appVersion.isEmpty()) {
                             Context ctx = a.getApplicationContext();
                             PackageInfo pi = ctx.getPackageManager().getPackageInfo(ctx.getPackageName(), 0);
