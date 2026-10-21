@@ -463,7 +463,7 @@ public class MainActivity extends Activity {
 
     private final java.util.LinkedHashMap<String, Switch> fineSw = new java.util.LinkedHashMap<>();
     private final java.util.LinkedHashMap<String, EditText> fineNum = new java.util.LinkedHashMap<>();
-    private EditText etDumpPrefix;
+    private EditText etDumpPrefix, etViewDumpKey;
     private LinearLayout fineBody;
     private TextView fineHeader;
 
@@ -517,6 +517,15 @@ public class MainActivity extends Activity {
         fineNumber("traceDumpEvery", "每隔几次调用记一份", "默认 25。不填这里，「回填并保存」会把配置里的 traceDumpEvery 重置成 25");
         fineNumber("traceDumpLines", "一份最多多少行", "默认 40，可调到 2000。用完调回 40，否则导出文件会很大");
         fineNumber("traceDumpDepth", "往子对象里展开几层", "默认 3；0 = 只列对象自己的字段，不进子对象");
+
+        fineGroup("视图树导出", "弄清一块界面里各个控件的父子关系和布局类型（比如左下角的作者名 / 文案 / 作者声明 / 合集条是不是在同一个容器里）。只读，不改界面。开了以后，任务开始、任务结束、记录页点「标记」时各抓一份，写进导出的「视图树」一节；最多留最近 16 份");
+        fineSwitch("viewDump", "任务开始 / 结束 / 点标记时导出视图树", "默认关。用完关掉。需要「应用并重新记录」并强杀目标 App 重开才生效");
+        etViewDumpKey = textRowIn(fineBody, "以哪个控件为准",
+                "屏幕上类名或 id 含这些词（逗号分隔）的控件当作「主角」，取可见面积最大的一个。默认是抖音视频文案的两个类；要看别的区域就换成那里的控件类名或 id 里的词",
+                "ScrollMentionTextView,MentionTextView", false);
+        fineNumber("viewDumpUp", "从主角往上几层当容器", "默认 3。想看更大的范围调大（看不到作者名、进度条就加 1～2）；0 = 只列主角自己");
+        fineNumber("viewDumpDepth", "容器往下列几层", "默认 5，范围 1–10");
+        fineNumber("viewDumpLines", "一份最多多少行", "默认 400，范围 50–3000；导出文件会跟着变大");
 
         fineGroup("Compose 字段展开", "「Compose：展开对象字段」的细项。把 MultiParagraph 里的字段名、类型、值列出来，找文字 / 颜色存在哪个字段，每条记录最多 6 份");
         fineNumber("composeDumpEvery", "展开间隔", "前 3 份每次都展开，之后每隔多少次再展开一份。默认 50");
@@ -746,6 +755,7 @@ public class MainActivity extends Activity {
             }
         }
         etDumpPrefix.setText(c.dumpPrefixes);
+        etViewDumpKey.setText(c.viewDumpKey);
         swChain.setChecked(c.chainOn);
         swChainAsync.setChecked(c.chainAsync);
         swChainDown.setChecked(c.chainDown);
@@ -814,6 +824,7 @@ public class MainActivity extends Activity {
             }
         }
         c.dumpPrefixes = etDumpPrefix.getText().toString();
+        c.viewDumpKey = etViewDumpKey.getText().toString().trim().isEmpty() ? new RecConfig().viewDumpKey : etViewDumpKey.getText().toString().trim();
         c.chainOn = swChain.isChecked();
         c.chainAsync = swChainAsync.isChecked();
         c.chainDown = swChainDown.isChecked();
