@@ -1474,6 +1474,7 @@ public class RecordsActivity extends Activity {
         StringBuilder sb = new StringBuilder();
         sb.append("TextRec 任务清单记录  ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
                 .append("  共 ").append(items.size()).append(" 条（全部记录 ").append(all.size()).append(" 条）\n");
+        if (items.isEmpty()) sb.append("⚠ 没有任务内的文字记录（任务期间没有文字被设置 / 绘制，或被筛选开关挡掉了）；下面只有时间线 / 视图树 / 点击这几节。\n");
         sb.append("只含任务内：任务清单上每一件事期间被调用过的记录；任务外的记录不在这个文件里。不套当前的类型 / 页面 / 屏幕上 / 公共控件筛选。\n");
         sb.append("每条记录里的「按任务阶段的调用次数」写明它在哪几件事里出现了几次，没出现的任务 = 0 次。\n");
         List<GuideService.Task> ts = GuideService.parse(getSharedPreferences(Actions.PREFS, MODE_PRIVATE).getString(GuideService.PREF_TASKS, GuideService.DEFAULT_TASKS));
@@ -1523,7 +1524,8 @@ public class RecordsActivity extends Activity {
         String content;
         if (req == REQ_TASK) {
             List<Snap.Item> ti = taskRecords();
-            if (ti.isEmpty()) {
+            // 只做视图树 / 点击 / 时间线（没有任务内的文字记录）时也要能导出：这些在文件头的几节里，不依赖文字记录
+            if (ti.isEmpty() && Snap.viewDumpText.isEmpty() && Snap.timelineText.isEmpty()) {
                 toast("没有任务清单的记录（用任务浮窗录过、并且刷新过吗？）");
                 return;
             }
