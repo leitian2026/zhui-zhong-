@@ -192,6 +192,12 @@ final class Recorder {
     private static final Map<View, SetStack> ICON_SET =
             Collections.synchronizedMap(new WeakHashMap<View, SetStack>());
     private static volatile WeakReference<Activity> resumed;
+
+    /** 最近一次 onResume 的 Activity（视图树导出用）；没有或已回收返回 null。 */
+    static Activity topActivity() {
+        WeakReference<Activity> w = resumed;
+        return w == null ? null : w.get();
+    }
     private static FileObserver cfgObserver; // 静态引用，避免被 GC
     private static final ThreadLocal<TextView> CUR = new ThreadLocal<>();
     private static final ThreadLocal<PaintCtx> PAINT = new ThreadLocal<>();
