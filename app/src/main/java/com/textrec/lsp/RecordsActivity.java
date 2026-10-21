@@ -1503,6 +1503,7 @@ public class RecordsActivity extends Activity {
         if (none.length() > 0) sb.append("⚠ 这几件事期间一条记录都没有：").append(none).append("（没做 / 目标进程没收到标记 / 被筛选开关挡掉了，看下面的概况）\n");
         if (!infoBase.isEmpty()) sb.append(infoBase);
         if (!Snap.timelineText.isEmpty()) sb.append("\n══ 时间线 ══\n").append(Snap.timelineText).append("══ 时间线结束 ══\n");
+        if (!Snap.viewDumpText.isEmpty()) sb.append("\n══ 视图树 ══\n").append(Snap.viewDumpText).append("══ 视图树结束 ══\n");
         sb.append('\n');
         RecFormat.Dedup dd = new RecFormat.Dedup();
         String curPage = null;
@@ -1548,6 +1549,7 @@ public class RecordsActivity extends Activity {
             sb.append("  （全部记录 ").append(all.size()).append(" 条）\n");
             if (!infoBase.isEmpty()) sb.append(infoBase);
             if (!Snap.timelineText.isEmpty()) sb.append("\n══ 时间线 ══\n").append(Snap.timelineText).append("══ 时间线结束 ══\n");
+        if (!Snap.viewDumpText.isEmpty()) sb.append("\n══ 视图树 ══\n").append(Snap.viewDumpText).append("══ 视图树结束 ══\n");
             if (!fullIds.isEmpty()) sb.append("完整细节只给编号 ").append(fullIds).append(" 的记录，其余只有一行摘要（命令 full=编号,编号）\n");
             sb.append('\n');
             RecFormat.Dedup dd = new RecFormat.Dedup(); // 同一份栈 / 签名只完整写一次
@@ -1578,6 +1580,7 @@ public class RecordsActivity extends Activity {
                 for (String s : infoBase.split("\n")) if (!s.trim().isEmpty()) inf.put(s);
                 o.put("info", inf);
                 o.put("timelineText", Snap.timelineText);
+                o.put("viewDumpText", Snap.viewDumpText);
                 JSONObject fo = new JSONObject();
                 fo.put("onlyOnScreen", onlyOnScreen);
                 fo.put("hiddenOffScreen", hiddenOff);
