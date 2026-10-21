@@ -75,9 +75,13 @@ public final class RecConfig {
      */
     public boolean viewDump = false;
     public String viewDumpKey = "ScrollMentionTextView,MentionTextView";
-    public int viewDumpUp = 3;
+    public int viewDumpUp = 5;
     public int viewDumpDepth = 5;
     public int viewDumpLines = 400;
+    /** 视图树里的文字控件，带上「这段文字最近是谁 setText 的」（要开着「文字是谁设置的」，且不被方法追踪独占关掉）。 */
+    public boolean viewDumpSet = true;
+    /** 点哪查哪：每次点屏幕（按下抬起位置差不多、不是滑动），把这个点上所有控件（从外层到最上层）列出来，不需要知道控件叫什么。 */
+    public boolean viewTap = false;
     /** 链路追踪：以方法追踪的方法为锚点，串起上游（异步来源）和下游（被调用的方法、界面效果）。总开关 + 三个子开关 */
     /** 时间线：用户操作 / 页面 / 各位置的记录样本，按毫秒排成一条；标记和基线从记录页发来 */
     public boolean tlOn = true;
@@ -434,6 +438,8 @@ public final class RecConfig {
             p.setProperty("viewDumpUp", String.valueOf(viewDumpUp));
             p.setProperty("viewDumpDepth", String.valueOf(viewDumpDepth));
             p.setProperty("viewDumpLines", String.valueOf(viewDumpLines));
+            p.setProperty("viewDumpSet", String.valueOf(viewDumpSet));
+            p.setProperty("viewTap", String.valueOf(viewTap));
             p.setProperty("tlOn", String.valueOf(tlOn));
             p.setProperty("tlOps", String.valueOf(tlOps));
             p.setProperty("tlSamples", String.valueOf(tlSamples));
@@ -563,6 +569,8 @@ public final class RecConfig {
         c.viewDumpUp = clamp(num(p, "viewDumpUp", c.viewDumpUp), 0, 12);
         c.viewDumpDepth = clamp(num(p, "viewDumpDepth", c.viewDumpDepth), 1, 10);
         c.viewDumpLines = clamp(num(p, "viewDumpLines", c.viewDumpLines), 50, 3000);
+        c.viewDumpSet = bool(p, "viewDumpSet", c.viewDumpSet);
+        c.viewTap = bool(p, "viewTap", c.viewTap);
         c.tlOn = bool(p, "tlOn", c.tlOn);
         c.tlOps = bool(p, "tlOps", c.tlOps);
         c.tlSamples = bool(p, "tlSamples", c.tlSamples);
