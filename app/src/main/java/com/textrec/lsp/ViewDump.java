@@ -2,7 +2,9 @@ package com.textrec.lsp;
 
 import android.app.Activity;
 import android.graphics.Rect;
+import android.os.Looper;
 import android.os.SystemClock;
+import android.view.MotionEvent;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.ViewParent;
@@ -13,8 +15,13 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.lang.reflect.Field;
+import java.lang.reflect.Method;
 import java.util.ArrayList;
 import java.util.Locale;
+import java.util.concurrent.atomic.AtomicBoolean;
+
+import de.robv.android.xposed.XC_MethodHook;
+import de.robv.android.xposed.XposedBridge;
 
 /**
  * 视图树导出（1.27.0，目标进程里用）：在任务开始 / 任务结束 / 记录页点「标记」的那一刻，找到屏幕上的「文案」控件
@@ -34,19 +41,23 @@ final class ViewDump {
     private static final int[] LOC = new int[2];
     private static final Rect RECT = new Rect();
 
+    private static final int MAX_TAPS = 12;
+
     private static final class Dump {
         final long t;
-        final String reason, page, text;
+        final String reason, page, text, kind;
 
-        Dump(long t, String reason, String page, String text) {
+        Dump(long t, String reason, String page, String text, String kind) {
             this.t = t;
             this.reason = reason;
             this.page = page;
             this.text = text;
+            this.kind = kind;
         }
     }
 
     private static final ArrayList<Dump> KEEP = new ArrayList<>();
+    private static final ArrayList<Dump> TAPS = new ArrayList<>();
 
     /** 任何线程都可以调：开关没开直接返回；开了就切到界面线程抓一份。 */
     static void request(final String reason) {
@@ -64,7 +75,7 @@ final class ViewDump {
                     try {
                         String text = build(decor, c);
                         synchronized (KEEP) {
-                            KEEP.add(new Dump(t, reason, page, text));
+                            KEEP.add(new Dump(t, reason, page, text, "tree"));
                             while (KEEP.size() > MAX_KEEP) KEEP.remove(0);
                         }
                         Recorder.store.markDirty();
@@ -79,20 +90,147 @@ final class ViewDump {
     /** 快照里的 viewDumps 数组。 */
     static JSONArray toJson() {
         JSONArray arr = new JSONArray();
+        ArrayList<Dump> all = new ArrayList<>();
         synchronized (KEEP) {
-            for (Dump d : KEEP) {
-                try {
-                    JSONObject o = new JSONObject();
-                    o.put("t", d.t);
-                    o.put("reason", d.reason);
-                    o.put("page", d.page);
-                    o.put("text", d.text);
-                    arr.put(o);
-                } catch (Throwable ignored) {
-                }
+            all.addAll(KEEP);
+            all.addAll(TAPS);
+        }
+        java.util.Collections.sort(all, new java.util.Comparator<Dump>() {
+            @Override
+            public int compare(Dump a, Dump b) {
+                return a.t < b.t ? -1 : a.t > b.t ? 1 : 0;
+            }
+        });
+        for (Dump d : all) {
+            try {
+                JSONObject o = new JSONObject();
+                o.put("t", d.t);
+                o.put("reason", d.reason);
+                o.put("page", d.page);
+                o.put("text", d.text);
+                o.put("kind", d.kind);
+                arr.put(o);
+            } catch (Throwable ignored) {
             }
         }
         return arr;
+    }
+
+    // ------------------------------------------------------------ 点哪查哪
+
+    private static final AtomicBoolean TOUCH = new AtomicBoolean();
+    private static float downX, downY;
+    private static long downT;
+
+    /** 开了 viewTap 才装（在 Activity.onResume 里调）；钩子里平时只记按下的位置，抬起且位置没动才抓。 */
+    static void ensureTouchHook() {
+        try {
+            RecConfig c = Recorder.cfg;
+            if (c == null || !c.enabled || !c.viewTap || TOUCH.get()) return;
+            Method m = Activity.class.getDeclaredMethod("dispatchTouchEvent", MotionEvent.class);
+            if (!TOUCH.compareAndSet(false, true)) return;
+            XposedBridge.hookMethod(m, new XC_MethodHook() {
+                @Override
+                protected void beforeHookedMethod(MethodHookParam p) {
+                    try {
+                        onTouch((Activity) p.thisObject, (MotionEvent) p.args[0]);
+                    } catch (Throwable ignored) {
+                    }
+                }
+            });
+        } catch (Throwable t) {
+            TOUCH.set(false);
+            XposedBridge.log("[TextRec] viewTap touch hook failed: " + t);
+        }
+    }
+
+    private static void onTouch(Activity a, MotionEvent e) {
+        RecConfig c = Recorder.cfg;
+        if (c == null || !c.enabled || !c.viewTap) return;
+        int act = e.getActionMasked();
+        if (act == MotionEvent.ACTION_DOWN) {
+            downX = e.getRawX();
+            downY = e.getRawY();
+            downT = SystemClock.uptimeMillis();
+        } else if (act == MotionEvent.ACTION_UP) {
+            float dx = e.getRawX() - downX, dy = e.getRawY() - downY;
+            if (dx * dx + dy * dy <= 40f * 40f && SystemClock.uptimeMillis() - downT < 800) tap(a, e.getRawX(), e.getRawY(), c);
+        }
+    }
+
+    private static void tap(Activity a, float rx, float ry, RecConfig c) {
+        if (a == null || a.isFinishing() || a.isDestroyed()) return;
+        try {
+            final View decor = a.getWindow().getDecorView();
+            final long t = SystemClock.uptimeMillis() - Timeline.START;
+            final String page = Recorder.pageName;
+            final int x = Math.round(rx), y = Math.round(ry);
+            String text = buildTap(decor, x, y, c); // 在界面线程的 dispatchTouchEvent 里，趁点击效果还没发生，直接抓
+            synchronized (KEEP) {
+                TAPS.add(new Dump(t, "点击 (" + x + "," + y + ")", page, text, "tap"));
+                while (TAPS.size() > MAX_TAPS) TAPS.remove(0);
+            }
+            Recorder.store.markDirty();
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static String buildTap(View decor, int x, int y, RecConfig c) {
+        ArrayList<View> hits = new ArrayList<>();
+        ArrayList<Integer> dep = new ArrayList<>();
+        hitCollect(decor, x, y, 0, hits, dep, new int[]{0});
+        StringBuilder sb = new StringBuilder(4096);
+        sb.append("这个点上命中 ").append(hits.size()).append(" 个可见控件（外层 → 内层、同级按先后；dN = 嵌套层数；◀ = 最后一个，通常是最上层）。\n")
+                .append("每行：dN 类 #id 可见性 窗口坐标 宽x高 布局参数 文字。坐标是窗口内坐标（和视图树里的一致）。\n");
+        int[] left = {c.viewDumpLines};
+        for (int i = 0; i < hits.size() && left[0] > 0; i++) {
+            left[0]--;
+            sb.append('d').append(dep.get(i)).append(' ').append(describe(hits.get(i)));
+            if (i == hits.size() - 1) sb.append("  ◀");
+            sb.append('\n');
+            String sn = setNote(hits.get(i), c);
+            if (!sn.isEmpty() && left[0] > 0) {
+                left[0]--;
+                sb.append("     ↳ ").append(sn).append('\n');
+            }
+        }
+        if (left[0] <= 0) sb.append("…（行数到上限，可调大 viewDumpLines）\n");
+        return sb.toString();
+    }
+
+    private static void hitCollect(View v, int x, int y, int depth, ArrayList<View> out, ArrayList<Integer> dep, int[] seen) {
+        if (v == null || seen[0]++ > 8000 || v.getVisibility() != View.VISIBLE) return;
+        int[] loc = new int[2];
+        v.getLocationOnScreen(loc);
+        if (x < loc[0] || y < loc[1] || x >= loc[0] + v.getWidth() || y >= loc[1] + v.getHeight()) return;
+        out.add(v);
+        dep.add(depth);
+        if (v instanceof ViewGroup) {
+            ViewGroup g = (ViewGroup) v;
+            for (int i = 0, n = g.getChildCount(); i < n; i++) hitCollect(g.getChildAt(i), x, y, depth + 1, out, dep, seen);
+        }
+    }
+
+    /** 文字控件最近一次 setText 的调用栈前几帧；没开 / 没记到返回空串。 */
+    private static String setNote(View v, RecConfig c) {
+        try {
+            if (!c.viewDumpSet || !(v instanceof TextView)) return "";
+            CharSequence tx = ((TextView) v).getText();
+            if (tx == null || tx.length() == 0) return "";
+            SetStack ss = Recorder.setStackOf((TextView) v);
+            if (ss == null || ss.stk == null || ss.stk.lines == null || ss.stk.lines.length == 0) return "";
+            StringBuilder sb = new StringBuilder("设置自：");
+            int n = Math.min(4, ss.stk.lines.length);
+            for (int i = 0; i < n; i++) {
+                if (i > 0) sb.append(" ← ");
+                String l = ss.stk.lines[i];
+                sb.append(l.length() > 110 ? l.substring(0, 110) + "…" : l);
+            }
+            sb.append("  （").append(ss.count.get()).append(" 次，线程 ").append(ss.thread).append("）");
+            return sb.toString();
+        } catch (Throwable t) {
+            return "";
+        }
     }
 
     // ------------------------------------------------------------ 抓取
@@ -186,6 +324,12 @@ final class ViewDump {
         sb.append(index >= 0 ? "[" + index + "] " : "").append(describe(v));
         if (v == main) sb.append("  ◀");
         sb.append('\n');
+        String sn = setNote(v, Recorder.cfg);
+        if (!sn.isEmpty() && left[0] > 0) {
+            left[0]--;
+            for (int i = 0; i < depth; i++) sb.append("  ");
+            sb.append("    ↳ ").append(sn).append('\n');
+        }
         if (v instanceof ViewGroup && depth < maxDepth) {
             ViewGroup g = (ViewGroup) v;
             for (int i = 0, n = g.getChildCount(); i < n; i++) tree(g.getChildAt(i), main, depth + 1, maxDepth, sb, left, i);
