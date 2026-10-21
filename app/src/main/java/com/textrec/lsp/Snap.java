@@ -32,21 +32,36 @@ final class Snap {
     /** 各进程的视图树导出（1.27.0）；每次刷新前先 resetExtras()。 */
     static volatile String viewDumpText = "";
 
+    /** 相邻两份视图树的对比（1.27.0）。 */
+    static volatile String viewDiffText = "";
+
     static void resetExtras() {
         timelineText = "";
         viewDumpText = "";
+        viewDiffText = "";
     }
 
     private static String viewDumpsOf(JSONObject root, String proc) {
         JSONArray vd = root.optJSONArray("viewDumps");
         if (vd == null || vd.length() == 0) return "";
         StringBuilder sb = new StringBuilder();
-        sb.append("进程 ").append(proc).append("：").append(vd.length()).append(" 份（最多留最近 16 份）\n");
+        sb.append("进程 ").append(proc).append("：").append(vd.length()).append(" 份（树最多留最近 16 份，点击最多 12 份）\n");
+        ArrayList<String> titles = new ArrayList<>(), texts = new ArrayList<>();
         for (int i = 0; i < vd.length(); i++) {
             JSONObject d = vd.optJSONObject(i);
             if (d == null) continue;
-            sb.append("\n── 视图树 #").append(i + 1).append("  +").append(d.optLong("t")).append("ms  触发：").append(d.optString("reason"))
+            boolean tap = "tap".equals(d.optString("kind"));
+            String title = (tap ? "点击 #" : "视图树 #") + (i + 1);
+            sb.append("\n── ").append(title).append("  +").append(d.optLong("t")).append("ms  触发：").append(d.optString("reason"))
                     .append("  [").append(d.optString("page")).append("] ──\n").append(d.optString("text"));
+            if (!tap) {
+                titles.add("#" + (i + 1) + "（" + d.optString("reason") + "）");
+                texts.add(d.optString("text"));
+            }
+        }
+        if (texts.size() > 1) {
+            String df = ViewDiff.diff(titles, texts);
+            if (!df.isEmpty()) viewDiffText = viewDiffText + "进程 " + proc + "：\n" + df + "\n";
         }
         return sb.toString();
     }
