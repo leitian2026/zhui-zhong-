@@ -45,6 +45,7 @@ TextRec 是一个 LSPosed 模块（需要 root），挂进目标 App（默认抖
 | 按钮图标（没有文字）是谁设的 | `traceIcons=true`，其余可关 | 不填 | 记录里有资源名、Drawable 类型、缩略图 |
 | 某个方法被谁调用、参数返回值 | 其余全关，或保持 `traceExclusive=true`（默认，自动关） | 填 `类#方法` | 见第 5 章 |
 | 视频进度 / 总时长存在哪 | 同上 | 填疑似方法，加 `@tag=` 视需要；打开 `traceDump=true`；`valueClock=true` 只记带 `00:00` 的调用 | 把进度条拖到两端，看 min/max 判断单位 |
+| 一块界面里有哪些控件、谁在谁里面、是什么布局（视图树） | `viewDump=true`，其余开关随意；`viewDumpKey` 填那块区域里某个控件的类名或 id 里的词（默认抖音视频文案的两个类） | 不填 | 1.27.0。任务开始 / 结束、记录页点「标记」时各抓一份，导出里有「视图树」一节。需要写任务清单（一个视频一件事）；没在真机上验证过 |
 | 某控件透明度 / 可见性谁改的 | `traceState=true`；或在 `viewFilter` 填控件类名 / id，任何控件的变化都会记 | 可追 `android.view.View#setAlpha` 等 | 变体里带控件当前文字 |
 | 拖动才出现的文字（平时不可见） | `traceSetOnly=true` | 不填 | 记录里给出"没被画的原因" |
 | 弹幕 / 评论等 Compose 文字 | `drawCompose`、`autoParams`、`composeDump` 开 | 可追 `androidx.compose.ui.text.MultiParagraph#paint-LG529CI` | Compose 没有 View，没有"设置栈" |
@@ -286,6 +287,7 @@ quietCount=50
 | `traceStackDepth` | 30 | 方法追踪栈层数 |
 | `traceDump` `traceDumpEvery` | false / 25 | 记录 this 周围的字段值和第一个数值参数的 last / min / max |
 | `traceDumpLines` `traceDumpDepth` | 40 / 3 | 字段快照一份最多多少行（10~2000）、往子对象里展开几层（0~6，0 = 只列对象自己的数值和文字字段）。找某个对象有哪些字段时用 `2000`/`0`，用完调回默认，否则导出文件很大 |
+| `viewDump` `viewDumpKey` `viewDumpUp` `viewDumpDepth` `viewDumpLines` | false / `ScrollMentionTextView,MentionTextView` / 3 / 5 / 400 | 视图树导出（1.27.0）：开关；以哪个控件为准（类名或 id 含词，逗号分隔）；往上几层当容器（0~12）；往下列几层（1~10）；最多几行（50~3000） |
 | `windowMs` `windowAll` | 0 / false | 触发窗口 |
 | `excludeInfra` `threadMode` `valueClock` | false / 0 / false | 见 7.2 |
 | `excludeList` `threadFilter` `pageFilter` `viewFilter` `valueFilter` | 空 | 见 7.2 |
