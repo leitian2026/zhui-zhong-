@@ -283,7 +283,7 @@ final class Store {
     private JSONObject partHead(String part) throws Exception {
         JSONObject j = new JSONObject();
         j.put("schema", 1);
-        j.put("module", "TextRec 1.26.2");
+        j.put("module", "TextRec 1.27.0");
         j.put("part", part);
         j.put("pkg", pkg);
         j.put("process", proc);
@@ -334,7 +334,7 @@ final class Store {
         RecConfig c = conf;
         JSONObject root = new JSONObject();
         root.put("schema", 1);
-        root.put("module", "TextRec 1.26.2");
+        root.put("module", "TextRec 1.27.0");
         root.put("splitFiles", split);
         root.put("env", envJson());
         root.put("monoNow", android.os.SystemClock.uptimeMillis() - Timeline.START);
@@ -372,6 +372,11 @@ final class Store {
         cj.put("traceDumpEvery", c.traceDumpEvery);
         cj.put("traceDumpLines", c.traceDumpLines);
         cj.put("traceDumpDepth", c.traceDumpDepth);
+        cj.put("viewDump", c.viewDump);
+        cj.put("viewDumpKey", c.viewDumpKey);
+        cj.put("viewDumpUp", c.viewDumpUp);
+        cj.put("viewDumpDepth", c.viewDumpDepth);
+        cj.put("viewDumpLines", c.viewDumpLines);
         cj.put("traceMethods", c.traceMethods);
         cj.put("windowMs", c.windowMs);
         cj.put("windowAll", c.windowAll);
@@ -415,6 +420,7 @@ final class Store {
             root.put("timelineDropped", Timeline.dropped());
             root.put("timelineKindDropped", Timeline.kindDropped());
         }
+        root.put("viewDumps", ViewDump.toJson());
         root.put("baselineDone", Timeline.baselineDone);
         root.put("baselineMs", Timeline.baselineDone ? Timeline.baseEnd - Timeline.baseStart : 0);
         return root;
