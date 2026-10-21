@@ -29,8 +29,26 @@ final class Snap {
     /** 各进程的时间线文字（导出用）；每次刷新前先 resetExtras()。 */
     static volatile String timelineText = "";
 
+    /** 各进程的视图树导出（1.27.0）；每次刷新前先 resetExtras()。 */
+    static volatile String viewDumpText = "";
+
     static void resetExtras() {
         timelineText = "";
+        viewDumpText = "";
+    }
+
+    private static String viewDumpsOf(JSONObject root, String proc) {
+        JSONArray vd = root.optJSONArray("viewDumps");
+        if (vd == null || vd.length() == 0) return "";
+        StringBuilder sb = new StringBuilder();
+        sb.append("进程 ").append(proc).append("：").append(vd.length()).append(" 份（最多留最近 16 份）\n");
+        for (int i = 0; i < vd.length(); i++) {
+            JSONObject d = vd.optJSONObject(i);
+            if (d == null) continue;
+            sb.append("\n── 视图树 #").append(i + 1).append("  +").append(d.optLong("t")).append("ms  触发：").append(d.optString("reason"))
+                    .append("  [").append(d.optString("page")).append("] ──\n").append(d.optString("text"));
+        }
+        return sb.toString();
     }
 
     private static String timelineOf(JSONObject root, String proc) {
@@ -125,6 +143,10 @@ final class Snap {
                             + (effCfg.has("traceDumpLines") ? "" : "  （这份快照里没有这两项：目标进程里跑的是旧版模块，请强杀目标 App 重开）"));
                 }
                 if (!part && root.optBoolean("baselineDone")) infos.add(proc + "  基线：已录 " + root.optLong("baselineMs") + "ms（记录里标了“基线里也在调用”的是周期性噪声）");
+                if (!part) {
+                    String vdx = viewDumpsOf(root, proc);
+                    if (!vdx.isEmpty()) viewDumpText = viewDumpText + vdx + "\n";
+                }
                 String tlx = timelineOf(root, proc);
                 if (!tlx.isEmpty()) timelineText = timelineText + tlx + "\n";
                 if (rs == null) continue;
