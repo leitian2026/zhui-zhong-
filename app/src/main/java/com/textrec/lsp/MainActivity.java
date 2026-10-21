@@ -523,8 +523,10 @@ public class MainActivity extends Activity {
         etViewDumpKey = textRowIn(fineBody, "以哪个控件为准",
                 "屏幕上类名或 id 含这些词（逗号分隔）的控件当作「主角」，取可见面积最大的一个。默认是抖音视频文案的两个类；要看别的区域就换成那里的控件类名或 id 里的词",
                 "ScrollMentionTextView,MentionTextView", false);
-        fineNumber("viewDumpUp", "从主角往上几层当容器", "默认 3。想看更大的范围调大（看不到作者名、进度条就加 1～2）；0 = 只列主角自己");
+        fineNumber("viewDumpUp", "从主角往上几层当容器", "默认 5。想看更大的范围调大（看不到作者名、进度条就加 1～2）；0 = 只列主角自己");
         fineNumber("viewDumpDepth", "容器往下列几层", "默认 5，范围 1–10");
+        fineSwitch("viewDumpSet", "文字控件带上「谁设置的」", "默认开。视图树里每个有文字的控件多一行「设置自：…」，是它最近一次 setText 的调用栈前几帧。要开着「文字是谁设置的」，且没被方法追踪独占关掉；这个控件在开始记录之后没被设置过文字就没有");
+        fineSwitch("viewTap", "点哪查哪", "默认关。开了以后，每次点一下屏幕（不是滑动），把这个点上所有控件列出来：类名、id、可见性、坐标、布局参数、文字，从外层排到最上层。不用知道控件叫什么，点那一行就行。点击会被记成一份视图树，和上面共用最近 16 份的上限之外另有 12 份");
         fineNumber("viewDumpLines", "一份最多多少行", "默认 400，范围 50–3000；导出文件会跟着变大");
 
         fineGroup("Compose 字段展开", "「Compose：展开对象字段」的细项。把 MultiParagraph 里的字段名、类型、值列出来，找文字 / 颜色存在哪个字段，每条记录最多 6 份");
