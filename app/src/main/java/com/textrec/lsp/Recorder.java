@@ -225,6 +225,11 @@ final class Recorder {
         }
     };
 
+    /** 标注（Annot）在后台线程里反射读对象时用：设了它，读 LiveData 等触发被追踪的方法也不会递归记录。 */
+    static boolean[] busyFlag() {
+        return BUSY.get();
+    }
+
     /** Compose 文字绘制时当前 MultiParagraph.paint 的参数（和随后发生的 drawText 配对）。 */
     static final class PaintCtx {
         final String name;
@@ -1244,6 +1249,7 @@ final class Recorder {
             if (r != null) r.noteObj(p.thisObject);
             if (Timeline.samples && Timeline.want("T:" + tkey)) Timeline.add("TRACE", tkey + " " + clip(summarizeCall(p), 160));
             if (c.traceDump) dumpState(tkey, p, n, c); // 按方法统计，不受下面降频 / 只计数 / 换调用栈新建记录的影响
+            Annot.noteCall(tkey, p.thisObject, p.args, c); // 标注：前几次命中，后台线程反查 this / 参数被谁持有
             // 持续型自动降频：同一位置调用很多次、并且持续很久（进度条刷新之类），之后只计数不抓栈
             if (c.quietCount > 0) {
                 long nowMs = SystemClock.uptimeMillis();
