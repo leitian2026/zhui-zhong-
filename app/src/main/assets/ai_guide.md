@@ -16,6 +16,7 @@
 6. 没在真机上验证过的功能要如实说，不要说成"肯定能用"。
 7. **配置里每个字段必须写在同一行**（一行 `key=value`）。多个关键字不能折成多行，否则后面几行会被当成任务清单：普通模式用逗号隔开（`keywords=福利,红包`），正则模式（`regex=true`）只能用转义的换行 `\n` 隔开（`keywords=\\d+小时前\n昨天`）。多行的 `traceMethods` 同理，用 `\n` 或行尾反斜杠续行。
 8. **不要留占位符**：配置里不能出现"你的地名"这类没替换的占位文字，不知道的内容就别写，改用全量模式（`keywordMode=false`）先抓一遍。
+9. **多行的列表型配置项（`traceMethods`、`keywords` 等）用行尾反斜杠续行时，续行是把下一行直接接在后面，不会补换行。** 每一条末尾必须先写 `\\n` 再写反斜杠（`类#方法 @count\\n\\`），或者整个配置项写在一行里用 `\\n` 隔开。模块 1.30.0 起会校验并指出这类错误，但你给出的文本最好一次就写对。
 
 ---
 
@@ -47,6 +48,7 @@ TextRec 是一个 LSPosed 模块（需要 root），挂进目标 App（默认抖
 | 视频进度 / 总时长存在哪 | 同上 | 填疑似方法，加 `@tag=` 视需要；打开 `traceDump=true`；`valueClock=true` 只记带 `00:00` 的调用 | 把进度条拖到两端，看 min/max 判断单位 |
 | 一块界面里有哪些控件、谁在谁里面、是什么布局（视图树） | `viewDump=true`，其余开关随意；`viewDumpKey` 填那块区域里某个控件的类名或 id 里的词（默认抖音视频文案的两个类） | 不填 | 1.27.0。任务开始 / 结束、记录页点「标记」时各抓一份，导出里有「视图树」一节。需要写任务清单（一个视频一件事）；没在真机上验证过 |
 | 不知道控件叫什么，只知道它在屏幕上哪里 | `viewTap=true`；要「设置自」就开着 `traceSet` 并把 `traceExclusive` 关掉 | 不填 | 1.28.0。点一下那个位置，导出里有「点击 #n」：这个点上所有控件从外层到最上层。没在真机上验证过 |
+| 想知道 Aweme 这类对象被哪个容器持有 / 哪个钩点最稳 / 哪个操作独有哪些方法 | 默认就开着 `annotFrames` `annotOwners` `annotSweep`；方法追踪要追带 Aweme 参数的方法才有「对象归属」 | 填 `类#方法` | 1.29.0。导出里看「对象归属」「任务对比」「分叉帧」三节，调用栈每帧后面的〔…〕标签，以及记录里的「钩点评级」。没在真机上验证过 |
 | 某控件透明度 / 可见性谁改的 | `traceState=true`；或在 `viewFilter` 填控件类名 / id，任何控件的变化都会记 | 可追 `android.view.View#setAlpha` 等 | 变体里带控件当前文字 |
 | 拖动才出现的文字（平时不可见） | `traceSetOnly=true` | 不填 | 记录里给出"没被画的原因" |
 | 弹幕 / 评论等 Compose 文字 | `drawCompose`、`autoParams`、`composeDump` 开 | 可追 `androidx.compose.ui.text.MultiParagraph#paint-LG529CI` | Compose 没有 View，没有"设置栈" |
@@ -290,6 +292,7 @@ quietCount=50
 | `traceDumpLines` `traceDumpDepth` | 40 / 3 | 字段快照一份最多多少行（10~2000）、往子对象里展开几层（0~6，0 = 只列对象自己的数值和文字字段）。找某个对象有哪些字段时用 `2000`/`0`，用完调回默认，否则导出文件很大 |
 | `viewDump` `viewDumpKey` `viewDumpUp` `viewDumpDepth` `viewDumpLines` | false / `ScrollMentionTextView,MentionTextView` / 5 / 5 / 400 | 视图树导出（1.27.0）：开关；以哪个控件为准（类名或 id 含词，逗号分隔）；往上几层当容器（0~12，1.28.0 起默认 5）；往下列几层（1~10）；最多几行（50~3000） |
 | `viewDumpSet` `viewTap` | true / false | 视图树里文字控件带「设置自」；点哪查哪（点屏幕列出这个点上所有控件）。1.28.0 |
+| `annotFrames` `annotOwners` `annotSweep` `annotBudgetMs` `annotPerKey` | true / true / true / 40 / 6 | 标注（1.29.0）：调用栈每帧标分层·角色·稳定度并标入口帧 / 推荐钩点；方法追踪命中时反查 this / 参数被谁持有；任务开始 / 结束扫「容器 → 数据实体」；一次反查最多多少毫秒（5~500）；每个追踪方法前几次命中做反查（1~100） |
 | `windowMs` `windowAll` | 0 / false | 触发窗口 |
 | `excludeInfra` `threadMode` `valueClock` | false / 0 / false | 见 7.2 |
 | `excludeList` `threadFilter` `pageFilter` `viewFilter` `valueFilter` | 空 | 见 7.2 |
@@ -313,7 +316,7 @@ quietCount=50
 
 记录页右上「更多 → 粘贴命令…」。一行 = 一套筛选条件，空格分隔多个 `key=value`；不带 `=` 的词当搜索词。执行时**先清空当前所有筛选再设置**。无法识别的 key 或不存在的 value 会被忽略并 toast 提示。
 
-开放词表（大小写不敏感、子串匹配）：`container=` `module=` `view=` `page=`
+开放词表（大小写不敏感、子串匹配）：`container=` `module=` `view=` `page=` `owner=`（对象归属，1.29.0）`role=`（类角色：ViewHolder / Fragment / ViewModel / Listener / 数据实体 …）
 
 封闭词表（必须照抄，小写）：
 
@@ -330,6 +333,8 @@ quietCount=50
 | `baseline` | `noise` `live` `unknown` |
 | `trigger` | `touch` `frame` `data` `msg` `sync` `none` |
 | `tag` | 当前标识（如视频 id） |
+| `grade` | 钩点评级（1.29.0）：`a` 覆写框架方法 `b` 稳定业务 `c` 通用 `d` 混淆 `x` 未知 |
+| `only` | 任务独有（1.29.0）：`3` = 只在任务 3 里出现；`multi` 好几件事都出现；`none` 不在任务内 |
 | `full` | 如 `full=3,5,9`：导出只给这几条完整细节，其余一行摘要 |
 | `onscreen` `hidecommon` | `1` / `0` |
 | `sort` | `recent` `count` `first` |
