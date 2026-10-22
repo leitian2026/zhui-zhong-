@@ -379,6 +379,11 @@ final class Store {
         cj.put("viewDumpLines", c.viewDumpLines);
         cj.put("viewDumpSet", c.viewDumpSet);
         cj.put("viewTap", c.viewTap);
+        cj.put("annotFrames", c.annotFrames);
+        cj.put("annotOwners", c.annotOwners);
+        cj.put("annotSweep", c.annotSweep);
+        cj.put("annotBudgetMs", c.annotBudgetMs);
+        cj.put("annotPerKey", c.annotPerKey);
         cj.put("traceMethods", c.traceMethods);
         cj.put("windowMs", c.windowMs);
         cj.put("windowAll", c.windowAll);
@@ -423,6 +428,7 @@ final class Store {
             root.put("timelineKindDropped", Timeline.kindDropped());
         }
         root.put("viewDumps", ViewDump.toJson());
+        root.put("annot", Annot.toJson());
         root.put("baselineDone", Timeline.baselineDone);
         root.put("baselineMs", Timeline.baselineDone ? Timeline.baseEnd - Timeline.baseStart : 0);
         return root;
@@ -448,6 +454,8 @@ final class Store {
         o.put("more", s.more);
         if (s.xmlOnly) o.put("xmlOnly", true);
         o.put("sigs", new JSONArray(Arrays.asList(sigs)));
+        RecConfig ac = Recorder.cfg;
+        if (ac == null || ac.annotFrames) o.put("frameInfo", new JSONArray(Arrays.asList(Annot.frames(s.lines))));
         return o;
     }
 
@@ -613,6 +621,7 @@ final class Store {
             String rt = Recorder.hookRetOf(tk);
             if (rt != null) j.put("ret", rt);
         }
+        Annot.putRecord(j, r);
         java.util.List<String> cdl = r.composeDumps();
         if (!cdl.isEmpty()) j.put("composeDumps", new JSONArray(cdl));
         if (r.frameSamples() > 0) {
