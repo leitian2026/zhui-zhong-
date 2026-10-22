@@ -367,15 +367,24 @@ final class Timeline {
             if (m.find()) {
                 curTask = Integer.parseInt(m.group(2));
                 flowActive = true; // 冷启动补读时可能漏了「任务流程开始」，看到任务开始也算进入流程
-                if (!replaying) ViewDump.request(label); // 任务开始：抓一份视图树（开关没开直接返回；冷启动补读的旧标记不抓）
+                if (!replaying) {
+                    ViewDump.request(label); // 任务开始：抓一份视图树（开关没开直接返回；冷启动补读的旧标记不抓）
+                    Annot.sweep(label);
+                }
             } else if (label.startsWith("任务结束") || label.startsWith("任务中止") || label.startsWith("任务全部完成")) {
-                if (!replaying) ViewDump.request(label);
+                if (!replaying) {
+                    ViewDump.request(label);
+                    Annot.sweep(label);
+                }
                 curTask = 0; // flowActive 保持：做完以后到关浮窗之前，任务外仍按「任务外也记录」开关处理，不会把收尾操作记进任务内
             }
             addAt("TASK", label + suffix, t, sendWall);
         } else {
             addAt("MARK", label + suffix, t, sendWall);
-            if (!replaying) ViewDump.request("标记 " + label); // 记录页点「标记」：手动抓一份
+            if (!replaying) {
+                ViewDump.request("标记 " + label); // 记录页点「标记」：手动抓一份
+                Annot.sweep("标记 " + label);
+            }
         }
     }
 
