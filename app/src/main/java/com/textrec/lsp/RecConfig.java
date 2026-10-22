@@ -82,6 +82,18 @@ public final class RecConfig {
     public boolean viewDumpSet = true;
     /** 点哪查哪：每次点屏幕（按下抬起位置差不多、不是滑动），把这个点上所有控件（从外层到最上层）列出来，不需要知道控件叫什么。 */
     public boolean viewTap = false;
+    /**
+     * 标注（1.29.0）：给记录加「语义标签」，让找钩子更快更准。
+     * annotFrames：调用栈每一帧标分层 / 角色 / 稳定度，标出入口帧、推荐钩点、异步边界；钩点评级、类角色。
+     * annotOwners：方法追踪命中时，反查 this / 参数（如 Aweme）被哪个容器（ViewHolder / Fragment / ViewModel / View 标签）持有。
+     * annotSweep：任务开始 / 结束 / 点标记时扫一遍「容器 → 持有的数据实体」。
+     * annotBudgetMs：一次反查最多花多少毫秒（后台线程）；annotPerKey：每个追踪方法前几次命中做反查，之后每 300 次一次。
+     */
+    public boolean annotFrames = true;
+    public boolean annotOwners = true;
+    public boolean annotSweep = true;
+    public int annotBudgetMs = 40;
+    public int annotPerKey = 6;
     /** 链路追踪：以方法追踪的方法为锚点，串起上游（异步来源）和下游（被调用的方法、界面效果）。总开关 + 三个子开关 */
     /** 时间线：用户操作 / 页面 / 各位置的记录样本，按毫秒排成一条；标记和基线从记录页发来 */
     public boolean tlOn = true;
@@ -440,6 +452,11 @@ public final class RecConfig {
             p.setProperty("viewDumpLines", String.valueOf(viewDumpLines));
             p.setProperty("viewDumpSet", String.valueOf(viewDumpSet));
             p.setProperty("viewTap", String.valueOf(viewTap));
+            p.setProperty("annotFrames", String.valueOf(annotFrames));
+            p.setProperty("annotOwners", String.valueOf(annotOwners));
+            p.setProperty("annotSweep", String.valueOf(annotSweep));
+            p.setProperty("annotBudgetMs", String.valueOf(annotBudgetMs));
+            p.setProperty("annotPerKey", String.valueOf(annotPerKey));
             p.setProperty("tlOn", String.valueOf(tlOn));
             p.setProperty("tlOps", String.valueOf(tlOps));
             p.setProperty("tlSamples", String.valueOf(tlSamples));
@@ -571,6 +588,11 @@ public final class RecConfig {
         c.viewDumpLines = clamp(num(p, "viewDumpLines", c.viewDumpLines), 50, 3000);
         c.viewDumpSet = bool(p, "viewDumpSet", c.viewDumpSet);
         c.viewTap = bool(p, "viewTap", c.viewTap);
+        c.annotFrames = bool(p, "annotFrames", c.annotFrames);
+        c.annotOwners = bool(p, "annotOwners", c.annotOwners);
+        c.annotSweep = bool(p, "annotSweep", c.annotSweep);
+        c.annotBudgetMs = clamp(num(p, "annotBudgetMs", c.annotBudgetMs), 5, 500);
+        c.annotPerKey = clamp(num(p, "annotPerKey", c.annotPerKey), 1, 100);
         c.tlOn = bool(p, "tlOn", c.tlOn);
         c.tlOps = bool(p, "tlOps", c.tlOps);
         c.tlSamples = bool(p, "tlSamples", c.tlSamples);
