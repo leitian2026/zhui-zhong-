@@ -35,10 +35,40 @@ final class Snap {
     /** 相邻两份视图树的对比（1.27.0）。 */
     static volatile String viewDiffText = "";
 
+    /** 对象归属总表（1.29.0）：数据实体（如 Aweme）← 持有它的容器；每次刷新前先 resetExtras()。 */
+    static volatile String annotText = "";
+
     static void resetExtras() {
         timelineText = "";
         viewDumpText = "";
         viewDiffText = "";
+        annotText = "";
+    }
+
+    private static String annotOf(JSONObject root, String proc) {
+        JSONArray a = root.optJSONArray("annot");
+        if (a == null || a.length() == 0) return "";
+        StringBuilder sb = new StringBuilder();
+        sb.append("进程 ").append(proc).append("：").append(a.length()).append(" 类数据实体\n");
+        for (int i = 0; i < a.length(); i++) {
+            JSONObject e = a.optJSONObject(i);
+            if (e == null) continue;
+            sb.append("▪ ").append(e.optString("cls")).append("  角色 ").append(e.optString("role"))
+                    .append("  见过 ").append(e.optInt("objs")).append(e.optInt("objsMore") > 0 ? "+" : "").append(" 个不同对象");
+            JSONArray pg = e.optJSONArray("pages");
+            if (pg != null && pg.length() > 0) {
+                sb.append("  页面 ");
+                for (int k = 0; k < pg.length(); k++) sb.append(k > 0 ? " | " : "").append(pg.optString(k));
+            }
+            sb.append('\n');
+            JSONArray ps = e.optJSONArray("paths");
+            if (ps == null || ps.length() == 0) {
+                sb.append("    ← （没查到持有者）\n");
+            } else {
+                for (int k = 0; k < ps.length(); k++) sb.append("    ← ").append(ps.optString(k)).append('\n');
+            }
+        }
+        return sb.toString();
     }
 
     private static String viewDumpsOf(JSONObject root, String proc) {
@@ -158,6 +188,10 @@ final class Snap {
                             + (effCfg.has("traceDumpLines") ? "" : "  （这份快照里没有这两项：目标进程里跑的是旧版模块，请强杀目标 App 重开）"));
                 }
                 if (!part && root.optBoolean("baselineDone")) infos.add(proc + "  基线：已录 " + root.optLong("baselineMs") + "ms（记录里标了“基线里也在调用”的是周期性噪声）");
+                if (!part) {
+                    String atx = annotOf(root, proc);
+                    if (!atx.isEmpty()) annotText = annotText + atx + "\n";
+                }
                 if (!part) {
                     String vdx = viewDumpsOf(root, proc);
                     if (!vdx.isEmpty()) viewDumpText = viewDumpText + vdx + "\n";
