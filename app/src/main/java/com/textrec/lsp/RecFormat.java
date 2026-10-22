@@ -415,6 +415,17 @@ final class RecFormat {
             sb.append("Compose 文字对象的字段展开（paint 的 this，最多 6 份；找文字 / 颜色存在哪个字段）：\n");
             for (int i = 0; i < cd.length(); i++) sb.append("  ─ 第 ").append(i + 1).append(" 份 ").append(cd.optString(i)).append('\n');
         }
+        String gt = r.optString("gradeText");
+        if (!gt.isEmpty()) sb.append("钩点评级: ").append(gradeLabel(r.optString("grade"))).append(" — ").append(gt).append('\n');
+        String rl = r.optString("role");
+        if (!rl.isEmpty() && !"?".equals(rl)) sb.append("钩点所在类的角色: ").append(rl).append('\n');
+        JSONArray ow = r.optJSONArray("owners");
+        if (ow != null && ow.length() > 0) {
+            sb.append("对象归属（this / 参数被谁持有；方法追踪前几次命中时在后台线程反查，路径从当前页面的 Activity / Fragment / ViewModel / 视图树出发，最多 ").append(4).append(" 层）：\n");
+            for (int i = 0; i < ow.length(); i++) sb.append("  · ").append(ow.optString(i)).append('\n');
+            String ot = r.optString("ownerTop");
+            if (!ot.isEmpty()) sb.append("  → 最近的容器: ").append(ot).append('\n');
+        }
         String hi = r.optString("hookInfo");
         if (!hi.isEmpty()) sb.append("钩点信息: ").append(hi).append('\n');
         JSONArray fa = r.optJSONArray("frames");
@@ -475,7 +486,20 @@ final class RecFormat {
             sb.append("  （调用栈与 #").append(same).append(" 完全相同，不重复列出）\n");
         } else {
             if (dd != null && f != null && f.length() > 0) dd.frames.put(fk.toString(), recId);
-            if (f != null) for (int i = 0; i < f.length(); i++) sb.append("  at ").append(f.optString(i)).append('\n');
+            JSONArray fi = stack.optJSONArray("frameInfo");
+            String entryF = null, bestF = null;
+            if (f != null) {
+                for (int i = 0; i < f.length(); i++) {
+                    String tg = fi == null ? "" : fi.optString(i);
+                    sb.append("  at ").append(f.optString(i));
+                    if (!tg.isEmpty()) sb.append("   ").append(tg);
+                    sb.append('\n');
+                    if (tg.contains("◎推荐钩点")) bestF = f.optString(i);
+                    if (tg.contains("★入口帧")) entryF = f.optString(i);
+                }
+            }
+            if (bestF != null) sb.append("  ◎ 栈上推荐钩点（业务帧里最稳的）: ").append(bestF).append('\n');
+            if (entryF != null && !entryF.equals(bestF)) sb.append("  ★ 入口帧（最外层业务帧，业务代码从这里接手）: ").append(entryF).append('\n');
             int more = stack.optInt("more");
             if (more > 0) sb.append("  … 另有 ").append(more).append(" 帧\n");
         }
@@ -549,7 +573,8 @@ final class RecFormat {
 
     static final String[] CAT_DIMS = {"所属容器", "代码模块", "控件类", "屏幕位置",
             "记录类型", "hook可靠度", "调用频次", "复用范围", "内容形态", "新鲜度",
-            "用途", "基线", "触发原因", "视频/标识"};
+            "用途", "基线", "触发原因", "视频/标识",
+            "对象归属", "类角色", "钩点评级", "任务独有"};
 
     private static boolean genericClass(String cn) {
         if (cn.startsWith("android.") || cn.startsWith("androidx.constraintlayout.") || cn.startsWith("androidx.recyclerview.")
@@ -803,8 +828,13 @@ final class RecFormat {
                     case "sync": return "同步调用";
                     default: return "没有栈";
                 }
+            case 16:
+                return gradeLabel(code);
+            case 17:
+                if (code.startsWith("only")) return "只在任务" + code.substring(4) + "出现";
+                return code.equals("multi") ? "好几件事里都出现" : "不在任务内";
             default:
-                return code; // 容器 / 代码模块 / 控件类 / 标识本身就是可读的
+                return code; // 容器 / 代码模块 / 控件类 / 标识 / 对象归属 / 类角色本身就是可读的
         }
     }
 
@@ -839,11 +869,91 @@ final class RecFormat {
                 return r.optString("baseline", "unknown");
             case 12:
                 return triggerOf(r);
+            case 14:
+                return ownerOf(r);
+            case 15:
+                return roleOfRec(r);
+            case 16:
+                return gradeOf(r);
+            case 17:
+                return onlyTaskOf(r);
             default: {
                 String t = r.optString("lastTag");
                 return t.isEmpty() ? "(无标识)" : t;
             }
         }
+    }
+
+    // ------------------------------------------------------------ 标注（1.29.0）：对象归属 / 类角色 / 钩点评级 / 任务独有
+
+    /** 对象归属：方法追踪反查到的最近容器（如 VideoViewHolder⟨ViewHolder⟩）；没查到 / 不是方法追踪给占位。 */
+    static String ownerOf(JSONObject r) {
+        String t = r.optString("ownerTop");
+        if (!t.isEmpty()) return t;
+        if (!"TRACE".equals(r.optString("kind"))) return "(非方法追踪)";
+        return r.optJSONArray("owners") != null ? "(没查到持有者)" : "(没反查)";
+    }
+
+    /** 类角色：方法追踪取钩点所在类的角色；其他记录取栈上第一个带角色的业务帧（栈帧标注里〔业务·角色·稳〕那一段）。 */
+    static String roleOfRec(JSONObject r) {
+        String rl = r.optString("role");
+        if (!rl.isEmpty()) return rl;
+        String[] keys = {"setStack", "drawStack"};
+        for (String k : keys) {
+            JSONObject st = r.optJSONObject(k);
+            JSONArray fi = st == null ? null : st.optJSONArray("frameInfo");
+            if (fi == null) continue;
+            for (int i = 0; i < fi.length(); i++) {
+                String t = fi.optString(i);
+                if (!t.startsWith("〔业务·") && !t.startsWith("〔数据·")) continue;
+                String[] seg = t.substring(1, Math.max(1, t.indexOf('〕'))).split("·");
+                if (seg.length >= 3) return seg[1];
+            }
+        }
+        return "(无)";
+    }
+
+    /** 钩点评级的码：a 覆写框架方法 / b 稳定业务 / c 通用 / d 混淆 / x 未知。方法追踪有专门评级，其他记录按栈上帧的稳定度折算。 */
+    static String gradeOf(JSONObject r) {
+        String g = r.optString("grade");
+        if (!g.isEmpty()) return g;
+        switch (hookLevelOf(r)) {
+            case "biz": return "b";
+            case "widget": return "c";
+            case "obf": return "d";
+            default: return "x";
+        }
+    }
+
+    static String gradeLabel(String g) {
+        switch (g) {
+            case "a": return "A 覆写框架方法（最稳，可改钩父类 / 接口方法）";
+            case "b": return "B 稳定业务（名字没混淆）";
+            case "c": return "C 通用基础设施 / 通用控件（要过滤）";
+            case "d": return "D 混淆（换版本会变）";
+            default: return "? 未知";
+        }
+    }
+
+    /** 任务独有：这条记录只在清单上的某一件事里出现（only3 = 只在任务 3）/ 好几件事里都出现（multi）/ 不在任务内（none）。 */
+    static String onlyTaskOf(JSONObject r) {
+        JSONObject sg = r.optJSONObject("segCounts");
+        if (sg == null) return "none";
+        int only = -1, cnt = 0;
+        java.util.Iterator<String> it = sg.keys();
+        while (it.hasNext()) {
+            String k = it.next();
+            try {
+                int t = Integer.parseInt(k);
+                if (t > 0 && sg.optInt(k) > 0) {
+                    cnt++;
+                    only = t;
+                }
+            } catch (Throwable ignored) {
+            }
+        }
+        if (cnt == 0) return "none";
+        return cnt == 1 ? "only" + only : "multi";
     }
 
     /** 用途可以同时有几个，用逗号连起来；筛选时按“包含”判断。 */
