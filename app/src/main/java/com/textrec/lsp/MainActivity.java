@@ -527,6 +527,13 @@ public class MainActivity extends Activity {
         fineNumber("viewDumpDepth", "容器往下列几层", "默认 5，范围 1–10");
         fineSwitch("viewDumpSet", "文字控件带上「谁设置的」", "默认开。视图树里每个有文字的控件多一行「设置自：…」，是它最近一次 setText 的调用栈前几帧。要开着「文字是谁设置的」，且没被方法追踪独占关掉；这个控件在开始记录之后没被设置过文字就没有");
         fineSwitch("viewTap", "点哪查哪", "默认关。开了以后，每次点一下屏幕（不是滑动），把这个点上所有控件列出来：类名、id、可见性、坐标、布局参数、文字，从外层排到最上层。不用知道控件叫什么，点那一行就行。点击会被记成一份视图树，和上面共用最近 16 份的上限之外另有 12 份");
+
+        fineGroup("标注（找钩子更快更准）", "给记录加语义标签，都是只读观察，不改目标 App。栈帧标注、钩点评级、类角色在导出时才算，开销很小；对象归属反查在后台线程里做，有时间上限。需要「应用并重新记录」并强杀目标 App 重开才生效");
+        fineSwitch("annotFrames", "调用栈每一帧标分层 / 角色 / 稳定度", "默认开。每帧后面标〔业务·ViewHolder·稳〕这样的标签，并标出 ★入口帧、◎推荐钩点、↯异步边界；方法追踪的钩点另有评级（框架回调 / 稳定业务 / 通用 / 混淆）和类角色");
+        fineSwitch("annotOwners", "方法追踪命中时反查「谁持有这个对象」", "默认开。对 this 和前几个参数里的业务对象（比如抖音的 Aweme），从当前页面的 Activity / Fragment / ViewModel / 视图树里反向找出持有它的容器（ViewHolder、Fragment、ViewModel、控件标签、监听器），写成一条路径。在后台线程做，每个追踪方法只在前几次命中做");
+        fineSwitch("annotSweep", "任务开始 / 结束 / 点标记时扫「容器 → 数据实体」", "默认开。把当前页面里的 Fragment / ViewHolder / ViewModel / 自定义控件持有的数据实体（Aweme、User 这类）列出来，导出里有「对象归属」一节。不需要追踪任何方法就能知道 Aweme 住在哪个容器里");
+        fineNumber("annotBudgetMs", "一次反查最多花多少毫秒", "默认 40，范围 5–500。在后台线程里做，超时就收工，不会卡界面");
+        fineNumber("annotPerKey", "每个追踪方法前几次命中做反查", "默认 6，之后每 300 次做一次");
         fineNumber("viewDumpLines", "一份最多多少行", "默认 400，范围 50–3000；导出文件会跟着变大");
 
         fineGroup("Compose 字段展开", "「Compose：展开对象字段」的细项。把 MultiParagraph 里的字段名、类型、值列出来，找文字 / 颜色存在哪个字段，每条记录最多 6 份");
@@ -898,7 +905,34 @@ public class MainActivity extends Activity {
     }
 
     /** 处理粘贴框：拆开配置和任务清单，各自生效；openGuide = true 时接着打开浮窗。 */
-    private void applyPaste(boolean openGuide) {
+    private void applyPaste(final boolean openGuide) {
+        // 先校验：漏字母 / 漏等号 / 值写错 / 任务清单格式不对这类「悄悄不生效」的错误，在这里一条条说清楚
+        List<ConfigCheck.Issue> issues = ConfigCheck.checkPaste(etPaste.getText().toString());
+        if (ConfigCheck.hasError(issues)) {
+            showIssues("配置有 " + ConfigCheck.count(issues, true) + " 处错误，没有回填", issues, "忽略错误，仍然回填", new Runnable() {
+                @Override
+                public void run() {
+                    doApplyPaste(openGuide);
+                }
+            });
+            return;
+        }
+        doApplyPaste(openGuide);
+        if (!issues.isEmpty()) showIssues("已回填，但有 " + issues.size() + " 条提醒", issues, null, null);
+    }
+
+    /** 列出校验问题：错误在前、警告在后，每条带行号和原因。force != null 时多一个「仍然继续」按钮。 */
+    private void showIssues(String title, List<ConfigCheck.Issue> issues, String forceLabel, final Runnable force) {
+        TextView body = Ui.tv(this, ConfigCheck.format(issues), 13, R.color.text, false);
+        body.setLineSpacing(0, 1.2f);
+        body.setTextIsSelectable(true);
+        Ui.Dlg d = new Ui.Dlg(this, title, "写法见「AI 使用说明」；第几行指粘贴框里的行号").body(body, true);
+        if (force != null) d.button(forceLabel, false, force);
+        d.button(force != null ? "返回修改" : "知道了", true, null);
+        d.show();
+    }
+
+    private void doApplyPaste(boolean openGuide) {
         String[] parts = RecConfig.splitPaste(etPaste.getText().toString());
         StringBuilder msg = new StringBuilder();
         if (!parts[0].trim().isEmpty()) {
@@ -941,11 +975,35 @@ public class MainActivity extends Activity {
         Toast.makeText(this, s, Toast.LENGTH_SHORT).show();
     }
 
+    private boolean skipCheck;
+
     private void save(final boolean push, final boolean reset) {
         SharedPreferences sp = getSharedPreferences(Actions.PREFS, MODE_PRIVATE);
         long epoch = reset ? System.currentTimeMillis() : Actions.loadCfg(sp).epoch;
         final RecConfig c = read(epoch);
 
+        if (push && !skipCheck) {
+            java.util.ArrayList<ConfigCheck.Issue> tl = new java.util.ArrayList<>();
+            ConfigCheck.checkTraceMethods(tl, c.traceMethods, 0, "", true);
+            if (!tl.isEmpty()) {
+                final boolean fp = push, fr = reset;
+                if (ConfigCheck.hasError(tl)) {
+                    showIssues("方法追踪有 " + ConfigCheck.count(tl, true) + " 处错误，没有应用", tl, "忽略错误，仍然应用", new Runnable() {
+                        @Override
+                        public void run() {
+                            skipCheck = true;
+                            try {
+                                save(fp, fr);
+                            } finally {
+                                skipCheck = false;
+                            }
+                        }
+                    });
+                    return;
+                }
+                showIssues("方法追踪有 " + tl.size() + " 条提醒（已继续应用）", tl, null, null);
+            }
+        }
         if (c.keywordMode && c.regex) {
             for (String k : RecConfig.split(c.keywords, true)) {
                 try {
