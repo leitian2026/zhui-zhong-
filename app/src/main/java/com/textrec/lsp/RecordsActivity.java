@@ -78,7 +78,11 @@ public class RecordsActivity extends Activity {
             "这条记录能拿来做什么：改色 / 隐藏显示 / 换文字 / 跳过（方法追踪）。一条可以有几个用途，筛选按“包含”",
             "录过“安静基线”之后：基线里也在调用的是周期性噪声，基线里没出现的才是操作 / 播放触发的",
             "被什么触发：用户操作 / 帧回调·绘制 / 数据变化 / 消息·异步任务 / 同步调用（按栈判断）",
-            "出现时的当前标识（方法追踪行写 @tag=N 取参数当标识，如视频 id），不同视频的记录靠它对上号"};
+            "出现时的当前标识（方法追踪行写 @tag=N 取参数当标识，如视频 id），不同视频的记录靠它对上号",
+            "this / 参数（如 Aweme）被哪个容器持有：ViewHolder / Fragment / ViewModel / 控件。方法追踪命中时在目标进程里反查，没查到会标出来",
+            "钩点所在类（或栈上第一个业务帧所在类）的角色：Activity / Fragment / ViewHolder / Adapter / ViewModel / Listener(…) / Lambda(…) / 数据实体 …",
+            "钩点评级：A 覆写框架方法（最稳）/ B 稳定业务 / C 通用基础设施 / D 混淆 / ? 未知。非方法追踪的记录按栈上帧的稳定度折算",
+            "任务清单里这条记录出现在哪几件事：只在某一件事里出现的最适合当「这个操作」的钩点候选；好几件事都出现的多半是公共代码"};
 
     private ListView lv;
     private EditText etSearch;
@@ -1088,6 +1092,8 @@ public class RecordsActivity extends Activity {
     private static final String[] PURPOSE_CODES = {"color", "hide", "text", "skip", "other"};
     private static final String[] BASE_CODES = {"noise", "live", "unknown"};
     private static final String[] TRIG_CODES = {"touch", "frame", "data", "msg", "sync", "none"};
+    private static final String[] GRADE_CODES = {"a", "b", "c", "d", "x"};
+    private static final String[] ONLY_CODES = {"multi", "none"};
     /** 导出时只给这些编号的记录完整细节，其余一行摘要；空 = 全部完整 */
     private final java.util.HashSet<Integer> fullIds = new java.util.HashSet<>();
 
@@ -1226,6 +1232,26 @@ public class RecordsActivity extends Activity {
                 case "tag": {
                     String r = resolveFree(13, val);
                     if (r == null) ok = false; else catVal[13] = r;
+                    break;
+                }
+                case "owner": {
+                    String r = resolveFree(14, val);
+                    if (r == null) ok = false; else catVal[14] = r;
+                    break;
+                }
+                case "role": {
+                    String r = resolveFree(15, val);
+                    if (r == null) ok = false; else catVal[15] = r;
+                    break;
+                }
+                case "grade":
+                    ok = applyEnum(16, val, GRADE_CODES);
+                    break;
+                case "only": { // only=3 → 只在任务 3 出现；only=multi / only=none
+                    String v = val.toLowerCase(Locale.ROOT);
+                    if (v.matches("\\d+")) v = "only" + v;
+                    ok = applyEnum(17, v, ONLY_CODES) || v.matches("only\\d+");
+                    if (ok) catVal[17] = v;
                     break;
                 }
                 case "full": {
@@ -1470,6 +1496,26 @@ public class RecordsActivity extends Activity {
         return out;
     }
 
+    /** 标注（1.29.0）的几节：对象归属总表、任务对比（只有任务清单导出才有）、分叉帧。没内容的节不写。 */
+    private String annotSections(List<Snap.Item> items, boolean tasks) {
+        StringBuilder sb = new StringBuilder();
+        if (!Snap.annotText.isEmpty()) {
+            sb.append("\n══ 对象归属（数据实体 ← 持有它的容器）══\n")
+                    .append("说明：从当前页面的 Activity / Fragment / ViewModel / 视图树出发，反向找出谁持有这类业务对象（如抖音的 Aweme）。\n")
+                    .append("路径写法：容器⟨角色⟩ ─字段→ 下一个对象；{itemView=…} 是 ViewHolder 的根视图；(LiveData).value 表示对象放在 LiveData 里。\n")
+                    .append("要在这个容器里拿到这个对象：钩容器的方法，读路径上的字段（字段名可能被混淆，换版本会变）。没查到 = 不在页面可达范围内（静态单例 / 后台线程对象）。\n")
+                    .append(Snap.annotText).append("══ 对象归属结束 ══\n");
+        }
+        if (tasks) {
+            List<GuideService.Task> ts = GuideService.parse(getSharedPreferences(Actions.PREFS, MODE_PRIVATE).getString(GuideService.PREF_TASKS, GuideService.DEFAULT_TASKS));
+            String tc = AnnotReport.taskCompare(items, ts);
+            if (!tc.isEmpty()) sb.append("\n══ 任务对比（哪件事独有哪些记录）══\n").append(tc).append("══ 任务对比结束 ══\n");
+        }
+        String fk = AnnotReport.forkNotes(items);
+        if (!fk.isEmpty()) sb.append("\n══ 分叉帧（同一个钩点的不同调用路径从哪里分开）══\n").append(fk).append("══ 分叉帧结束 ══\n");
+        return sb.toString();
+    }
+
     private String buildTaskTxt(List<Snap.Item> items) {
         StringBuilder sb = new StringBuilder();
         sb.append("TextRec 任务清单记录  ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
@@ -1506,6 +1552,7 @@ public class RecordsActivity extends Activity {
         if (!Snap.timelineText.isEmpty()) sb.append("\n══ 时间线 ══\n").append(Snap.timelineText).append("══ 时间线结束 ══\n");
         if (!Snap.viewDumpText.isEmpty()) sb.append("\n══ 视图树 ══\n").append(Snap.viewDumpText).append("══ 视图树结束 ══\n");
         if (!Snap.viewDiffText.isEmpty()) sb.append("\n══ 视图树对比 ══\n").append(Snap.viewDiffText).append("══ 视图树对比结束 ══\n");
+        sb.append(annotSections(items, true));
         sb.append('\n');
         RecFormat.Dedup dd = new RecFormat.Dedup();
         String curPage = null;
@@ -1554,6 +1601,7 @@ public class RecordsActivity extends Activity {
             if (!Snap.timelineText.isEmpty()) sb.append("\n══ 时间线 ══\n").append(Snap.timelineText).append("══ 时间线结束 ══\n");
         if (!Snap.viewDumpText.isEmpty()) sb.append("\n══ 视图树 ══\n").append(Snap.viewDumpText).append("══ 视图树结束 ══\n");
         if (!Snap.viewDiffText.isEmpty()) sb.append("\n══ 视图树对比 ══\n").append(Snap.viewDiffText).append("══ 视图树对比结束 ══\n");
+            sb.append(annotSections(shown, false));
             if (!fullIds.isEmpty()) sb.append("完整细节只给编号 ").append(fullIds).append(" 的记录，其余只有一行摘要（命令 full=编号,编号）\n");
             sb.append('\n');
             RecFormat.Dedup dd = new RecFormat.Dedup(); // 同一份栈 / 签名只完整写一次
@@ -1586,6 +1634,7 @@ public class RecordsActivity extends Activity {
                 o.put("timelineText", Snap.timelineText);
                 o.put("viewDumpText", Snap.viewDumpText);
                 o.put("viewDiffText", Snap.viewDiffText);
+                o.put("annotText", Snap.annotText);
                 JSONObject fo = new JSONObject();
                 fo.put("onlyOnScreen", onlyOnScreen);
                 fo.put("hiddenOffScreen", hiddenOff);
