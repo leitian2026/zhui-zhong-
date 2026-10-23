@@ -65,7 +65,7 @@ final class AnnotReport {
     }
 
     /** 栈上标了 ◎ 的推荐钩点（方法追踪看调用栈，其他看设置栈 / 绘制栈）；没有返回空串。 */
-    private static String bestFrame(JSONObject r) {
+    static String bestFrame(JSONObject r) {
         String[] keys = {"drawStack", "setStack"};
         for (String k : keys) {
             JSONObject st = r.optJSONObject(k);
@@ -87,9 +87,20 @@ final class AnnotReport {
         return c;
     }
 
-    private static String countsText(int[] c, List<Integer> acts) {
+    /** 每件事要求做几遍（任务清单第 4 段 x3）；taskCompare 开头设置，countsText 用来显示「这遍出现了几遍」。 */
+    private static int[] REPS = new int[0];
+
+    private static String countsText(Row w, List<Integer> acts) {
+        int[] c = w.c;
+        JSONObject ps = w.r.optJSONObject("passes");
         StringBuilder sb = new StringBuilder();
-        for (int k : acts) sb.append(sb.length() > 0 ? " " : "").append(k).append(':').append(c[k]);
+        for (int k : acts) {
+            sb.append(sb.length() > 0 ? " " : "").append(k).append(':').append(c[k]);
+            if (ps != null && k < REPS.length && REPS[k] > 1 && c[k] > 0) {
+                int mask = ps == null ? 0 : ps.optInt(String.valueOf(k));
+                sb.append('·').append(Integer.bitCount(mask & ((1 << Math.min(REPS[k], 30)) - 1))).append('/').append(REPS[k]).append("遍");
+            }
+        }
         if (c[0] > 0) sb.append(" 任务外:").append(c[0]);
         return sb.toString();
     }
@@ -101,7 +112,7 @@ final class AnnotReport {
         if (!role.startsWith("(")) sb.append("  角色 ").append(role);
         String own = r.optString("ownerTop");
         if (!own.isEmpty()) sb.append("  容器 ").append(own);
-        sb.append("  各任务次数 ").append(countsText(w.c, acts)).append('\n');
+        sb.append("  各任务次数 ").append(countsText(w, acts)).append('\n');
         String bf = bestFrame(r);
         if (!bf.isEmpty()) sb.append("      ◎ 栈上推荐钩点: ").append(clip(bf, 140)).append('\n');
     }
@@ -119,6 +130,8 @@ final class AnnotReport {
     static String taskCompare(List<Snap.Item> items, List<GuideService.Task> ts) {
         int n = ts.size();
         if (n == 0) return "";
+        REPS = new int[n + 1];
+        for (int k = 1; k <= n; k++) REPS[k] = ts.get(k - 1).reps;
         ArrayList<Row> rows = new ArrayList<>();
         for (Snap.Item it : items) {
             JSONObject r = it.o;
@@ -149,7 +162,7 @@ final class AnnotReport {
         int noise = 0;
         for (Row w : rows) if (w.noise) noise++;
         StringBuilder sb = new StringBuilder();
-        sb.append("读法：每条记录在清单上每件事里出现几次（来自「按任务阶段的调用次数」，格式 任务序号:次数）。「基线噪声」= 安静基线期间也被调用的位置，已从候选里排掉（本次 ")
+        sb.append("读法：每条记录在清单上每件事里出现几次（来自「按任务阶段的调用次数」，格式 任务序号:次数；同一件事做了多遍的写成 任务序号:次数·出现在几/共几遍，3/3 = 每遍都触发，1/3 = 偶发）。「基线噪声」= 安静基线期间也被调用的位置，已从候选里排掉（本次 ")
                 .append(noise).append(" 条）。评级 A（覆写框架方法）/ B（稳定业务）越靠前越适合当钩点。\n");
 
         // 1. 只在某一件事里出现
@@ -228,7 +241,7 @@ final class AnnotReport {
         for (int i = 0; i < mx.size() && i < 40; i++) {
             Row w = mx.get(i);
             sb.append("  ").append(label(w.r)).append("  [").append(w.grade.toUpperCase(java.util.Locale.ROOT)).append("]  ")
-                    .append(countsText(w.c, acts)).append('\n');
+                    .append(countsText(w, acts)).append('\n');
         }
         if (mx.size() > 40) sb.append("  … 另有 ").append(mx.size() - 40).append(" 条没列\n");
         return sb.toString();
