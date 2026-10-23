@@ -39,20 +39,21 @@ final class ConfigCheck {
     static final String[] BOOL_KEYS = {
             "enabled", "keywordMode", "regex", "traceSet", "traceDraw", "traceColor",
             "traceIcons", "autoParams", "traceSetOnly", "traceState", "traceOnly", "windowAll",
-            "excludeInfra", "valueClock", "traceDump", "viewDump", "viewDumpSet", "viewTap",
-            "annotFrames", "annotOwners", "annotSweep", "tlOn", "tlOps", "tlSamples",
-            "recOutside", "traceExclusive", "traceCompose", "composeObj", "composeDump", "tlTouch",
-            "tlKey", "tlPage", "tlViewTree", "smpText", "smpState", "smpIcon",
-            "smpTrace", "chainOn", "chainAsync", "chainEffects", "chainDown", "setText",
-            "setClear", "drawTextView", "drawCanvas", "drawCompose", "colorPaint", "colorSet",
-            "iconImage", "iconDesc", "stateAlpha", "stateVisible", "stateSelected", "tlClass",
-            "chainCoroutine", "splitFiles"};
+            "excludeInfra", "valueClock", "traceDump", "viewDump", "viewDumpSet", "viewDumpAuto", "viewTap",
+            "annotFrames", "treeOn", "watchAuto", "annotOwners", "annotSweep", "tlOn",
+            "tlOps", "tlSamples", "recOutside", "traceExclusive", "traceCompose", "composeObj",
+            "composeDump", "tlTouch", "tlKey", "tlPage", "tlViewTree", "smpText",
+            "smpState", "smpIcon", "smpTrace", "chainOn", "chainAsync", "chainEffects",
+            "chainDown", "setText", "setClear", "drawTextView", "drawCanvas", "drawCompose",
+            "colorPaint", "colorSet", "iconImage", "iconDesc", "stateAlpha", "stateVisible",
+            "stateSelected", "tlClass", "chainCoroutine", "splitFiles"};
 
     /** {key, 最小, 最大, 默认}；默认 -1 = 默认值不是固定数字 */
     static final String[][] INT_KEYS = {
             {"maxSetOnly", "10", "5000", "500"}, {"windowMs", "0", "600000", "0"}, {"threadMode", "0", "2", "0"},
             {"traceDumpEvery", "1", "1000", "25"}, {"traceDumpLines", "10", "2000", "40"}, {"traceDumpDepth", "0", "6", "3"},
             {"viewDumpUp", "0", "12", "5"}, {"viewDumpDepth", "1", "10", "5"}, {"viewDumpLines", "50", "3000", "400"},
+            {"treeDepth", "1", "8", "4"}, {"treeNodes", "20", "600", "200"}, {"treeEvery", "1", "100000", "10"},
             {"annotBudgetMs", "5", "500", "40"}, {"annotPerKey", "1", "100", "6"}, {"traceStackDepth", "1", "80", "30"},
             {"maxPerKind", "20", "20000", "500"}, {"chainEvery", "1", "100000", "20"}, {"chainMaxDown", "10", "1000", "120"},
             {"quietCount", "0", "10000000", "0"}, {"quietSpanMs", "100", "3600000", "3000"}, {"stackDepth", "1", "60", "12"},
@@ -64,7 +65,7 @@ final class ConfigCheck {
             {"depthDraw", "0", "60", "0"}, {"depthColor", "0", "60", "0"}, {"depthIcon", "0", "60", "0"},
             {"depthState", "0", "60", "0"}};
 
-    static final String[] STR_KEYS = {"keywords", "traceMethods", "viewDumpKey", "excludeList", "threadFilter", "pageFilter", "viewFilter", "valueFilter", "dumpPrefixes"};
+    static final String[] STR_KEYS = {"keywords", "traceMethods", "viewDumpKey", "watch", "excludeList", "threadFilter", "pageFilter", "viewFilter", "valueFilter", "dumpPrefixes"};
 
     private static final Set<String> BOOLS = new HashSet<>(java.util.Arrays.asList(BOOL_KEYS));
     private static final Set<String> STRS = new HashSet<>(java.util.Arrays.asList(STR_KEYS));
@@ -75,7 +76,7 @@ final class ConfigCheck {
     private static final String[] TRACE_OPTS = {"count", "args", "stack", "depth", "every", "tag"};
     /** 逗号 / 换行分隔的列表型配置项。 */
     private static final Set<String> LIST_KEYS = new HashSet<>(java.util.Arrays.asList(
-            "keywords", "traceMethods", "excludeList", "threadFilter", "pageFilter", "viewFilter", "valueFilter", "viewDumpKey", "dumpPrefixes"));
+            "keywords", "traceMethods", "watch", "excludeList", "threadFilter", "pageFilter", "viewFilter", "valueFilter", "viewDumpKey", "dumpPrefixes"));
 
     static {
         for (String[] r : INT_KEYS) INTS.put(r[0], r);
@@ -436,6 +437,7 @@ final class ConfigCheck {
             if (f2 != null) out.add(new Issue(ln, true, q(key) + " 是用逗号 / 换行分隔的列表，" + f2 + "（全角逗号不会被当成分隔符，整串会被当成一个词）"));
         }
         if (key.equals("traceMethods") && !e.glued) checkTraceMethods(out, v, ln, "traceMethods", false);
+        if (key.equals("watch") && !e.glued) checkWatch(out, v, ln, false);
         if (key.equals("keywords")) {
             // 正则是否生效要看同一份文本里的 regex 开关，在 crossChecks 里查
         }
@@ -640,6 +642,133 @@ final class ConfigCheck {
         if (count && args) warns.add("同时写了 " + q("@count") + " 和 " + q("@args") + "，只有 " + q("@count") + " 生效（只计数，不记参数）");
     }
 
+    // ------------------------------------------------------------ 观察点（watch）
+
+    private static final Pattern WATCH_FIELD = Pattern.compile("^[A-Za-z_$][A-Za-z0-9_$]*$");
+
+    /** 校验观察点路径：根 this / ret / argN，后面是 .字段 / [下标] / {键} / (LiveData) (ref) (lazy)。返回错误原因，没问题返回 null。 */
+    static String badPath(String p) {
+        if (p.isEmpty()) return "路径是空的";
+        if (p.indexOf(' ') >= 0 || p.indexOf('\t') >= 0) return "路径里不能有空格（第 " + (p.indexOf(' ') + 1) + " 个字符）";
+        String fw = fullwidthIn(p);
+        if (fw != null) return fw;
+        int cut = p.length();
+        for (char ch : new char[]{'.', '[', '{', '('}) {
+            int i = p.indexOf(ch);
+            if (i >= 0) cut = Math.min(cut, i);
+        }
+        String root = p.substring(0, cut);
+        if (!(root.equals("this") || root.equals("ret") || root.matches("arg\\d+"))) {
+            String hint = "";
+            if (root.startsWith("args") || root.startsWith("param")) hint = "；参数写成 arg0、arg1（从 0 数），不是 " + q(root);
+            else if (root.equals("result") || root.equals("return")) hint = "；返回值写成 " + q("ret");
+            else if (root.equals("self") || root.equals("thisObject")) hint = "；调用对象写成 " + q("this");
+            else {
+                String k = nearest(root, java.util.Arrays.asList("this", "ret", "arg0", "arg1", "arg2"));
+                if (k != null) hint = "；是不是想写 " + q(k) + "？";
+            }
+            return "路径必须以 this、ret 或 argN 开头，你写的是 " + q(root) + hint;
+        }
+        int i = cut;
+        while (i < p.length()) {
+            char ch = p.charAt(i);
+            int j;
+            if (ch == '.') {
+                j = i + 1;
+                while (j < p.length() && ".[{(".indexOf(p.charAt(j)) < 0) j++;
+                String name = p.substring(i + 1, j);
+                if (name.isEmpty()) return "第 " + (i + 1) + " 个字符的 " + q(".") + " 后面没有字段名（多写了点，或点在结尾）";
+                if (!WATCH_FIELD.matcher(name).matches()) return "字段名 " + q(name) + " 不合法（只能是字母 / 数字 / _ / $，不能以数字开头）";
+            } else if (ch == '[') {
+                j = p.indexOf(']', i);
+                if (j < 0) return "第 " + (i + 1) + " 个字符的 " + q("[") + " 没有闭合的 " + q("]");
+                if (!p.substring(i + 1, j).matches("\\d+")) return "方括号里要是整数下标，你写的是 " + q("[" + p.substring(i + 1, j) + "]");
+                j++;
+            } else if (ch == '{') {
+                j = p.indexOf('}', i);
+                if (j < 0) return "第 " + (i + 1) + " 个字符的 " + q("{") + " 没有闭合的 " + q("}");
+                j++;
+            } else if (ch == '(') {
+                j = p.indexOf(')', i);
+                if (j < 0) return "第 " + (i + 1) + " 个字符的 " + q("(") + " 没有闭合的 " + q(")");
+                String tok = p.substring(i + 1, j);
+                if (!(tok.equals("LiveData") || tok.equals("ref") || tok.equals("lazy"))) {
+                    String k = nearest(tok, java.util.Arrays.asList("LiveData", "ref", "lazy"));
+                    return "括号里只能是 LiveData / ref / lazy，你写的是 " + q("(" + tok + ")") + (k != null ? "；是不是想写 " + q("(" + k + ")") + "？" : "");
+                }
+                j++;
+            } else {
+                return "第 " + (i + 1) + " 个字符 " + q(String.valueOf(ch)) + " 不合法：路径里字段之间用点 " + q(".") + "，列表元素用 " + q("[0]") + "，Map 元素用 " + q("{键}");
+            }
+            i = j;
+        }
+        return null;
+    }
+
+    /** 校验 watch=：每行「类#方法:路径」。uiBox = 界面输入框里的（按行号报），否则是粘贴框里的（按条报）。 */
+    static void checkWatch(List<Issue> out, String value, int line, boolean uiBox) {
+        if (value == null) return;
+        String[] items = value.split("\\r?\\n|\\r");
+        HashSet<String> seen = new HashSet<>();
+        for (int i = 0; i < items.length; i++) {
+            String t = items[i].trim();
+            if (t.isEmpty() || t.startsWith("//")) continue;
+            String pre = (uiBox ? "观察点第 " + (i + 1) + " 行 " : "watch 第 " + (i + 1) + " 条 ") + q(clip(t, 50)) + "：";
+            int c = t.indexOf(':');
+            if (c < 0) {
+                out.add(new Issue(line, true, pre + "缺少冒号：写法是 " + q("类#方法:路径") + "，如 " + q("com.a.B#foo:arg0.mAweme.userDigg")));
+                continue;
+            }
+            String tk = t.substring(0, c), path = t.substring(c + 1);
+            if (!tk.equals(tk.trim()) || !path.equals(path.trim())) out.add(new Issue(line, true, pre + "冒号两边不能有空格"));
+            tk = tk.trim();
+            path = path.trim();
+            ArrayList<String> errs = new ArrayList<>(), warns = new ArrayList<>();
+            int h = tk.indexOf('#');
+            if (h < 0) {
+                errs.add("冒号前面要是 " + q("类#方法") + "（缺少 " + q("#") + "），而且这个方法必须同时写在方法追踪里，不然读不到根对象");
+            } else {
+                String cls = tk.substring(0, h), m = tk.substring(h + 1);
+                String bad = cls.isEmpty() ? q("#") + " 前面没有类名" : badClass(cls);
+                if (bad != null) errs.add(bad);
+                if (m.isEmpty() || m.equals("*") || !METHOD_OK.matcher(m).matches()) errs.add("方法名 " + q(m) + " 不合法（观察点要指定到具体的方法，不能用 " + q("*") + "）");
+            }
+            String bp = badPath(path);
+            if (bp != null) errs.add(bp);
+            for (String m : errs) out.add(new Issue(line, true, pre + m));
+            for (String m : warns) out.add(new Issue(line, false, pre + m));
+            if (!seen.add(t)) out.add(new Issue(line, false, pre + "重复了"));
+        }
+    }
+
+    /** 观察点引用的方法必须在方法追踪清单里（或整类追踪），否则永远读不到根对象。 */
+    static void watchVsTrace(List<Issue> out, String w, String tm, int line) {
+        if (w == null || w.trim().isEmpty()) return;
+        HashSet<String> traced = new HashSet<>();
+        if (tm != null) {
+            for (String s : tm.split("\\r?\\n|\\r")) {
+                String t = s.trim();
+                if (t.isEmpty() || t.startsWith("//")) continue;
+                int at = optStart(t);
+                String target = (at < 0 ? t : t.substring(0, at)).trim();
+                int p = target.indexOf('(');
+                if (p > 0) target = target.substring(0, p).trim();
+                traced.add(target);
+            }
+        }
+        for (String s : w.split("\\r?\\n|\\r")) {
+            String t = s.trim();
+            int c = t.indexOf(':');
+            if (t.isEmpty() || t.startsWith("//") || c <= 0) continue;
+            String tk = t.substring(0, c).trim();
+            int h = tk.indexOf('#');
+            if (h <= 0) continue;
+            if (!traced.contains(tk) && !traced.contains(tk.substring(0, h) + "#*")) {
+                out.add(new Issue(line, true, "watch 里的 " + q(tk) + " 没有写在 traceMethods 里：没被追踪的方法拿不到根对象（this / 参数 / 返回值），这个观察点永远读不到值。把 " + q(tk) + " 也加进 traceMethods"));
+            }
+        }
+    }
+
     // ------------------------------------------------------------ 任务清单
 
     private static void checkTasks(List<Issue> out, String[] lines, List<int[]> idx) {
@@ -690,11 +819,24 @@ final class ConfigCheck {
             }
             if (p.length > 3) {
                 String f = p[3].trim();
-                if (!f.isEmpty() && !(f.equals("空") || f.equals("0") || f.equals("可空") || f.equals("对照"))) {
-                    String k = f.equalsIgnoreCase("empty") || f.equalsIgnoreCase("null") || f.equalsIgnoreCase("none") ? "；对照任务要写中文 " + q("空") : "";
-                    out.add(new Issue(no, true, "第 4 段只能写 " + q("空") + " / " + q("可空") + " / " + q("对照") + " / " + q("0")
-                            + "（对照任务，允许 0 条记录），你写的是 " + q(clip(f, 12)) + "，会被当成不是对照任务" + k));
+                int repsSeen = 0;
+                for (String tk : f.split("[\\s,，]+")) {
+                    if (tk.isEmpty()) continue;
+                    if (tk.equals("空") || tk.equals("0") || tk.equals("可空") || tk.equals("对照")) continue;
+                    if (tk.matches("^[xX×*]\\d+$")) {
+                        repsSeen++;
+                        int n = Integer.parseInt(tk.substring(1));
+                        if (n < 1) out.add(new Issue(no, true, "第 4 段 " + q(tk) + " 的遍数必须 ≥ 1"));
+                        else if (n > 10) out.add(new Issue(no, false, "第 4 段 " + q(tk) + " 超过上限 10 遍，会被改成 10"));
+                        if (base) out.add(new Issue(no, false, "基线任务不能做多遍，" + q(tk) + " 会被忽略"));
+                        continue;
+                    }
+                    String k = tk.equalsIgnoreCase("empty") || tk.equalsIgnoreCase("null") || tk.equalsIgnoreCase("none") ? "；对照任务要写中文 " + q("空") : "";
+                    if (tk.matches("^[xX×*]\\D.*") || tk.matches("^\\d+[xX×*]$")) k = "；做多遍的写法是 " + q("x3") + "（x 在前，后面接遍数）";
+                    out.add(new Issue(no, true, "第 4 段只能写 " + q("空") + " / " + q("可空") + " / " + q("对照") + " / " + q("0") + "（对照任务，允许 0 条记录）或 "
+                            + q("x3") + "（同一件事连做 3 遍），你写的是 " + q(clip(tk, 12)) + k));
                 }
+                if (repsSeen > 1) out.add(new Issue(no, false, "第 4 段写了不止一个 " + q("xN") + "，只有最后一个生效"));
             }
             if (p.length == 1 && t.length() > 25) {
                 out.add(new Issue(no, false, "这一行没有任何 " + q("|") + "，整行 " + q(clip(t, 24)) + " 都会被当成任务名（提示 / 秒数都没有）。如果想写提示，格式是 " + q("名称|提示|秒数")));
@@ -722,6 +864,7 @@ final class ConfigCheck {
     }
 
     private static void crossChecks(List<Issue> out, List<Entry> es, String[] lines) {
+        watchVsTrace(out, val(es, "watch"), val(es, "traceMethods"), lineOf(es, "watch"));
         String tm = val(es, "traceMethods");
         boolean hasTrace = false;
         if (tm != null) for (String s : tm.split("\\r?\\n|\\r")) if (!s.trim().isEmpty() && !s.trim().startsWith("//")) hasTrace = true;
