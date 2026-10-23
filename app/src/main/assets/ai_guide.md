@@ -46,9 +46,11 @@ TextRec 是一个 LSPosed 模块（需要 root），挂进目标 App（默认抖
 | 按钮图标（没有文字）是谁设的 | `traceIcons=true`，其余可关 | 不填 | 记录里有资源名、Drawable 类型、缩略图 |
 | 某个方法被谁调用、参数返回值 | 其余全关，或保持 `traceExclusive=true`（默认，自动关） | 填 `类#方法` | 见第 5 章 |
 | 视频进度 / 总时长存在哪 | 同上 | 填疑似方法，加 `@tag=` 视需要；打开 `traceDump=true`；`valueClock=true` 只记带 `00:00` 的调用 | 把进度条拖到两端，看 min/max 判断单位 |
-| 一块界面里有哪些控件、谁在谁里面、是什么布局（视图树） | `viewDump=true`，其余开关随意；`viewDumpKey` 填那块区域里某个控件的类名或 id 里的词（默认抖音视频文案的两个类） | 不填 | 1.27.0。任务开始 / 结束、记录页点「标记」时各抓一份，导出里有「视图树」一节。需要写任务清单（一个视频一件事）；没在真机上验证过 |
+| 一块界面里有哪些控件、谁在谁里面、是什么布局（视图树） | `viewDump=true`，其余开关随意；`viewDumpKey` 填那块区域里某个控件的类名或 id 里的词（默认抖音视频文案的两个类） | 不填 | 1.27.0。任务开始 / 结束、记录页点「标记」时各抓一份，导出里有「视图树」一节。需要写任务清单（一个视频一件事）；没在真机上验证过。**很难刷到的页面**：再加 `viewDumpAuto=true`（1.31.2），正常刷信息流，每出现一种没抓过的「文案控件往上到窗口根」类名链就自动抓一份（同一种只抓一次，最多 8 份），不用等任务开始 / 标记 |
 | 不知道控件叫什么，只知道它在屏幕上哪里 | `viewTap=true`；要「设置自」就开着 `traceSet` 并把 `traceExclusive` 关掉 | 不填 | 1.28.0。点一下那个位置，导出里有「点击 #n」：这个点上所有控件从外层到最上层。没在真机上验证过 |
 | 想知道 Aweme 这类对象被哪个容器持有 / 哪个钩点最稳 / 哪个操作独有哪些方法 | 默认就开着 `annotFrames` `annotOwners` `annotSweep`；方法追踪要追带 Aweme 参数的方法才有「对象归属」 | 填 `类#方法` | 1.29.0。导出里看「对象归属」「任务对比」「分叉帧」三节，调用栈每帧后面的〔…〕标签，以及记录里的「钩点评级」。没在真机上验证过 |
+| 想找「判断状态的钩子」（比如是否已点赞）/ 想知道是谁改了某个字段 | 追踪带该对象参数的方法；`treeOn` `watchAuto` 默认开 | 任务清单写成「对照（单击）空 / 点赞 / 取消赞」，要比较的每件事里都做 | 1.31.0。导出看「值差异」（✦ 节点）、「观察点变化」（写入者）、「候选钩点排名」「钩子草稿」。想盯某个具体字段就写 `watch=类#方法:路径` |
+| 想区分「必经」和「偶发」的方法 | 任务清单第 4 段写 `x3` | `点赞\\|双击视频点赞\\|\\|x3`（竖线前不要加反斜杠，这里只是表格转义） | 浮窗会让同一件事连做 3 遍，导出里每条记录写出现在几/共几遍 |
 | 某控件透明度 / 可见性谁改的 | `traceState=true`；或在 `viewFilter` 填控件类名 / id，任何控件的变化都会记 | 可追 `android.view.View#setAlpha` 等 | 变体里带控件当前文字 |
 | 拖动才出现的文字（平时不可见） | `traceSetOnly=true` | 不填 | 记录里给出"没被画的原因" |
 | 弹幕 / 评论等 Compose 文字 | `drawCompose`、`autoParams`、`composeDump` 开 | 可追 `androidx.compose.ui.text.MultiParagraph#paint-LG529CI` | Compose 没有 View，没有"设置栈" |
@@ -292,7 +294,10 @@ quietCount=50
 | `traceDumpLines` `traceDumpDepth` | 40 / 3 | 字段快照一份最多多少行（10~2000）、往子对象里展开几层（0~6，0 = 只列对象自己的数值和文字字段）。找某个对象有哪些字段时用 `2000`/`0`，用完调回默认，否则导出文件很大 |
 | `viewDump` `viewDumpKey` `viewDumpUp` `viewDumpDepth` `viewDumpLines` | false / `ScrollMentionTextView,MentionTextView` / 5 / 5 / 400 | 视图树导出（1.27.0）：开关；以哪个控件为准（类名或 id 含词，逗号分隔）；往上几层当容器（0~12，1.28.0 起默认 5）；往下列几层（1~10）；最多几行（50~3000） |
 | `viewDumpSet` `viewTap` | true / false | 视图树里文字控件带「设置自」；点哪查哪（点屏幕列出这个点上所有控件）。1.28.0 |
+| `viewDumpAuto` | false | 出现没抓过的新结构（文案控件往上到窗口根的类名链）时自动抓一份视图树，同一种只抓一次，最多 8 份；要开着 `viewDump`。1.31.2 |
 | `annotFrames` `annotOwners` `annotSweep` `annotBudgetMs` `annotPerKey` | true / true / true / 40 / 6 | 标注（1.29.0）：调用栈每帧标分层·角色·稳定度并标入口帧 / 推荐钩点；方法追踪命中时反查 this / 参数被谁持有；任务开始 / 结束扫「容器 → 数据实体」；一次反查最多多少毫秒（5~500）；每个追踪方法前几次命中做反查（1~100） |
+| `treeOn` `treeDepth` `treeNodes` `treeEvery` `watchAuto` | true / 4 / 200 / 10 / true | 数据树（1.31.0）：方法追踪命中时把 this / 参数 / 返回值沿字段展开成树并记每个节点在每个任务里的值；展开几层（1~8）；一次最多多少节点（20~600）；每隔几次命中展开一次（1~100000，每个方法前 3 次必展开）；自动把值变过的叶子加成观察点（最多 24 个） |
+| `watch` | 空 | 观察点，每行「类#方法:路径」，路径照导出里「数据树」抄（如 `com.a.B#foo:arg0.mAweme.userDigg`）；该方法必须同时写在 traceMethods 里；多行用 `\\n` 隔开。每次任何被追踪方法进入 / 返回时读一遍，变了就记下是哪个方法执行期间改的 |
 | `windowMs` `windowAll` | 0 / false | 触发窗口 |
 | `excludeInfra` `threadMode` `valueClock` | false / 0 / false | 见 7.2 |
 | `excludeList` `threadFilter` `pageFilter` `viewFilter` `valueFilter` | 空 | 见 7.2 |
