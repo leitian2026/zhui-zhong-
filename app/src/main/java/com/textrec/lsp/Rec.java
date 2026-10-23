@@ -93,6 +93,8 @@ final class Rec {
     private final java.util.LinkedHashMap<String, int[]> frameCnt = new java.util.LinkedHashMap<>();
     private volatile int frameOverflow;
     private final int[] segCnt = new int[200];
+    /** 每个任务的哪几遍里出现过（第 p 遍 = 第 p-1 位）；任务清单第 4 段写 x3 = 同一件事做 3 遍时用来算「必经 / 偶发」。 */
+    private final int[] passMask = new int[200];
     volatile String hookInfo;
     volatile String retType;
 
@@ -109,6 +111,7 @@ final class Rec {
         lastMono = now;
         int sg = Timeline.curTask;
         if (sg >= 0 && sg < segCnt.length) segCnt[sg]++; // 按任务阶段分别计数（0 = 任务之外）
+        if (sg > 0 && sg < passMask.length) passMask[sg] |= 1 << (Math.max(1, Math.min(Timeline.curPass, 30)) - 1);
         if (Timeline.inBaseline()) baseHits++;
         else liveHits++;
         String t = Timeline.tag;
@@ -126,6 +129,13 @@ final class Rec {
     java.util.LinkedHashMap<Integer, Integer> segCounts() {
         java.util.LinkedHashMap<Integer, Integer> m = new java.util.LinkedHashMap<>();
         for (int i = 0; i < segCnt.length; i++) if (segCnt[i] > 0) m.put(i, segCnt[i]);
+        return m;
+    }
+
+    /** 各任务出现在哪几遍里（位掩码），只列非 0 的。 */
+    java.util.LinkedHashMap<Integer, Integer> passMasks() {
+        java.util.LinkedHashMap<Integer, Integer> m = new java.util.LinkedHashMap<>();
+        for (int i = 1; i < passMask.length; i++) if (passMask[i] != 0) m.put(i, passMask[i]);
         return m;
     }
 
