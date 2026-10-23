@@ -1499,6 +1499,21 @@ public class RecordsActivity extends Activity {
     /** 标注（1.29.0）的几节：对象归属总表、任务对比（只有任务清单导出才有）、分叉帧。没内容的节不写。 */
     private String annotSections(List<Snap.Item> items, boolean tasks) {
         StringBuilder sb = new StringBuilder();
+        List<GuideService.Task> ts0 = GuideService.parse(getSharedPreferences(Actions.PREFS, MODE_PRIVATE).getString(GuideService.PREF_TASKS, GuideService.DEFAULT_TASKS));
+        List<JSONObject> trees = Snap.trees, watches = Snap.watches;
+        if (tasks) {
+            List<TreeReport.Cand> cs = TreeReport.candidates(items, trees, watches, ts0);
+            String ct = TreeReport.candidateText(cs, 15);
+            if (!ct.isEmpty()) sb.append("\n══ 候选钩点排名（综合证据打分）══\n").append(ct).append("══ 候选钩点排名结束 ══\n");
+            String hd = TreeReport.hookDrafts(cs, trees, 6);
+            if (!hd.isEmpty()) sb.append("\n══ 钩子草稿（按候选排名生成的 Xposed 骨架）══\n").append(hd).append("══ 钩子草稿结束 ══\n");
+        }
+        String vd = TreeReport.valueDiff(trees, ts0);
+        if (!vd.isEmpty()) sb.append("\n══ 值差异（随任务变化的状态字段）══\n").append(vd).append("══ 值差异结束 ══\n");
+        String wt = TreeReport.watchText(watches, ts0);
+        if (!wt.isEmpty()) sb.append("\n══ 观察点变化（谁改了这个值）══\n").append(wt).append("══ 观察点变化结束 ══\n");
+        String tt = TreeReport.treeText(trees, ts0);
+        if (!tt.isEmpty()) sb.append("\n══ 数据树（this / 参数 / 返回值逐层展开，每个节点有固定路径）══\n").append(tt).append("══ 数据树结束 ══\n");
         if (!Snap.annotText.isEmpty()) {
             sb.append("\n══ 对象归属（数据实体 ← 持有它的容器）══\n")
                     .append("说明：从当前页面的 Activity / Fragment / ViewModel / 视图树出发，反向找出谁持有这类业务对象（如抖音的 Aweme）。\n")
@@ -1635,6 +1650,8 @@ public class RecordsActivity extends Activity {
                 o.put("viewDumpText", Snap.viewDumpText);
                 o.put("viewDiffText", Snap.viewDiffText);
                 o.put("annotText", Snap.annotText);
+                o.put("trees", new JSONArray(Snap.trees));
+                o.put("watches", new JSONArray(Snap.watches));
                 JSONObject fo = new JSONObject();
                 fo.put("onlyOnScreen", onlyOnScreen);
                 fo.put("hiddenOffScreen", hiddenOff);
