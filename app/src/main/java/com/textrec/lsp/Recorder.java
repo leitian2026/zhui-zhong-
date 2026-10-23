@@ -306,6 +306,7 @@ final class Recorder {
             c.applyTraceExclusive(); // 填了方法追踪就把其他记录开关在这份副本里全关（见 RecConfig.applyTraceExclusive）
             cfg = c;
             FieldDump.setExtra(c.dumpPrefixes);
+            DataTree.configure(c);
             KeywordFilter kf = new KeywordFilter(c);
             filter = kf;
             gate = new Gate(c);
@@ -865,6 +866,23 @@ final class Recorder {
     private static final XC_MethodHook TRACE_HOOK = new XC_MethodHook() {
         @Override
         protected void beforeHookedMethod(MethodHookParam p) {
+            if (DataTree.watching) { // 观察点：进入前读一遍（和上次比 = 两次调用之间变的），并留给返回时对比
+                boolean[] b = BUSY.get();
+                boolean was = b[0];
+                try {
+                    String tk0 = resolveTrace(p);
+                    if (tk0 != null) {
+                        boolean active = !was && !Timeline.skip();
+                        if (active) b[0] = true;
+                        try {
+                            DataTree.before(tk0, active);
+                        } finally {
+                            if (active) b[0] = was;
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
             if (!Chain.on || Timeline.skip()) return; // 链路追踪没开 / 暂停中：这里什么都不做
             try {
                 String tk = resolveTrace(p);
@@ -875,6 +893,22 @@ final class Recorder {
 
         @Override
         protected void afterHookedMethod(MethodHookParam p) {
+            if (DataTree.watching) { // 观察点：返回后再读一遍，和进入前不同 = 这个方法执行期间改的
+                boolean[] b = BUSY.get();
+                boolean was = b[0];
+                try {
+                    String tk0 = resolveTrace(p);
+                    if (tk0 != null) {
+                        b[0] = true;
+                        try {
+                            DataTree.after(tk0);
+                        } finally {
+                            b[0] = was;
+                        }
+                    }
+                } catch (Throwable ignored) {
+                }
+            }
             Chain.Ctx ch = null;
             String tk = null;
             if (Chain.on) {
@@ -1250,6 +1284,12 @@ final class Recorder {
             if (Timeline.samples && Timeline.want("T:" + tkey)) Timeline.add("TRACE", tkey + " " + clip(summarizeCall(p), 160));
             if (c.traceDump) dumpState(tkey, p, n, c); // 按方法统计，不受下面降频 / 只计数 / 换调用栈新建记录的影响
             Annot.noteCall(tkey, p.thisObject, p.args, c); // 标注：前几次命中，后台线程反查 this / 参数被谁持有
+            Annot.noteTiming(tkey); // 标注：这次命中离最近一次用户输入多少毫秒
+            try {
+                boolean hasRet = p.method instanceof Method && ((Method) p.method).getReturnType() != void.class && !p.hasThrowable();
+                DataTree.capture(tkey, p.thisObject, p.args, hasRet ? p.getResult() : null, hasRet, c); // 数据树：展开 this / 参数 / 返回值，记每个路径的取值历史
+            } catch (Throwable ignored) {
+            }
             // 持续型自动降频：同一位置调用很多次、并且持续很久（进度条刷新之类），之后只计数不抓栈
             if (c.quietCount > 0) {
                 long nowMs = SystemClock.uptimeMillis();
@@ -1397,6 +1437,7 @@ final class Recorder {
 
     private static void onSetText(XC_MethodHook.MethodHookParam p) {
         if (!(p.thisObject instanceof TextView)) return;
+        ViewDump.onCaptionSet((TextView) p.thisObject);
         Object a0 = p.args[0];
         String t = textOf(a0);
         if (Timeline.samples) {
@@ -1980,6 +2021,7 @@ final class Recorder {
     private static Rec obtain(String kind, String viewCls, String viewId, String keyExtra, SetStack ss,
                               Stacks.Stk d, View v, String text, long shape, RecConfig c) {
         // 任务内 / 任务外分两桶：同一个位置在两桶里各有一条记录（key 带桶号），各自计数、各自上限、各自文件
+        if (v != null && !Rec.TRACE.equals(kind) && c != null && c.treeOn) Annot.noteView(v, c); // 文字 / 图标记录：顺着控件展开它所在的 ViewHolder / 自定义控件
         final int bucket = Timeline.bucket();
         String key = (bucket == 0 ? "" : "O|") + kind + '|' + pageName + '|' + viewCls + '|' + keyExtra + '|' + (ss == null ? 0 : ss.stk.sig) + '|' + d.sig;
         Rec r = store.recs.get(key);
