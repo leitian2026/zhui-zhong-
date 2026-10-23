@@ -80,6 +80,11 @@ public final class RecConfig {
     public int viewDumpLines = 400;
     /** 视图树里的文字控件，带上「这段文字最近是谁 setText 的」（要开着「文字是谁设置的」，且不被方法追踪独占关掉）。 */
     public boolean viewDumpSet = true;
+    /**
+     * 视图树自动抓（1.31.2）：不用等任务开始 / 结束 / 点标记。每出现一种「文案控件往上到窗口根」的类名链（结构）没抓过的，就自动抓一份视图树；
+     * 同一种结构只抓一次，不挤掉别的。用在「出问题的页面很难刷到」的场景：正常刷信息流，那种页面一出现就被抓下来。最多自动抓 8 份。
+     */
+    public boolean viewDumpAuto = false;
     /** 点哪查哪：每次点屏幕（按下抬起位置差不多、不是滑动），把这个点上所有控件（从外层到最上层）列出来，不需要知道控件叫什么。 */
     public boolean viewTap = false;
     /**
@@ -90,6 +95,19 @@ public final class RecConfig {
      * annotBudgetMs：一次反查最多花多少毫秒（后台线程）；annotPerKey：每个追踪方法前几次命中做反查，之后每 300 次一次。
      */
     public boolean annotFrames = true;
+    /**
+     * 数据树（1.31.0）：方法追踪命中时把 this / 参数 / 返回值沿字段展开成树，记每个节点在每个任务里的取值。
+     * treeOn：开关；treeDepth：往下展开几层；treeNodes：一次最多记多少个节点；treeEvery：每个方法前 3 次命中和之后每隔几次展开一次
+     * （进入新任务 / 新一遍 / 有新的用户输入时也会展开）。
+     * watch：手写观察点，每行「类#方法:路径」（路径见导出里的数据树，如 com.a.B#foo:arg0.mAweme.statistics.diggCount）；
+     * watchAuto：自动把值变过的叶子也加成观察点（最多 24 个），找出是哪个方法改的它。
+     */
+    public boolean treeOn = true;
+    public int treeDepth = 4;
+    public int treeNodes = 200;
+    public int treeEvery = 10;
+    public String watch = "";
+    public boolean watchAuto = true;
     public boolean annotOwners = true;
     public boolean annotSweep = true;
     public int annotBudgetMs = 40;
@@ -451,8 +469,15 @@ public final class RecConfig {
             p.setProperty("viewDumpDepth", String.valueOf(viewDumpDepth));
             p.setProperty("viewDumpLines", String.valueOf(viewDumpLines));
             p.setProperty("viewDumpSet", String.valueOf(viewDumpSet));
+            p.setProperty("viewDumpAuto", String.valueOf(viewDumpAuto));
             p.setProperty("viewTap", String.valueOf(viewTap));
             p.setProperty("annotFrames", String.valueOf(annotFrames));
+            p.setProperty("treeOn", String.valueOf(treeOn));
+            p.setProperty("treeDepth", String.valueOf(treeDepth));
+            p.setProperty("treeNodes", String.valueOf(treeNodes));
+            p.setProperty("treeEvery", String.valueOf(treeEvery));
+            p.setProperty("watch", watch);
+            p.setProperty("watchAuto", String.valueOf(watchAuto));
             p.setProperty("annotOwners", String.valueOf(annotOwners));
             p.setProperty("annotSweep", String.valueOf(annotSweep));
             p.setProperty("annotBudgetMs", String.valueOf(annotBudgetMs));
@@ -587,8 +612,15 @@ public final class RecConfig {
         c.viewDumpDepth = clamp(num(p, "viewDumpDepth", c.viewDumpDepth), 1, 10);
         c.viewDumpLines = clamp(num(p, "viewDumpLines", c.viewDumpLines), 50, 3000);
         c.viewDumpSet = bool(p, "viewDumpSet", c.viewDumpSet);
+        c.viewDumpAuto = bool(p, "viewDumpAuto", c.viewDumpAuto);
         c.viewTap = bool(p, "viewTap", c.viewTap);
         c.annotFrames = bool(p, "annotFrames", c.annotFrames);
+        c.treeOn = bool(p, "treeOn", c.treeOn);
+        c.treeDepth = clamp(num(p, "treeDepth", c.treeDepth), 1, 8);
+        c.treeNodes = clamp(num(p, "treeNodes", c.treeNodes), 20, 600);
+        c.treeEvery = clamp(num(p, "treeEvery", c.treeEvery), 1, 100000);
+        c.watch = p.getProperty("watch", c.watch);
+        c.watchAuto = bool(p, "watchAuto", c.watchAuto);
         c.annotOwners = bool(p, "annotOwners", c.annotOwners);
         c.annotSweep = bool(p, "annotSweep", c.annotSweep);
         c.annotBudgetMs = clamp(num(p, "annotBudgetMs", c.annotBudgetMs), 5, 500);
