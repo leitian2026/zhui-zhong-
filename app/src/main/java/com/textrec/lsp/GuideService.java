@@ -269,16 +269,19 @@ public class GuideService extends Service {
         nbg.setCornerRadius(dp(8));
         nextPanel.setBackground(nbg);
         tvNextLabel = new TextView(this);
-        tvNextLabel.setTextSize(11);
+        tvNextLabel.setTextSize(12);
         tvNextLabel.setTypeface(Typeface.DEFAULT_BOLD);
         tvNextLabel.setTextColor(0xFF8FB8FF);
         tvNextTitle = new TextView(this);
-        tvNextTitle.setTextColor(0xFFB8C6E0);
-        tvNextTitle.setTextSize(14);
+        tvNextTitle.setTextColor(0xFFDCE6F8);
+        tvNextTitle.setTextSize(16);
         tvNextTitle.setTypeface(Typeface.DEFAULT_BOLD);
         tvNextHint = new TextView(this);
-        tvNextHint.setTextColor(0xFF8D9BB5);
-        tvNextHint.setTextSize(11.5f);
+        tvNextHint.setTextColor(0xFFC3CFE6);
+        tvNextHint.setTextSize(14);
+        tvNextHint.setLineSpacing(0, 1.1f);
+        // 下一件的提示至少留出 4 行（内容更长就继续往下排，不截断），免得要提前准备的细节被挤掉
+        tvNextHint.setMinLines(4);
         nextPanel.addView(tvNextLabel);
         nextPanel.addView(tvNextTitle);
         nextPanel.addView(tvNextHint);
