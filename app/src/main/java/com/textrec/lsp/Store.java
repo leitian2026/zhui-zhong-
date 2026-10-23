@@ -380,6 +380,11 @@ final class Store {
         cj.put("viewDumpSet", c.viewDumpSet);
         cj.put("viewTap", c.viewTap);
         cj.put("annotFrames", c.annotFrames);
+        cj.put("treeOn", c.treeOn);
+        cj.put("treeDepth", c.treeDepth);
+        cj.put("treeNodes", c.treeNodes);
+        cj.put("treeEvery", c.treeEvery);
+        cj.put("watchAuto", c.watchAuto);
         cj.put("annotOwners", c.annotOwners);
         cj.put("annotSweep", c.annotSweep);
         cj.put("annotBudgetMs", c.annotBudgetMs);
@@ -429,6 +434,8 @@ final class Store {
         }
         root.put("viewDumps", ViewDump.toJson());
         root.put("annot", Annot.toJson());
+        root.put("trees", DataTree.treesJson());
+        root.put("watches", DataTree.watchesJson());
         root.put("baselineDone", Timeline.baselineDone);
         root.put("baselineMs", Timeline.baselineDone ? Timeline.baseEnd - Timeline.baseStart : 0);
         return root;
@@ -496,6 +503,11 @@ final class Store {
             JSONObject sc = new JSONObject();
             for (java.util.Map.Entry<Integer, Integer> e : r.segCounts().entrySet()) sc.put(String.valueOf(e.getKey()), e.getValue());
             j.put("segCounts", sc);
+        }
+        if (Timeline.maxPass > 1) {
+            JSONObject pm = new JSONObject();
+            for (java.util.Map.Entry<Integer, Integer> e : r.passMasks().entrySet()) pm.put(String.valueOf(e.getKey()), e.getValue());
+            if (pm.length() > 0) j.put("passes", pm);
         }
         j.put("baseHits", r.baseHits);
         j.put("liveHits", r.liveHits);
