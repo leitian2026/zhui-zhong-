@@ -37,12 +37,17 @@ final class Snap {
 
     /** 对象归属总表（1.29.0）：数据实体（如 Aweme）← 持有它的容器；每次刷新前先 resetExtras()。 */
     static volatile String annotText = "";
+    /** 数据树（每个被追踪方法一棵）和观察点（1.31.0）：每个元素带 proc 字段；每次刷新前先 resetExtras()。 */
+    static final java.util.List<JSONObject> trees = new java.util.concurrent.CopyOnWriteArrayList<>();
+    static final java.util.List<JSONObject> watches = new java.util.concurrent.CopyOnWriteArrayList<>();
 
     static void resetExtras() {
         timelineText = "";
         viewDumpText = "";
         viewDiffText = "";
         annotText = "";
+        trees.clear();
+        watches.clear();
     }
 
     private static String annotOf(JSONObject root, String proc) {
@@ -188,6 +193,23 @@ final class Snap {
                             + (effCfg.has("traceDumpLines") ? "" : "  （这份快照里没有这两项：目标进程里跑的是旧版模块，请强杀目标 App 重开）"));
                 }
                 if (!part && root.optBoolean("baselineDone")) infos.add(proc + "  基线：已录 " + root.optLong("baselineMs") + "ms（记录里标了“基线里也在调用”的是周期性噪声）");
+                if (!part) {
+                    JSONArray ta = root.optJSONArray("trees"), wa = root.optJSONArray("watches");
+                    if (ta != null) for (int i = 0; i < ta.length(); i++) {
+                        JSONObject t = ta.optJSONObject(i);
+                        if (t != null) {
+                            t.put("proc", proc);
+                            trees.add(t);
+                        }
+                    }
+                    if (wa != null) for (int i = 0; i < wa.length(); i++) {
+                        JSONObject w = wa.optJSONObject(i);
+                        if (w != null) {
+                            w.put("proc", proc);
+                            watches.add(w);
+                        }
+                    }
+                }
                 if (!part) {
                     String atx = annotOf(root, proc);
                     if (!atx.isEmpty()) annotText = annotText + atx + "\n";
