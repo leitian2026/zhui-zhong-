@@ -62,8 +62,11 @@ public class GuideService extends Service {
         final boolean noWait;
         /** 第 4 段写「空」（或 0 / 可空 / 对照）：对照任务，方法追踪独占时这件事本来就不该触发任何被追踪的方法，0 条记录是正常结果，不算没通过 */
         final boolean allowEmpty;
+        /** 第 4 段写 x3（也认 ×3 / X3 / *3）= 同一件事连做 3 遍，用来区分「每遍都触发的必经方法」和「偶尔触发的方法」；默认 1，最多 10。 */
+        final int reps;
 
-        Task(String name, String hint, int secs, boolean baseline, boolean noWait, boolean allowEmpty) {
+        Task(String name, String hint, int secs, boolean baseline, boolean noWait, boolean allowEmpty, int reps) {
+            this.reps = reps;
             this.allowEmpty = allowEmpty;
             this.name = name;
             this.hint = hint;
@@ -94,8 +97,19 @@ public class GuideService extends Service {
             }
             if (base && secs <= 0) secs = 10;
             String f4 = p.length > 3 ? p[3].trim() : "";
-            boolean allowEmpty = f4.equals("空") || f4.equals("0") || f4.equals("可空") || f4.equals("对照");
-            out.add(new Task(name, hint, secs, base, noWait, allowEmpty));
+            boolean allowEmpty = false;
+            int reps = 1;
+            for (String tk : f4.split("[\\s,，]+")) {
+                if (tk.equals("空") || tk.equals("0") || tk.equals("可空") || tk.equals("对照")) allowEmpty = true;
+                else if (tk.matches("^[xX×*]\\d+$")) {
+                    try {
+                        reps = Math.max(1, Math.min(10, Integer.parseInt(tk.substring(1))));
+                    } catch (Throwable ignored) {
+                    }
+                }
+            }
+            if (base) reps = 1;
+            out.add(new Task(name, hint, secs, base, noWait, allowEmpty, reps));
         }
         return out;
     }
@@ -522,6 +536,7 @@ public class GuideService extends Service {
         finished = false;
         int from = idx;
         idx = to;
+        pass = 1;
         if (startLabel.equals("任务上一件")) marker("任务上一件 " + (from + 1) + "→" + (to + 1));
         beginTask();
     }
@@ -529,7 +544,7 @@ public class GuideService extends Service {
     private void redo() {
         if (checking || finished || idx < 0 || idx >= tasks.size()) return;
         stopTimer();
-        marker("任务重做 " + (idx + 1) + " " + tasks.get(idx).name + "（上一次作废）");
+        marker("任务重做 " + (idx + 1) + " " + tasks.get(idx).name + passTag(tasks.get(idx)) + "（上一次作废）");
         redoFlag = true;
         beginTask();
     }
@@ -538,7 +553,7 @@ public class GuideService extends Service {
         Task t = tasks.get(idx);
         setCur("● 正在做", 0xFF4ADE80, 0x332E9E5A);
         showNext(idx, false);
-        tvStep.setText((idx + 1) + " / " + tasks.size() + "    按住这里可拖动");
+        tvStep.setText((idx + 1) + " / " + tasks.size() + (t.reps > 1 ? "　第 " + pass + " / " + t.reps + " 遍" : "") + "    按住这里可拖动");
         tvTitle.setText(t.name);
         tvHint.setText(t.hint);
         tvTimer.setText("");
@@ -551,7 +566,7 @@ public class GuideService extends Service {
         rowRun.setVisibility(View.VISIBLE);
         tvTimer.setTextColor(0xFFFFC857);
         // 重做时已经发过“任务重做”，不再重复发“任务开始”
-        if (!redoFlag) marker("任务开始 " + (idx + 1) + " " + t.name);
+        if (!redoFlag) marker("任务开始 " + (idx + 1) + " " + t.name + passTag(t));
         redoFlag = false;
         buzz();
         if (t.baseline) {
@@ -632,11 +647,19 @@ public class GuideService extends Service {
         rowPaused.setVisibility(View.GONE);
         rowDone.setVisibility(View.VISIBLE);
         boolean last = idx >= tasks.size() - 1;
+        Task ct = tasks.get(idx);
+        boolean more = pass < ct.reps;
         setCur("已完成 ✓", 0xFF7EE787, 0x337EE787);
         showNext(idx, false);
-        btnPause.setVisibility(last ? View.GONE : View.VISIBLE);
-        btnNext.setText(last ? "▶ 完成" : "▶ 下一件");
-        tvStep.setText((idx + 1) + " / " + tasks.size() + "    按住这里可拖动");
+        if (more) { // 这件事还要再做几遍：下一步不是下一件，而是同一件再来一遍
+            tvNextLabel.setText("同一件事再做一遍（第 " + (pass + 1) + " / " + ct.reps + " 遍）");
+            tvNextTitle.setText(ct.name);
+            tvNextHint.setText(ct.hint);
+            tvNextHint.setVisibility(ct.hint.isEmpty() ? View.GONE : View.VISIBLE);
+        }
+        btnPause.setVisibility(last || more ? View.GONE : View.VISIBLE);
+        btnNext.setText(more ? "▶ 再做一遍" : last ? "▶ 完成" : "▶ 下一件");
+        tvStep.setText((idx + 1) + " / " + tasks.size() + (ct.reps > 1 ? "　第 " + pass + " / " + ct.reps + " 遍" : "") + "    按住这里可拖动");
         tvTimer.setTextColor(0xFF7EE787);
         tvTimer.setText("已记录完成 ✓");
         tvHint.setText(info + (last ? "" : "\n下一件要翻好几个界面？点「暂停记录」，到了再点「开始记录」；不用翻就直接点「下一件」。"));
@@ -645,7 +668,21 @@ public class GuideService extends Service {
 
     private void nextTask() {
         if (finished || idx < 0) return;
+        Task cur = tasks.get(idx);
+        if (pass < cur.reps) { // 同一件事还没做够遍数：再做一遍，不切到下一件
+            pass++;
+            redoFlag = false;
+            beginTask();
+            return;
+        }
         go(idx + 1, "任务开始", false);
+    }
+
+    /** 同一件事做第几遍；只有这件事要求做多遍（第 4 段 x3）时才会 > 1。 */
+    private int pass = 1;
+
+    private String passTag(Task t) {
+        return t.reps > 1 ? " 第" + pass + "遍" : "";
     }
 
     private void pauseRec() {
