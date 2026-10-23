@@ -27,7 +27,7 @@ public class MainActivity extends Activity {
     private Switch swWindowAll, swInfra, swClock, swQuiet, swDump, swChain, swChainAsync, swChainFx, swChainDown, swTl, swTlOps, swTlSamples, swRecOutside, swTraceExclusive;
     private static final int[] WINDOW_MS = {0, 1500, 3000, 5000};
     // 手写的过滤条件（可选，放在「高级」里）
-    private EditText etThread, etPageF, etViewF, etExclude, etValue;
+    private EditText etThread, etPageF, etViewF, etExclude, etValue, etWatch;
     private Ui.Seg segRange;
     /** 快速选择按钮：当前开关组合正好等于某个预设时高亮。 */
     private TextView chTextOnly, chAll, chTraceOnly, chHook, chOff;
@@ -526,9 +526,16 @@ public class MainActivity extends Activity {
         fineNumber("viewDumpUp", "从主角往上几层当容器", "默认 5。想看更大的范围调大（看不到作者名、进度条就加 1～2）；0 = 只列主角自己");
         fineNumber("viewDumpDepth", "容器往下列几层", "默认 5，范围 1–10");
         fineSwitch("viewDumpSet", "文字控件带上「谁设置的」", "默认开。视图树里每个有文字的控件多一行「设置自：…」，是它最近一次 setText 的调用栈前几帧。要开着「文字是谁设置的」，且没被方法追踪独占关掉；这个控件在开始记录之后没被设置过文字就没有");
+        fineSwitch("viewDumpAuto", "出现新结构时自动抓", "默认关。开了以后不用等任务开始 / 结束 / 点标记：每当「文案控件往上到窗口根」的类名链是没抓过的新样子，就自动抓一份视图树（同一种样子只抓一次，最多 8 份，和最近 16 份的上限共用）。用来抓「很难刷到的那种页面」：正常刷信息流就行，它一出现就被抓下来。需要开着「视图树导出」。要「应用并重新记录」并强杀目标 App 重开才生效");
         fineSwitch("viewTap", "点哪查哪", "默认关。开了以后，每次点一下屏幕（不是滑动），把这个点上所有控件列出来：类名、id、可见性、坐标、布局参数、文字，从外层排到最上层。不用知道控件叫什么，点那一行就行。点击会被记成一份视图树，和上面共用最近 16 份的上限之外另有 12 份");
 
         fineGroup("标注（找钩子更快更准）", "给记录加语义标签，都是只读观察，不改目标 App。栈帧标注、钩点评级、类角色在导出时才算，开销很小；对象归属反查在后台线程里做，有时间上限。需要「应用并重新记录」并强杀目标 App 重开才生效");
+        fineGroup("数据树与观察点（找状态字段、找谁改的）", "方法追踪命中时把 this / 参数 / 返回值沿字段展开成树，每个节点有固定写法的路径；记每个节点在每个任务里的取值，值变了就找出是哪个方法改的。都是只读观察，有数量上限，需要「应用并重新记录」并强杀目标 App 重开才生效");
+        fineSwitch("treeOn", "展开数据树", "默认开。导出里有「数据树」「值差异」两节：树上每个节点在每个任务里的值，值随任务不同的节点（✦）往往就是判断状态的字段");
+        fineNumber("treeDepth", "往下展开几层", "默认 4，范围 1–8。越深越慢、节点越多");
+        fineNumber("treeNodes", "一次最多记多少个节点", "默认 200，范围 20–600");
+        fineNumber("treeEvery", "每隔几次命中展开一次", "默认 10。每个方法前 3 次必展开；进入新任务 / 新一遍 / 有新的用户输入时也会展开");
+        fineSwitch("watchAuto", "自动给「值变过的叶子」加观察点", "默认开，最多 24 个。每次被追踪方法进入 / 返回时重新读一遍，导出「观察点变化」里写出变化发生在哪个方法执行期间，或哪两次调用之间");
         fineSwitch("annotFrames", "调用栈每一帧标分层 / 角色 / 稳定度", "默认开。每帧后面标〔业务·ViewHolder·稳〕这样的标签，并标出 ★入口帧、◎推荐钩点、↯异步边界；方法追踪的钩点另有评级（框架回调 / 稳定业务 / 通用 / 混淆）和类角色");
         fineSwitch("annotOwners", "方法追踪命中时反查「谁持有这个对象」", "默认开。对 this 和前几个参数里的业务对象（比如抖音的 Aweme），从当前页面的 Activity / Fragment / ViewModel / 视图树里反向找出持有它的容器（ViewHolder、Fragment、ViewModel、控件标签、监听器），写成一条路径。在后台线程做，每个追踪方法只在前几次命中做");
         fineSwitch("annotSweep", "任务开始 / 结束 / 点标记时扫「容器 → 数据实体」", "默认开。把当前页面里的 Fragment / ViewHolder / ViewModel / 自定义控件持有的数据实体（Aweme、User 这类）列出来，导出里有「对象归属」一节。不需要追踪任何方法就能知道 Aweme 住在哪个容器里");
@@ -628,6 +635,9 @@ public class MainActivity extends Activity {
         advBody.addView(td);
         etTrace = Ui.field(this, "androidx.compose.ui.text.MultiParagraph#paint-LG529CI", true, false);
         advBody.addView(etTrace);
+        etWatch = textRowIn(advBody, "观察点（可选，追踪数据树上任意一个点）",
+                "每行一个「类#方法:路径」，路径照导出里「数据树」那一节抄，如 com.a.B#foo:arg0.mAweme.statistics.diggCount。这个类#方法必须同时写在上面的方法追踪里。"
+                        + "每次任何被追踪的方法进入 / 返回时都读一遍这个值，变了就记下是哪个方法执行期间变的、或哪两次调用之间变的。不填也会自动挑值变过的节点。", "com.a.B#foo:arg0.mAweme.userDigg", true);
 
         advBody.addView(Ui.divider(this), Ui.lpM(this, -1, Ui.dp(this, 1), 0, 12, 0, 12));
         advBody.addView(Ui.tv(this, "手写过滤条件（可选）", 14.5f, R.color.text, true));
@@ -773,6 +783,7 @@ public class MainActivity extends Activity {
         etPageF.setText(c.pageFilter);
         etViewF.setText(c.viewFilter);
         etExclude.setText(c.excludeList);
+        etWatch.setText(c.watch);
         etValue.setText(c.valueFilter);
         segRange.select(c.keywordMode ? 1 : 0);
         etKeywords.setText(c.keywords);
@@ -809,6 +820,7 @@ public class MainActivity extends Activity {
         c.pageFilter = etPageF.getText().toString();
         c.viewFilter = etViewF.getText().toString();
         c.excludeList = etExclude.getText().toString();
+        c.watch = etWatch.getText().toString();
         c.valueFilter = etValue.getText().toString();
         c.quietCount = swQuiet.isChecked() ? 50 : 0;
         c.traceDump = swDump.isChecked();
@@ -985,6 +997,8 @@ public class MainActivity extends Activity {
         if (push && !skipCheck) {
             java.util.ArrayList<ConfigCheck.Issue> tl = new java.util.ArrayList<>();
             ConfigCheck.checkTraceMethods(tl, c.traceMethods, 0, "", true);
+            ConfigCheck.checkWatch(tl, c.watch, 0, true);
+            ConfigCheck.watchVsTrace(tl, c.watch, c.traceMethods, 0);
             if (!tl.isEmpty()) {
                 final boolean fp = push, fr = reset;
                 if (ConfigCheck.hasError(tl)) {
