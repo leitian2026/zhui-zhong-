@@ -527,6 +527,8 @@ final class Annot {
         final LinkedHashSet<String> pages = new LinkedHashSet<>();
         final HashSet<Integer> ids = new HashSet<>();
         int idOver;
+        /** 最近见到的一个实例（弱引用），任务开始 / 结束时拿它展开成数据树。 */
+        volatile WeakReference<Object> ref;
 
         Entity(String cls, String role) {
             this.cls = cls;
@@ -534,6 +536,7 @@ final class Annot {
         }
 
         synchronized void note(Object o, String path) {
+            ref = new WeakReference<Object>(o);
             int id = System.identityHashCode(o);
             if (!ids.contains(id)) {
                 if (ids.size() < 32) ids.add(id);
@@ -671,7 +674,7 @@ final class Annot {
     }
 
     /** 任务开始 / 结束 / 点标记时调：扫一遍当前页面里「容器 → 持有的数据实体」。 */
-    static void sweep(String reason) {
+    static void sweep(String reason, final int seg) {
         try {
             final RecConfig c = Recorder.cfg;
             if (c == null || !c.enabled || !c.annotSweep) return;
@@ -687,6 +690,7 @@ final class Annot {
                     busy[0] = true;
                     try {
                         new Walker(System.nanoTime() + budget * 1000000L, new IdentityHashMap<Object, String>(), true).run();
+                        expandEntities(c, seg);
                         Recorder.store.markDirty();
                     } catch (Throwable ignored) {
                     } finally {
@@ -695,6 +699,103 @@ final class Annot {
                 }
             });
         } catch (Throwable ignored) {
+        }
+    }
+
+    /** 扫到的数据实体（Aweme 这类）各取一个实例展开成数据树（最多 6 类），记在 seg 号任务名下：任务开始 / 结束各扫一次，值的变化就能对比出来。 */
+    private static void expandEntities(RecConfig c, int seg) {
+        if (c == null || !c.treeOn) return;
+        ArrayList<Entity> es = new ArrayList<>(ENT.values());
+        java.util.Collections.sort(es, new java.util.Comparator<Entity>() {
+            @Override
+            public int compare(Entity a, Entity b) {
+                return Integer.compare(b.paths.size(), a.paths.size());
+            }
+        });
+        int n = 0;
+        for (Entity e : es) {
+            if (n >= 6) break;
+            Object o = e.ref == null ? null : e.ref.get();
+            if (o == null) continue;
+            n++;
+            DataTree.captureExtra("实体 " + e.cls, new String[]{"entity"}, new Object[]{o}, c, seg);
+        }
+    }
+
+    private static final ConcurrentHashMap<String, Integer> VIEW_CALLS = new ConcurrentHashMap<>();
+    private static volatile long lastViewExpand;
+
+    /**
+     * 文字 / 图标等记录创建时调：顺着这个控件往上找它所在的 ViewHolder、第一个业务自定义控件、控件的 tag，
+     * 后台线程里展开成数据树（「视图所在 X」）。这样不用写方法追踪，也能看到「这段文字所在的那个对象里有哪些字段」。
+     * 每种控件类前 3 次、之后每 50 次一次，全局至少隔 200ms。
+     */
+    static void noteView(View v, RecConfig c) {
+        try {
+            if (c == null || !c.treeOn || v == null) return;
+            String cls = v.getClass().getName();
+            Integer prev = VIEW_CALLS.get(cls);
+            int n = prev == null ? 1 : prev + 1;
+            if (VIEW_CALLS.size() < 400) VIEW_CALLS.put(cls, n);
+            if (n > 3 && n % 50 != 0) return;
+            long now = SystemClock.uptimeMillis();
+            if (now - lastViewExpand < 200) return;
+            lastViewExpand = now;
+            final WeakReference<View> ref = new WeakReference<View>(v);
+            final RecConfig cc = c;
+            final int seg = Timeline.curTask;
+            EX.execute(new Runnable() {
+                @Override
+                public void run() {
+                    expandView(ref.get(), cc, seg);
+                }
+            });
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static void expandView(View v, RecConfig c, int seg) {
+        if (v == null) return;
+        boolean[] busy = Recorder.busyFlag();
+        boolean was = busy[0];
+        busy[0] = true;
+        try {
+            Object holder = null;
+            View appView = null;
+            int guard = 0;
+            for (View p = v; p != null && guard++ < 14; p = p.getParent() instanceof View ? (View) p.getParent() : null) {
+                String pn = p.getClass().getName();
+                if (appView == null && isApp(pn) && !Stacks.isGenericWidget(pn)) appView = p;
+                ViewGroup.LayoutParams lp = p.getLayoutParams();
+                if (lp != null) {
+                    Object vh = fieldAny(lp.getClass(), lp, "mViewHolder");
+                    if (vh != null) {
+                        holder = vh;
+                        break;
+                    }
+                }
+            }
+            Object tag = v.getTag();
+            if (holder == null && appView == null && !(tag != null && isApp(tag.getClass().getName()))) return;
+            String label = holder != null ? nice(holder.getClass().getName()) : appView != null ? nice(appView.getClass().getName()) : nice(tag.getClass().getName());
+            ArrayList<String> names = new ArrayList<>();
+            ArrayList<Object> roots = new ArrayList<>();
+            if (holder != null) {
+                names.add("holder");
+                roots.add(holder);
+            }
+            if (appView != null) {
+                names.add("view");
+                roots.add(appView);
+            }
+            if (tag != null && isApp(tag.getClass().getName())) {
+                names.add("tag");
+                roots.add(tag);
+            }
+            DataTree.captureExtra("视图所在 " + label, names.toArray(new String[0]), roots.toArray(), c, seg);
+        } catch (Throwable ignored) {
+        } finally {
+            busy[0] = was;
         }
     }
 
@@ -1090,6 +1191,260 @@ final class Annot {
         }
     }
 
+    // ------------------------------------------------------------ 5. 时序：这次命中离最近一次用户输入多少毫秒
+
+    private static final class Timing {
+        long lastInput;
+        String kind = "";
+        int hits;
+        final ArrayList<Long> gaps = new ArrayList<>();
+    }
+
+    private static final ConcurrentHashMap<String, Timing> TIM = new ConcurrentHashMap<>();
+
+    /** 方法追踪命中时调：每出现一次新的用户输入（触摸按下 / 按键），记第一次命中离它多少毫秒；之后的命中只计数。 */
+    static void noteTiming(String tkey) {
+        try {
+            long li = Timeline.lastInputAt;
+            if (li == 0) return;
+            Timing t = TIM.get(tkey);
+            if (t == null) {
+                if (TIM.size() > 300) return;
+                TIM.putIfAbsent(tkey, new Timing());
+                t = TIM.get(tkey);
+            }
+            synchronized (t) {
+                t.hits++;
+                if (li != t.lastInput) {
+                    t.lastInput = li;
+                    t.kind = Timeline.lastInputKind;
+                    if (t.gaps.size() < 40) t.gaps.add(Math.max(0, SystemClock.uptimeMillis() - li));
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+    }
+
+    private static JSONObject timingJson(String tkey) {
+        Timing t = TIM.get(tkey);
+        if (t == null) return null;
+        try {
+            synchronized (t) {
+                if (t.gaps.isEmpty()) return null;
+                ArrayList<Long> g = new ArrayList<>(t.gaps);
+                java.util.Collections.sort(g);
+                JSONObject o = new JSONObject();
+                o.put("inputs", g.size());
+                o.put("hits", t.hits);
+                o.put("min", g.get(0));
+                o.put("med", g.get(g.size() / 2));
+                o.put("max", g.get(g.size() - 1));
+                o.put("kind", t.kind);
+                return o;
+            }
+        } catch (Throwable e) {
+            return null;
+        }
+    }
+
+    // ------------------------------------------------------------ 6. 可钩性：这个方法技术上好不好钩、能改什么
+
+    private static final ConcurrentHashMap<String, JSONObject> TECH = new ConcurrentHashMap<>();
+
+    private static String typeName(Class<?> c) {
+        return c.isArray() ? typeName(c.getComponentType()) + "[]" : c.getName();
+    }
+
+    /** 方法的重载签名、技术特征和对应的改法提示。只在类已经加载出来时有结果。 */
+    static JSONObject techOf(String cn, String mn) {
+        String key = cn + "#" + mn;
+        JSONObject o = TECH.get(key);
+        if (o != null) return o;
+        try {
+            Class<?> k = SigResolver.findClass(cn, null);
+            if (k == null || "*".equals(mn)) return null;
+            o = new JSONObject();
+            JSONArray sigs = new JSONArray(), flags = new JSONArray();
+            LinkedHashSet<String> fl = new LinkedHashSet<>();
+            Method first = null;
+            int cnt = 0;
+            for (Method m : k.getDeclaredMethods()) {
+                if (!m.getName().equals(mn)) continue;
+                cnt++;
+                if (first == null) first = m;
+                StringBuilder sb = new StringBuilder();
+                Class<?>[] ps = m.getParameterTypes();
+                for (int i = 0; i < ps.length; i++) sb.append(i > 0 ? "," : "").append(typeName(ps[i]));
+                sb.append(" → ").append(typeName(m.getReturnType()));
+                int md = m.getModifiers();
+                sb.append("  [").append(Modifier.toString(md)).append(m.isSynthetic() ? " synthetic" : "").append(m.isBridge() ? " bridge" : "").append("]");
+                if (sigs.length() < 6) sigs.put(sb.toString());
+                if (Modifier.isStatic(md)) fl.add("static|静态方法：没有 this，没法按对象过滤，也读不到持有者");
+                if (Modifier.isPrivate(md)) fl.add("private|私有方法：能钩，但换版本时内部重构最容易动它");
+                if (Modifier.isAbstract(md)) fl.add("abstract|抽象方法：钩的是声明处，真正执行的是子类，要用 this 的类过滤");
+                if (Modifier.isNative(md)) fl.add("native|native 方法：能钩，但参数 / 返回值要按 JNI 理解");
+                if (m.isBridge()) fl.add("bridge|桥接方法（泛型编译产生）：真实实现是同名的另一个重载，钩那个");
+                if (m.isSynthetic() && !m.isBridge()) fl.add("synthetic|编译器合成方法（lambda$ / access$）：名字不稳定");
+                if (ps.length > 0 && ps[ps.length - 1].getName().startsWith("kotlin.coroutines.Continuation")) {
+                    fl.add("suspend|Kotlin 挂起函数：最后一个参数是 Continuation，返回值要么是真结果、要么是 COROUTINE_SUSPENDED，after 里拿到的不一定是最终值");
+                }
+                Class<?> rt = m.getReturnType();
+                if (rt == void.class) fl.add("void|返回 void：只能前置 / 后置观察，或用 param.setResult(null) 整个跳过，没有返回值可改");
+                else if (rt == boolean.class) fl.add("boolean|返回 boolean：可以 param.setResult(true / false) 直接改判断，最适合做开关类钩子");
+                else if (rt.isPrimitive()) fl.add("primitive|返回 " + rt.getName() + "：可以 param.setResult(…) 改返回值");
+                else fl.add("object|返回 " + nice(rt.getName()) + "：可以 param.setResult(…) 换成别的对象，或读它的字段");
+            }
+            if (cnt > 1) fl.add("overload|同名重载 " + cnt + " 个：hookAllMethods 会全部挂上，按参数个数 / 类型在钩子里区分");
+            String kn = k.getName();
+            if (kn.contains("$$ExternalSyntheticLambda") || kn.contains("$$Lambda")) fl.add("lambda|类是编译器生成的 lambda：类名不稳，改钩它实现的接口方法并按外层类过滤");
+            if (mn.contains("$default")) fl.add("default|Kotlin 默认参数的合成方法：真实实现是同名但没有 $default 的方法，钩那个");
+            if (k.isInterface()) fl.add("interface|接口方法：钩的是声明处，所有实现类都会命中，要用 this 的类过滤");
+            for (String f : fl) {
+                int i = f.indexOf('|');
+                JSONObject j = new JSONObject();
+                j.put("f", f.substring(0, i));
+                j.put("t", f.substring(i + 1));
+                flags.put(j);
+            }
+            o.put("sigs", sigs);
+            o.put("flags", flags);
+            o.put("overloads", cnt);
+            TECH.put(key, o);
+            return o;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    // ------------------------------------------------------------ 7. 结构指纹：不依赖混淆名的类特征
+
+    private static final ConcurrentHashMap<String, JSONObject> FP = new ConcurrentHashMap<>();
+
+    /** 混淆名换成 ?，系统 / 基本类型原样保留：这样同一个类换版本后指纹不变，可以按结构重新找到它。 */
+    private static String stableType(String t) {
+        String base = t;
+        String suffix = "";
+        while (base.endsWith("[]")) {
+            base = base.substring(0, base.length() - 2);
+            suffix += "[]";
+        }
+        if (!base.contains(".")) return base + suffix; // 基本类型 / 默认包
+        if (!isApp(base)) return base + suffix;
+        return (Stacks.isObfuscated(base, null) ? "?" : base) + suffix;
+    }
+
+    static JSONObject fingerprintOf(String cn, String mn) {
+        String key = cn + "#" + mn;
+        JSONObject o = FP.get(key);
+        if (o != null) return o;
+        try {
+            Class<?> k = SigResolver.findClass(cn, null);
+            if (k == null) return null;
+            o = new JSONObject();
+            Class<?> sup = k.getSuperclass();
+            String su = sup == null || sup == Object.class ? "" : stableType(sup.getName());
+            ArrayList<String> ifs = new ArrayList<>();
+            for (Class<?> i : k.getInterfaces()) ifs.add(stableType(i.getName()));
+            java.util.Collections.sort(ifs);
+            java.util.TreeMap<String, Integer> fm = new java.util.TreeMap<>();
+            String outer = "";
+            for (Class<?> c = k; c != null && c != Object.class && isApp(c.getName()); c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (Modifier.isStatic(f.getModifiers())) continue;
+                    String t = stableType(typeName(f.getType()));
+                    Integer n = fm.get(t);
+                    fm.put(t, n == null ? 1 : n + 1);
+                    if (outer.isEmpty() && (f.getName().equals("this$0") || f.getName().startsWith("f$") || f.getName().startsWith("arg$"))
+                            && !f.getType().isPrimitive()) outer = typeName(f.getType());
+                }
+            }
+            StringBuilder fs = new StringBuilder();
+            for (Map.Entry<String, Integer> e : fm.entrySet()) fs.append(fs.length() > 0 ? ", " : "").append(e.getKey()).append(e.getValue() > 1 ? "×" + e.getValue() : "");
+            ArrayList<String> sg = new ArrayList<>();
+            int mc = 0;
+            for (Method m : k.getDeclaredMethods()) {
+                if (m.isSynthetic()) continue;
+                mc++;
+                if (!m.getName().equals(mn)) continue;
+                StringBuilder sb = new StringBuilder("(");
+                Class<?>[] ps = m.getParameterTypes();
+                for (int i = 0; i < ps.length; i++) sb.append(i > 0 ? "," : "").append(stableType(typeName(ps[i])));
+                sb.append(")").append(stableType(typeName(m.getReturnType())));
+                sg.add(sb.toString());
+            }
+            java.util.Collections.sort(sg);
+            String canon = "super=" + su + ";if=" + ifs + ";f=" + fs + ";m=" + mc + ";sig=" + sg;
+            o.put("super", su);
+            o.put("ifaces", new JSONArray(ifs));
+            o.put("fields", fs.toString());
+            o.put("methods", mc);
+            o.put("sigs", new JSONArray(sg));
+            if (!outer.isEmpty()) o.put("outer", Stacks.isObfuscated(outer, null) ? "?" : outer);
+            o.put("hash", Integer.toHexString(canon.hashCode()));
+            o.put("canon", canon);
+            FP.put(key, o);
+            return o;
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    // ------------------------------------------------------------ 8. 点击入口：控件的监听器是谁
+
+    private static String listenerDesc(Object l) {
+        if (l == null) return "";
+        Class<?> k = l.getClass();
+        StringBuilder sb = new StringBuilder(nice(k.getName()));
+        String r = roleOf(k);
+        if (!r.equals("普通类")) sb.append('⟨').append(r).append('⟩');
+        try {
+            for (Class<?> c = k; c != null && c != Object.class && isApp(c.getName()); c = c.getSuperclass()) {
+                for (Field f : c.getDeclaredFields()) {
+                    if (Modifier.isStatic(f.getModifiers()) || f.getType().isPrimitive()) continue;
+                    String fn = f.getName();
+                    if (!(fn.equals("this$0") || fn.startsWith("f$") || fn.startsWith("arg$") || fn.startsWith("val$"))) continue;
+                    f.setAccessible(true);
+                    Object ov = f.get(l);
+                    if (ov != null && isApp(ov.getClass().getName()) && !(ov instanceof View)) {
+                        sb.append(" 外层=").append(nodeText(ov, false));
+                        return sb.toString();
+                    }
+                }
+            }
+        } catch (Throwable ignored) {
+        }
+        return sb.toString();
+    }
+
+    /** 点击记录里每个控件后面的一行：它的点击 / 长按 / 触摸监听器是谁（lambda 会带上外层类）。没有监听器返回空串。 */
+    static String listenerNote(View v) {
+        try {
+            Object li = fieldAny(View.class, v, "mListenerInfo");
+            if (li == null) return "";
+            StringBuilder sb = new StringBuilder();
+            String[][] ls = {{"mOnClickListener", "onClick"}, {"mOnLongClickListener", "onLongClick"}, {"mOnTouchListener", "onTouch"}};
+            for (String[] e : ls) {
+                Object l = fieldAny(li.getClass(), li, e[0]);
+                if (l == null) continue;
+                if (sb.length() > 0) sb.append("；");
+                sb.append(e[1]).append('=').append(listenerDesc(l));
+            }
+            return sb.length() == 0 ? "" : "监听器: " + sb;
+        } catch (Throwable t) {
+            return "";
+        }
+    }
+
+    /** 是不是有点击监听器（用来在点击记录末尾指出最上层的点击入口）。 */
+    static boolean hasClickListener(View v) {
+        try {
+            Object li = fieldAny(View.class, v, "mListenerInfo");
+            return li != null && fieldAny(li.getClass(), li, "mOnClickListener") != null;
+        } catch (Throwable t) {
+            return false;
+        }
+    }
+
     // ------------------------------------------------------------ 导出
 
     /** 写进一条记录的 JSON：方法追踪的钩点评级、类角色、对象归属。 */
@@ -1112,6 +1467,12 @@ final class Annot {
             }
             String top = TOP.get(tk);
             if (top != null) j.put("ownerTop", top);
+            JSONObject te = techOf(cn, mn);
+            if (te != null) j.put("tech", te);
+            JSONObject fp = fingerprintOf(cn, mn);
+            if (fp != null) j.put("fp", fp);
+            JSONObject tm = timingJson(tk);
+            if (tm != null) j.put("timing", tm);
         } catch (Throwable ignored) {
         }
     }
