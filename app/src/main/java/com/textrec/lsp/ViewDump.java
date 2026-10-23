@@ -17,6 +17,7 @@ import org.json.JSONObject;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -58,6 +59,57 @@ final class ViewDump {
 
     private static final ArrayList<Dump> KEEP = new ArrayList<>();
     private static final ArrayList<Dump> TAPS = new ArrayList<>();
+
+    // ------------------------------------------------------------ 自动抓（viewDumpAuto）
+
+    private static final int MAX_AUTO = 8;
+    private static final HashSet<String> SEEN_SHAPES = new HashSet<>();
+    private static final java.util.concurrent.ConcurrentHashMap<Class<?>, Boolean> KEY_CLS = new java.util.concurrent.ConcurrentHashMap<>();
+
+    /**
+     * 文案控件设了文字时调（Recorder.onSetText）：它是「主角」类（viewDumpKey）、已经挂在窗口里，就把它往上到窗口根的类名链当作结构，
+     * 这种结构没抓过就自动抓一份视图树。结构只看类名（不含下标 / id），同一种只抓一次；最多自动抓 MAX_AUTO 份。
+     * 只在界面线程做，没挂上窗口的（还在创建、没有父级）直接返回，等下一次设文字再看。
+     */
+    static void onCaptionSet(TextView v) {
+        try {
+            RecConfig c = Recorder.cfg;
+            if (c == null || !c.enabled || !c.viewDump || !c.viewDumpAuto) return;
+            if (Looper.myLooper() != Looper.getMainLooper() || !v.isAttachedToWindow()) return;
+            Class<?> k = v.getClass();
+            Boolean isKey = KEY_CLS.get(k);
+            if (isKey == null) {
+                String n = k.getName().toLowerCase(Locale.ROOT);
+                boolean m = false;
+                for (String key : splitKeys(c.viewDumpKey)) {
+                    if (n.contains(key)) {
+                        m = true;
+                        break;
+                    }
+                }
+                isKey = m;
+                KEY_CLS.put(k, isKey);
+            }
+            if (!isKey) return;
+            StringBuilder sb = new StringBuilder(160);
+            sb.append(k.getSimpleName());
+            ViewParent p = v.getParent();
+            for (int d = 0; d < 40 && p != null; d++) {
+                sb.append('<').append(p.getClass().getSimpleName());
+                p = p.getParent();
+            }
+            String shape = sb.toString();
+            synchronized (SEEN_SHAPES) {
+                if (SEEN_SHAPES.size() >= MAX_AUTO || !SEEN_SHAPES.add(shape)) return;
+            }
+            int cut = 0;
+            for (int i = 0, n = 0; i < shape.length() && n < 7; i++) {
+                if (shape.charAt(i) == '<' && ++n == 7) cut = i;
+            }
+            request("新结构 " + (cut > 0 ? shape.substring(0, cut) + "…" : shape));
+        } catch (Throwable ignored) {
+        }
+    }
 
     /** 任何线程都可以调：开关没开直接返回；开了就切到界面线程抓一份。 */
     static void request(final String reason) {
@@ -192,6 +244,19 @@ final class ViewDump {
             if (!sn.isEmpty() && left[0] > 0) {
                 left[0]--;
                 sb.append("     ↳ ").append(sn).append('\n');
+            }
+            String ln = c.annotFrames ? Annot.listenerNote(hits.get(i)) : "";
+            if (!ln.isEmpty() && left[0] > 0) {
+                left[0]--;
+                sb.append("     ↳ ").append(ln).append('\n');
+            }
+        }
+        if (c.annotFrames) { // 点击入口：最上层（最后命中）的、有点击监听器的控件
+            for (int i = hits.size() - 1; i >= 0; i--) {
+                if (Annot.hasClickListener(hits.get(i))) {
+                    sb.append("▶ 点击入口候选：").append(describe(hits.get(i))).append("\n     ").append(Annot.listenerNote(hits.get(i))).append('\n');
+                    break;
+                }
             }
         }
         if (left[0] <= 0) sb.append("…（行数到上限，可调大 viewDumpLines）\n");
