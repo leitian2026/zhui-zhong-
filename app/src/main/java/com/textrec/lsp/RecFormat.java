@@ -426,6 +426,44 @@ final class RecFormat {
             String ot = r.optString("ownerTop");
             if (!ot.isEmpty()) sb.append("  → 最近的容器: ").append(ot).append('\n');
         }
+        JSONObject te = r.optJSONObject("tech");
+        if (te != null) {
+            JSONArray tsg = te.optJSONArray("sigs"), tfl = te.optJSONArray("flags");
+            if (tsg != null && tsg.length() > 0) {
+                sb.append("方法签名（重载 ").append(te.optInt("overloads")).append(" 个）:");
+                for (int i = 0; i < tsg.length(); i++) sb.append("  ").append(tsg.optString(i));
+                sb.append('\n');
+            }
+            if (tfl != null) for (int i = 0; i < tfl.length(); i++) sb.append("可钩性·").append(tfl.optJSONObject(i).optString("f")).append(": ").append(tfl.optJSONObject(i).optString("t")).append('\n');
+        }
+        JSONObject fp = r.optJSONObject("fp");
+        if (fp != null) {
+            sb.append("结构指纹 ").append(fp.optString("hash")).append("（换版本后按这些条件重新找类，? = 混淆名）: 父类=").append(fp.optString("super").isEmpty() ? "无" : fp.optString("super"))
+                    .append(" 接口=").append(fp.optJSONArray("ifaces") == null ? "[]" : fp.optJSONArray("ifaces").toString())
+                    .append(" 字段类型=").append(fp.optString("fields")).append(" 方法数=").append(fp.optInt("methods"))
+                    .append(" 签名=").append(fp.optJSONArray("sigs") == null ? "[]" : fp.optJSONArray("sigs").toString())
+                    .append(fp.optString("outer").isEmpty() ? "" : " 外层类=" + fp.optString("outer")).append('\n');
+        }
+        JSONObject tm = r.optJSONObject("timing");
+        if (tm != null) {
+            long mn = tm.optLong("min");
+            sb.append("时序: 每次").append(tm.optString("kind")).append("后第一次命中离输入 最短 ").append(mn).append("ms / 中位 ").append(tm.optLong("med")).append("ms / 最长 ")
+                    .append(tm.optLong("max")).append("ms（共 ").append(tm.optInt("inputs")).append(" 次输入）→ ")
+                    .append(mn <= 300 ? "事件驱动（点击 / 触摸直接引起）" : mn <= 1000 ? "输入后不久发生（可能经过一次异步）" : "和输入关系不大（周期 / 异步刷新）").append('\n');
+        }
+        JSONObject pm = r.optJSONObject("passes");
+        if (pm != null) {
+            sb.append("各遍出现情况（同一件事做多遍时）:");
+            java.util.Iterator<String> pk = pm.keys();
+            while (pk.hasNext()) {
+                String k = pk.next();
+                int mk = pm.optInt(k);
+                StringBuilder ps = new StringBuilder();
+                for (int b = 0; b < 30; b++) if ((mk & (1 << b)) != 0) ps.append(ps.length() > 0 ? "," : "").append(b + 1);
+                sb.append("  任务").append(k).append(" 第 ").append(ps).append(" 遍");
+            }
+            sb.append('\n');
+        }
         String hi = r.optString("hookInfo");
         if (!hi.isEmpty()) sb.append("钩点信息: ").append(hi).append('\n');
         JSONArray fa = r.optJSONArray("frames");
