@@ -45,6 +45,13 @@ final class Timeline {
     private static final int KIND_BUDGET = 150; // 每种事件、每个任务阶段各自 150 种不同的（见 addAt），一个阶段灌满不影响别的阶段
     private static final java.util.concurrent.ConcurrentHashMap<String, Ev> AGG = new java.util.concurrent.ConcurrentHashMap<>();
     static volatile int curTask;
+    /** 同一件事做第几遍（任务清单第 4 段写 x3 = 做 3 遍；没写就一直是 1）。 */
+    static volatile int curPass = 1;
+    /** 出现过的最大遍数；>1 才往记录里写「各遍出现情况」。 */
+    static volatile int maxPass = 1;
+    /** 最近一次用户输入（触摸按下 / 按键）的时刻（uptimeMillis）和种类；记录里的「离输入多少毫秒」靠它算。 */
+    static volatile long lastInputAt;
+    static volatile String lastInputKind = "";
     /** 任务浮窗的流程进行中（收到「任务流程开始」到「任务全部完成 / 任务中止 / 浮窗关闭」）。没用浮窗时一直是 false，记录照旧全记。 */
     static volatile boolean flowActive;
     /** 配置：任务外也记录（默认关） */
@@ -366,15 +373,24 @@ final class Timeline {
             java.util.regex.Matcher m = java.util.regex.Pattern.compile("^任务(开始|重做) (\\d+)").matcher(label);
             if (m.find()) {
                 curTask = Integer.parseInt(m.group(2));
+                java.util.regex.Matcher pm = java.util.regex.Pattern.compile("第(\\d+)遍").matcher(label);
+                curPass = 1;
+                if (pm.find()) {
+                    try {
+                        curPass = Math.max(1, Math.min(30, Integer.parseInt(pm.group(1))));
+                    } catch (Throwable ignored) {
+                    }
+                }
+                if (curPass > maxPass) maxPass = curPass;
                 flowActive = true; // 冷启动补读时可能漏了「任务流程开始」，看到任务开始也算进入流程
                 if (!replaying) {
                     ViewDump.request(label); // 任务开始：抓一份视图树（开关没开直接返回；冷启动补读的旧标记不抓）
-                    Annot.sweep(label);
+                    Annot.sweep(label, curTask);
                 }
             } else if (label.startsWith("任务结束") || label.startsWith("任务中止") || label.startsWith("任务全部完成")) {
                 if (!replaying) {
                     ViewDump.request(label);
-                    Annot.sweep(label);
+                    Annot.sweep(label, curTask);
                 }
                 curTask = 0; // flowActive 保持：做完以后到关浮窗之前，任务外仍按「任务外也记录」开关处理，不会把收尾操作记进任务内
             }
@@ -383,7 +399,7 @@ final class Timeline {
             addAt("MARK", label + suffix, t, sendWall);
             if (!replaying) {
                 ViewDump.request("标记 " + label); // 记录页点「标记」：手动抓一份
-                Annot.sweep("标记 " + label);
+                Annot.sweep("标记 " + label, curTask);
             }
         }
     }
@@ -423,6 +439,14 @@ final class Timeline {
                 @Override
                 protected void beforeHookedMethod(MethodHookParam p) {
                     try {
+                        MotionEvent me0 = (MotionEvent) p.args[0];
+                        if (me0.getActionMasked() == MotionEvent.ACTION_DOWN) {
+                            lastInputAt = SystemClock.uptimeMillis();
+                            lastInputKind = "触摸";
+                        }
+                    } catch (Throwable ignored) {
+                    }
+                    try {
                         if (ops) onTouch((Activity) p.thisObject, (MotionEvent) p.args[0]);
                     } catch (Throwable ignored) {
                     }
@@ -437,6 +461,10 @@ final class Timeline {
                 protected void beforeHookedMethod(MethodHookParam p) {
                     try {
                         KeyEvent k = (KeyEvent) p.args[0];
+                        if (k.getAction() == KeyEvent.ACTION_DOWN) {
+                            lastInputAt = SystemClock.uptimeMillis();
+                            lastInputKind = "按键";
+                        }
                         if (ops && k.getAction() == KeyEvent.ACTION_UP && k.getKeyCode() == KeyEvent.KEYCODE_BACK) add("KEY", "返回键");
                     } catch (Throwable ignored) {
                     }
