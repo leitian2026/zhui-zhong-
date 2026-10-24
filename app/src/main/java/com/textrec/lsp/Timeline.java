@@ -87,7 +87,12 @@ final class Timeline {
         volatile long lastT;
 
         Ev(String kind, String text, long t, long wall) {
-            this.seq = SEQ.incrementAndGet();
+            this(kind, text, t, wall, SEQ.incrementAndGet());
+        }
+
+        /** 序号提前领好（序列事件：进入方法时领序号，返回时才建事件，外层调用才排在它里面的调用前面）。 */
+        Ev(String kind, String text, long t, long wall, long seq) {
+            this.seq = seq;
             this.t = t;
             this.wall = wall;
             this.kind = kind;
@@ -186,15 +191,26 @@ final class Timeline {
         Recorder.markChainDirty();
     }
 
-    /** 这个位置这次要不要进时间线：前 5 次，之后每 100 次一条（先问再拼文字，省得白拼）。 */
+    /**
+     * 任务代数：每次「任务开始 / 重做 / 结束 / 流程开始」加一。采样的次数计数按代数各算各的，
+     * 所以每个位置在每件事（每一遍）里都从头数「前 5 次」，不会被前面任务 / 任务之间的噪声提前用光。
+     */
+    static volatile int gen;
+
+    /** 这个位置这次要不要进时间线：每个任务阶段里前 5 次，之后每 100 次一条（先问再拼文字，省得白拼）。 */
     static boolean want(String key) {
         if (!samples) return false;
         int[] n = KEYN.get(key);
         if (n == null) {
             if (KEYN.size() > 5000) KEYN.clear();
-            n = new int[1];
+            n = new int[2];
             int[] old = KEYN.putIfAbsent(key, n);
             if (old != null) n = old;
+        }
+        int g = gen;
+        if (n[1] != g) { // 换了任务阶段：这个位置重新数
+            n[1] = g;
+            n[0] = 0;
         }
         int c = ++n[0];
         return c <= 5 || c % 100 == 0;
@@ -206,12 +222,90 @@ final class Timeline {
         int[] n = KEYN.get(key);
         if (n == null) {
             if (KEYN.size() > 5000) KEYN.clear();
-            n = new int[1];
+            n = new int[2];
             int[] old = KEYN.putIfAbsent(key, n);
             if (old != null) n = old;
         }
+        int g = gen;
+        if (n[1] != g) {
+            n[1] = g;
+            n[0] = 0;
+        }
         int c = ++n[0];
         if (c <= 5 || c % 100 == 0) add(kind, (c > 5 ? "(第" + c + "次) " : "") + text);
+    }
+
+    // ------------------------------------------------------------ 序列事件（方法追踪行尾 @seq）
+
+    /**
+     * 序列事件：方法追踪行写了 @seq 的方法，任务里每一次调用都记一条（带毫秒、线程、参数 / 返回值、栈顶几帧），
+     * 不合并、不抽样。采样事件相同的会合并成 ×N、每个位置只留前 5 次，看不出先后顺序；序列事件就是为了看顺序。
+     * 单独存，不占上面 3000 条关键事件的额度。每个方法每个任务阶段最多 SEQ_PER_DEFAULT 条（@seq=N 可改），
+     * 每个任务阶段全部方法合计最多 SEQ_TASK_CAP 条，整个进程最多 SEQ_ALL_CAP 条；超出的只计数，丢了多少写进导出。
+     */
+    static final int SEQ_PER_DEFAULT = 200, SEQ_TASK_CAP = 1500, SEQ_ALL_CAP = 6000;
+    private static final ArrayDeque<Ev> SEQS = new ArrayDeque<>();
+    private static final java.util.HashMap<String, int[]> SEQN = new java.util.HashMap<>();
+    private static final java.util.HashMap<String, int[]> SEQ_DROP = new java.util.HashMap<>();
+    private static int seqTaskGen = -1, seqTaskN;
+
+    /** 进入方法时领一个序号（外层调用的序号比里面的小，同一毫秒也排得对）。 */
+    static long seqReserve() {
+        return SEQ.incrementAndGet();
+    }
+
+    /** 这个方法在这个任务阶段还能不能再记一条序列事件；不能就记一次「丢了」。 */
+    static boolean seqAllow(String tkey, int cap) {
+        synchronized (SEQS) {
+            int g = gen;
+            int[] n = SEQN.get(tkey);
+            if (n == null) {
+                n = new int[2];
+                n[1] = g;
+                SEQN.put(tkey, n);
+            }
+            if (n[1] != g) {
+                n[1] = g;
+                n[0] = 0;
+            }
+            if (seqTaskGen != g) {
+                seqTaskGen = g;
+                seqTaskN = 0;
+            }
+            if (n[0] >= cap || seqTaskN >= SEQ_TASK_CAP || SEQS.size() >= SEQ_ALL_CAP) {
+                String dk = tkey + "#" + curTask;
+                int[] d = SEQ_DROP.get(dk);
+                if (d == null) {
+                    d = new int[1];
+                    SEQ_DROP.put(dk, d);
+                }
+                d[0]++;
+                return false;
+            }
+            n[0]++;
+            seqTaskN++;
+            return true;
+        }
+    }
+
+    /** 记一条序列事件（t / seq 是进入方法时的时刻和序号）。 */
+    static void seqAdd(String text, long t, long seq) {
+        if (!on) return;
+        String tx = text == null ? "" : (text.length() > 900 ? text.substring(0, 900) + "…" : text);
+        Ev e = new Ev("SEQ", tx, t, System.currentTimeMillis(), seq);
+        synchronized (SEQS) {
+            SEQS.addLast(e);
+        }
+        Recorder.markChainDirty();
+    }
+
+    /** 序列事件各方法在各任务阶段丢了多少条：key = 类#方法#任务号（0 = 任务之外）。 */
+    static JSONObject seqDropped() throws Exception {
+        JSONObject o = new JSONObject();
+        synchronized (SEQS) {
+            for (java.util.Map.Entry<String, int[]> e : SEQ_DROP.entrySet()) o.put(e.getKey(), e.getValue()[0]);
+        }
+        return o;
     }
 
     /** 当前标识变了就记一条。 */
@@ -368,11 +462,13 @@ final class Timeline {
         } else if (label.startsWith("任务流程开始")) {
             flowActive = true;
             curTask = 0;
+            gen++;
             addAt("TASK", label + suffix, t, sendWall);
         } else if (label.startsWith("任务")) {
             java.util.regex.Matcher m = java.util.regex.Pattern.compile("^任务(开始|重做) (\\d+)").matcher(label);
             if (m.find()) {
                 curTask = Integer.parseInt(m.group(2));
+                gen++; // 新的任务阶段：采样 / 序列的计数从头数
                 java.util.regex.Matcher pm = java.util.regex.Pattern.compile("第(\\d+)遍").matcher(label);
                 curPass = 1;
                 if (pm.find()) {
@@ -392,7 +488,8 @@ final class Timeline {
                     ViewDump.request(label);
                     Annot.sweep(label, curTask);
                 }
-                curTask = 0; // flowActive 保持：做完以后到关浮窗之前，任务外仍按「任务外也记录」开关处理，不会把收尾操作记进任务内
+                curTask = 0;
+                gen++; // flowActive 保持：做完以后到关浮窗之前，任务外仍按「任务外也记录」开关处理，不会把收尾操作记进任务内
             }
             addAt("TASK", label + suffix, t, sendWall);
         } else {
@@ -559,6 +656,9 @@ final class Timeline {
             all.addAll(EVS);
             all.addAll(SAMP);
         }
+        synchronized (SEQS) {
+            all.addAll(SEQS);
+        }
         java.util.Collections.sort(all, new java.util.Comparator<Ev>() {
             @Override
             public int compare(Ev x, Ev y) {
@@ -607,5 +707,12 @@ final class Timeline {
         AGG.clear();
         DROPPED.set(0);
         KEYN.clear();
+        synchronized (SEQS) {
+            SEQS.clear();
+            SEQN.clear();
+            SEQ_DROP.clear();
+            seqTaskGen = -1;
+            seqTaskN = 0;
+        }
     }
 }
