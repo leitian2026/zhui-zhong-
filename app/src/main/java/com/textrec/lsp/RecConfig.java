@@ -80,11 +80,6 @@ public final class RecConfig {
     public int viewDumpLines = 400;
     /** 视图树里的文字控件，带上「这段文字最近是谁 setText 的」（要开着「文字是谁设置的」，且不被方法追踪独占关掉）。 */
     public boolean viewDumpSet = true;
-    /**
-     * 视图树自动抓（1.31.2）：不用等任务开始 / 结束 / 点标记。每出现一种「文案控件往上到窗口根」的类名链（结构）没抓过的，就自动抓一份视图树；
-     * 同一种结构只抓一次，不挤掉别的。用在「出问题的页面很难刷到」的场景：正常刷信息流，那种页面一出现就被抓下来。最多自动抓 8 份。
-     */
-    public boolean viewDumpAuto = false;
     /** 点哪查哪：每次点屏幕（按下抬起位置差不多、不是滑动），把这个点上所有控件（从外层到最上层）列出来，不需要知道控件叫什么。 */
     public boolean viewTap = false;
     /**
@@ -354,6 +349,10 @@ public final class RecConfig {
         int every;
         /** @tag=N：第 N 个参数（从 0 数）当作“当前标识”（如视频 id）；@tag=ret 用返回值 */
         int tagArg = -2;
+        /** @seq：任务里每一次调用都按先后记一条序列事件（毫秒、线程、参数 / 返回值、栈顶几帧），不合并、不抽样 */
+        boolean seq;
+        /** @seq=N：这个方法每个任务阶段最多记 N 条，0 = 用默认（Timeline.SEQ_PER_DEFAULT） */
+        int seqMax;
     }
 
     /** 行里第一个“空白 + @”的空白位置；没有返回 -1。 */
@@ -388,6 +387,12 @@ public final class RecConfig {
                     o.countOnly = true;
                 } else if (w.equals("args")) {
                     o.argsOnly = true;
+                } else if (w.equals("seq") || w.startsWith("seq=")) {
+                    o.seq = true;
+                    if (w.startsWith("seq=")) {
+                        int v = intOf(w.substring(4));
+                        if (v > 0) o.seqMax = clamp(v, 1, 1000);
+                    }
                 } else if (w.startsWith("stack=") || w.startsWith("depth=")) {
                     int v = intOf(w.substring(w.indexOf('=') + 1));
                     if (v > 0) o.depth = clamp(v, 1, 60);
@@ -469,7 +474,6 @@ public final class RecConfig {
             p.setProperty("viewDumpDepth", String.valueOf(viewDumpDepth));
             p.setProperty("viewDumpLines", String.valueOf(viewDumpLines));
             p.setProperty("viewDumpSet", String.valueOf(viewDumpSet));
-            p.setProperty("viewDumpAuto", String.valueOf(viewDumpAuto));
             p.setProperty("viewTap", String.valueOf(viewTap));
             p.setProperty("annotFrames", String.valueOf(annotFrames));
             p.setProperty("treeOn", String.valueOf(treeOn));
@@ -612,7 +616,6 @@ public final class RecConfig {
         c.viewDumpDepth = clamp(num(p, "viewDumpDepth", c.viewDumpDepth), 1, 10);
         c.viewDumpLines = clamp(num(p, "viewDumpLines", c.viewDumpLines), 50, 3000);
         c.viewDumpSet = bool(p, "viewDumpSet", c.viewDumpSet);
-        c.viewDumpAuto = bool(p, "viewDumpAuto", c.viewDumpAuto);
         c.viewTap = bool(p, "viewTap", c.viewTap);
         c.annotFrames = bool(p, "annotFrames", c.annotFrames);
         c.treeOn = bool(p, "treeOn", c.treeOn);
