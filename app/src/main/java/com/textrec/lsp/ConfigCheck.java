@@ -39,7 +39,7 @@ final class ConfigCheck {
     static final String[] BOOL_KEYS = {
             "enabled", "keywordMode", "regex", "traceSet", "traceDraw", "traceColor",
             "traceIcons", "autoParams", "traceSetOnly", "traceState", "traceOnly", "windowAll",
-            "excludeInfra", "valueClock", "traceDump", "viewDump", "viewDumpSet", "viewDumpAuto", "viewTap",
+            "excludeInfra", "valueClock", "traceDump", "viewDump", "viewDumpSet", "viewTap",
             "annotFrames", "treeOn", "watchAuto", "annotOwners", "annotSweep", "tlOn",
             "tlOps", "tlSamples", "recOutside", "traceExclusive", "traceCompose", "composeObj",
             "composeDump", "tlTouch", "tlKey", "tlPage", "tlViewTree", "smpText",
@@ -73,7 +73,7 @@ final class ConfigCheck {
     private static final List<String> ALL_KEYS = new ArrayList<>();
 
     /** 只能写在方法追踪清单里的选项。 */
-    private static final String[] TRACE_OPTS = {"count", "args", "stack", "depth", "every", "tag"};
+    private static final String[] TRACE_OPTS = {"count", "args", "stack", "depth", "every", "tag", "seq"};
     /** 逗号 / 换行分隔的列表型配置项。 */
     private static final Set<String> LIST_KEYS = new HashSet<>(java.util.Arrays.asList(
             "keywords", "traceMethods", "watch", "excludeList", "threadFilter", "pageFilter", "viewFilter", "valueFilter", "viewDumpKey", "dumpPrefixes"));
@@ -605,7 +605,7 @@ final class ConfigCheck {
 
     private static void checkOpts(String opts, List<String> errs, List<String> warns) {
         if (opts.isEmpty()) return;
-        boolean count = false, args = false;
+        boolean count = false, args = false, seq = false;
         for (String w : opts.split("[@,\\s]+")) {
             if (w.isEmpty()) continue;
             String name = w.contains("=") ? w.substring(0, w.indexOf('=')) : w;
@@ -614,7 +614,7 @@ final class ConfigCheck {
             for (String o : TRACE_OPTS) if (o.equals(name)) known = true;
             if (!known) {
                 String k = nearest(name, java.util.Arrays.asList(TRACE_OPTS));
-                errs.add("未知选项 " + q("@" + name) + "，会被忽略" + (k != null ? "。你是不是想写 " + q("@" + k + (k.equals("count") || k.equals("args") ? "" : "=…")) + "？" : "。可用选项：@count @args @stack=N @every=N @tag=N / @tag=ret"));
+                errs.add("未知选项 " + q("@" + name) + "，会被忽略" + (k != null ? "。你是不是想写 " + q("@" + k + (k.equals("count") || k.equals("args") || k.equals("seq") ? "" : "=…")) + "？" : "。可用选项：@count @args @stack=N @every=N @tag=N / @tag=ret @seq / @seq=N"));
                 continue;
             }
             if (name.equals("count")) {
@@ -623,6 +623,13 @@ final class ConfigCheck {
             } else if (name.equals("args")) {
                 args = true;
                 if (val != null) errs.add(q("@args") + " 不带值，不能写 " + q("=" + val));
+            } else if (name.equals("seq")) {
+                seq = true;
+                if (val != null) {
+                    if (!val.matches("\\d+")) errs.add(q("@seq=" + val) + " 的值 " + q(val) + " 不是正整数，会被忽略（按默认 200 条）");
+                    else if (Long.parseLong(val) < 1) errs.add(q("@seq=" + val) + " 必须 ≥ 1，会被忽略（按默认 200 条）");
+                    else if (Long.parseLong(val) > 1000) warns.add(q("@seq=" + val) + " 超出上限 1000，会被改成 1000");
+                }
             } else if (name.equals("tag")) {
                 if (val == null) errs.add(q("@tag") + " 后面要写 " + q("=数字") + "（第几个参数，从 0 数）或 " + q("=ret") + "（返回值）");
                 else if (!val.equals("ret") && !val.matches("\\d+")) errs.add(q("@tag=" + val) + " 的值只能是非负整数或 " + q("ret") + (dist(val, "ret") <= 1 ? "；是不是想写 " + q("@tag=ret") + "？" : ""));
@@ -639,6 +646,7 @@ final class ConfigCheck {
                 }
             }
         }
+        if (seq && count) warns.add("同时写了 " + q("@seq") + " 和 " + q("@count") + "：序列事件照记，但 " + q("@count") + " 的记录里不会有调用栈");
         if (count && args) warns.add("同时写了 " + q("@count") + " 和 " + q("@args") + "，只有 " + q("@count") + " 生效（只计数，不记参数）");
     }
 
