@@ -244,6 +244,7 @@ final class Store {
                 tj.put("timeline", Timeline.toJson());
                 tj.put("timelineDropped", Timeline.dropped());
                 tj.put("timelineKindDropped", Timeline.kindDropped());
+                tj.put("timelineSeqDropped", Timeline.seqDropped());
                 tj.put("baselineDone", Timeline.baselineDone);
                 writeFile(d, "snapshot-" + safe + ".TIMELINE.json", tj.toString());
             } catch (Throwable t) {
@@ -431,6 +432,7 @@ final class Store {
             root.put("timeline", legacyTimeline);
             root.put("timelineDropped", Timeline.dropped());
             root.put("timelineKindDropped", Timeline.kindDropped());
+            root.put("timelineSeqDropped", Timeline.seqDropped());
         }
         root.put("viewDumps", ViewDump.toJson());
         root.put("annot", Annot.toJson());
