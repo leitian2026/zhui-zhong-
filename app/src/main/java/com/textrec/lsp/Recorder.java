@@ -866,6 +866,7 @@ final class Recorder {
     private static final XC_MethodHook TRACE_HOOK = new XC_MethodHook() {
         @Override
         protected void beforeHookedMethod(MethodHookParam p) {
+            seqEnter(p);
             if (DataTree.watching) { // 观察点：进入前读一遍（和上次比 = 两次调用之间变的），并留给返回时对比
                 boolean[] b = BUSY.get();
                 boolean was = b[0];
@@ -918,8 +919,9 @@ final class Recorder {
                 } catch (Throwable ignored) {
                 }
             }
+            SeqEnt se = seqLeave(p);
             try {
-                onTraced(p);
+                onTraced(p, se);
             } catch (Throwable ignored) {
             }
             if (ch != null) {
@@ -1019,6 +1021,14 @@ final class Recorder {
         }
         traceWild = wild;
         traceOpts = RecConfig.traceOpts(c.traceMethods);
+        boolean as = false;
+        for (RecConfig.TraceOpt o : traceOpts.values()) {
+            if (o.seq) {
+                as = true;
+                break;
+            }
+        }
+        anySeq = as;
         traceActive = want;
         if (want.isEmpty()) {
             traceMsg.clear();
@@ -1232,7 +1242,7 @@ final class Recorder {
         }
     }
 
-    private static void onTraced(XC_MethodHook.MethodHookParam p) {
+    private static void onTraced(XC_MethodHook.MethodHookParam p, SeqEnt se) {
         RecConfig c = cfg;
         if (!c.enabled) return;
         String tkey = resolveTrace(p); // 声明处命中 / 整类命中 / 继承命中（后者 tkey 是用户写的子类#方法）
@@ -1276,6 +1286,10 @@ final class Recorder {
                     store.blkValue.incrementAndGet();
                     return;
                 }
+            }
+            if (se != null && se.ok) { // @seq：这一次调用按先后记进时间线（不合并、不抽样，也不受下面降频 / 只计数的影响）
+                if (text == null) text = summarizeCall(p);
+                recordSeq(p, tkey, se, text);
             }
             Store.DrawProxy dp = store.drawProxy(mix(mix(SEED, tkey.hashCode()), 9));
             int n = dp.n.incrementAndGet();
@@ -1347,6 +1361,101 @@ final class Recorder {
             store.markDirty();
         } finally {
             busy[0] = false;
+        }
+    }
+
+    // ------------------------------------------------------------ 序列事件（@seq）
+
+    /** 有没有哪一行写了 @seq；没有就完全不进下面的逻辑。 */
+    private static volatile boolean anySeq;
+
+    /** 一次 @seq 调用：进入时刻、提前领好的序号、是否还有额度、（取消类方法）被取消的待处理消息。 */
+    static final class SeqEnt {
+        long t, seq;
+        boolean ok;
+        String cancel;
+    }
+
+    private static final ThreadLocal<ArrayList<SeqEnt>> SEQ_STK = new ThreadLocal<ArrayList<SeqEnt>>() {
+        @Override
+        protected ArrayList<SeqEnt> initialValue() {
+            return new ArrayList<>(4);
+        }
+    };
+
+    private static RecConfig.TraceOpt optFor(String tkey) {
+        RecConfig.TraceOpt o = traceOpts.get(tkey);
+        if (o == null && !traceActive.contains(tkey)) { // 「类#*」整类追踪命中的方法
+            int h = tkey.indexOf('#');
+            if (h > 0) o = traceOpts.get(tkey.substring(0, h) + "#*");
+        }
+        return o;
+    }
+
+    /**
+     * 进入被追踪方法（before）：这个方法写了 @seq 就领序号、判断额度、记进入时刻，压进本线程的栈；
+     * 序号和时刻是进入时的，所以外层方法排在它里面调用的方法前面。取消类方法（removeMessages / removeCallbacks…）
+     * 要在这里就查出「被取消的是哪些待处理消息」：返回以后这些 Message 已经被回收，字段都清空了。
+     */
+    private static void seqEnter(XC_MethodHook.MethodHookParam p) {
+        if (!anySeq) return;
+        try {
+            String tk = resolveTrace(p);
+            if (tk == null) return;
+            RecConfig.TraceOpt o = optFor(tk);
+            if (o == null || !o.seq) return;
+            SeqEnt e = new SeqEnt();
+            e.t = SystemClock.uptimeMillis();
+            if (cfg.enabled && !Timeline.skip() && Timeline.seqAllow(tk, o.seqMax > 0 ? o.seqMax : Timeline.SEQ_PER_DEFAULT)) {
+                e.ok = true;
+                e.seq = Timeline.seqReserve();
+                String mn = p.method.getName();
+                if ((p.thisObject instanceof android.os.Handler || p.thisObject instanceof android.os.MessageQueue)
+                        && (mn.startsWith("removeMessages") || mn.startsWith("removeEqualMessages") || mn.startsWith("removeCallbacks"))) {
+                    e.cancel = Chain.cancelInfo(p.thisObject, mn, p.args);
+                }
+            }
+            SEQ_STK.get().add(e);
+        } catch (Throwable ignored) {
+        }
+    }
+
+    /** 返回被追踪方法（after）：弹出 seqEnter 压进去的那一项；这个方法没写 @seq 返回 null。 */
+    private static SeqEnt seqLeave(XC_MethodHook.MethodHookParam p) {
+        if (!anySeq) return null;
+        try {
+            String tk = resolveTrace(p);
+            if (tk == null) return null;
+            RecConfig.TraceOpt o = optFor(tk);
+            if (o == null || !o.seq) return null;
+            ArrayList<SeqEnt> st = SEQ_STK.get();
+            if (st.isEmpty()) return null;
+            return st.remove(st.size() - 1);
+        } catch (Throwable t) {
+            return null;
+        }
+    }
+
+    /** 写一条序列事件：方法、参数 → 返回值、线程、耗时、（取消类）被取消的消息、栈顶几帧。 */
+    private static void recordSeq(XC_MethodHook.MethodHookParam p, String tkey, SeqEnt se, String text) {
+        try {
+            StringBuilder sb = new StringBuilder(320);
+            sb.append(tkey).append(' ').append(clip(text, 300));
+            sb.append("  线程=").append(Thread.currentThread().getName());
+            if (Looper.myLooper() == Looper.getMainLooper()) sb.append("(主)");
+            long cost = SystemClock.uptimeMillis() - se.t;
+            if (cost > 0) sb.append("  耗时").append(cost).append("ms");
+            if (se.cancel != null && !se.cancel.isEmpty()) sb.append("  ⟦").append(se.cancel).append("⟧");
+            Stacks.Stk d = Stacks.build(Stacks.capture(true), 6, false);
+            if (d != null && d.lines != null && d.lines.length > 0) {
+                sb.append("  栈: ");
+                for (int i = 0; i < d.lines.length && i < 5; i++) {
+                    if (i > 0) sb.append(" ← ");
+                    sb.append(d.lines[i].trim());
+                }
+            }
+            Timeline.seqAdd(sb.toString(), se.t, se.seq);
+        } catch (Throwable ignored) {
         }
     }
 
@@ -1437,7 +1546,6 @@ final class Recorder {
 
     private static void onSetText(XC_MethodHook.MethodHookParam p) {
         if (!(p.thisObject instanceof TextView)) return;
-        ViewDump.onCaptionSet((TextView) p.thisObject);
         Object a0 = p.args[0];
         String t = textOf(a0);
         if (Timeline.samples) {
