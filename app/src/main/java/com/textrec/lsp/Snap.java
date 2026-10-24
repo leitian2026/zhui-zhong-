@@ -120,6 +120,18 @@ final class Snap {
                         .append(' ').append(kd.optInt(k)).append("  ");
             }
         }
+        JSONObject sd = root.optJSONObject("timelineSeqDropped");
+        if (sd != null && sd.length() > 0) {
+            sb.append("  ⚠ 序列事件（@seq）每个方法每个任务阶段有条数上限（默认 200，@seq=N 可改；全部方法合计每阶段 1500、整个进程 6000），超出没记的条数：");
+            java.util.Iterator<String> it2 = sd.keys();
+            while (it2.hasNext()) {
+                String k = it2.next();
+                int h = k.lastIndexOf('#');
+                String seg = h > 0 ? k.substring(h + 1) : "0";
+                sb.append(h > 0 ? k.substring(0, h) : k).append(seg.equals("0") ? "(任务之外)" : "(任务" + seg + ")")
+                        .append(' ').append(sd.optInt(k)).append("  ");
+            }
+        }
         sb.append("\n（前一列是单调时钟毫秒，相对目标进程开始记录；同一毫秒内看序号 #；“✗”开头 = 被「重做」作废的那一次）\n");
         int n = tl.length();
         String[] lines = new String[n];
