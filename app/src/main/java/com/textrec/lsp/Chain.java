@@ -262,9 +262,9 @@ final class Chain {
                 String how = "Handler → " + (msg.getCallback() != null ? msg.getCallback().getClass().getName()
                         : (msg.getTarget() != null ? msg.getTarget().getClass().getName() : "?") + " what=" + msg.what);
                 Origin o = makeOrigin(how);
-                if (o == null) return;
                 synchronized (MSGS) {
-                    MSGS.put(msg, o);
+                    if (o == null) MSGS.remove(msg); // 限流没抓到来源：Message 对象会复用，别让它带着上一次投递的旧来源
+                    else MSGS.put(msg, o);
                 }
             } catch (Throwable ignored) {
             }
@@ -327,6 +327,90 @@ final class Chain {
             end();
         }
     };
+
+    /**
+     * 谁取消了待处理的消息：被追踪的取消方法（MessageQueue#removeMessages / removeEqualMessages / removeCallbacksAndMessages、
+     * Handler 上同名方法）进入时调用，在「已投递、还没执行」的消息里找出这次会被取消的那些，写出它们是谁、什么时候、
+     * 在哪个线程投递的。来源只有开了 chainOn + chainAsync 才有（投递时才记）；没开就只说明这一点。
+     * 必须在方法进入时调（返回后这些 Message 已被回收，字段全清空了）。
+     * 匹配规则照 Android 的实现：removeMessages(h, what, obj) = target 相同 + what 相同 + （obj 为空或相同）；
+     * removeMessages(h, runnable, obj) = target 相同 + callback 相同；removeCallbacksAndMessages(h, obj) = target 相同 + （obj 为空或相同）。
+     * 名字带 Equal 的用 equals 比 obj / callback。
+     */
+    static String cancelInfo(Object self, String name, Object[] a) {
+        try {
+            if (!async) return "取消：没开异步来源（chainOn + chainAsync），查不到被取消的消息是谁投递的";
+            Object h;
+            int off;
+            if (self instanceof android.os.Handler) {
+                h = self;
+                off = 0;
+            } else if (a != null && a.length > 0 && a[0] instanceof android.os.Handler) {
+                h = a[0];
+                off = 1;
+            } else {
+                return null;
+            }
+            int n = a == null ? 0 : a.length - off;
+            boolean eq = name.contains("Equal");
+            boolean all = name.startsWith("removeCallbacksAnd");
+            Integer what = null;
+            Object cb = null, obj = null;
+            if (all) {
+                if (n >= 1) obj = a[off];
+            } else {
+                if (n >= 1) {
+                    if (a[off] instanceof Integer) what = (Integer) a[off];
+                    else cb = a[off];
+                }
+                if (n >= 2) obj = a[off + 1];
+            }
+            long now = SystemClock.uptimeMillis();
+            ArrayList<Object[]> hit = new ArrayList<>();
+            int total = 0;
+            synchronized (MSGS) {
+                for (Map.Entry<Object, Origin> e : MSGS.entrySet()) {
+                    Object k = e.getKey();
+                    if (!(k instanceof Message)) continue;
+                    Message m = (Message) k;
+                    if (m.getTarget() != h) continue;
+                    if (all) {
+                        if (obj != null && !(m.obj == obj || (eq && obj.equals(m.obj)))) continue;
+                    } else if (what != null) {
+                        if (m.what != what) continue;
+                        if (obj != null && !(m.obj == obj || (eq && obj.equals(m.obj)))) continue;
+                    } else {
+                        Object mc = m.getCallback();
+                        if (mc == null || !(mc == cb || (eq && cb != null && cb.equals(mc)))) continue;
+                        if (obj != null && !(m.obj == obj || (eq && obj.equals(m.obj)))) continue;
+                    }
+                    total++;
+                    if (hit.size() < 4) hit.add(new Object[]{m.what, m.getCallback() == null ? null : m.getCallback().getClass().getName(), m.getWhen() - now, e.getValue()});
+                }
+            }
+            if (total == 0) return "取消：没有找到匹配的待处理消息（本来就没有，或投递时没抓到来源：来源每秒只抓前 300 条）";
+            StringBuilder sb = new StringBuilder("取消了 ").append(total).append(" 条待处理消息");
+            for (Object[] x : hit) {
+                Origin o = (Origin) x[3];
+                sb.append(" · [what=").append(x[0]);
+                if (x[1] != null) sb.append(" callback=").append(x[1]);
+                long left = (Long) x[2];
+                sb.append(left >= 0 ? " 还差 " + left + "ms 才执行" : " 已过期 " + (-left) + "ms");
+                if (o != null) {
+                    sb.append(" 投递于 ").append(now - o.at).append("ms 前 线程=").append(o.thread).append(" 方式=").append(cut(o.how, 80));
+                    if (o.frames != null && o.frames.length > 0) {
+                        sb.append(" 投递栈:");
+                        for (int i = 0; i < o.frames.length && i < 3; i++) sb.append(i > 0 ? " ← " : " ").append(o.frames[i].trim());
+                    }
+                }
+                sb.append(']');
+            }
+            if (total > hit.size()) sb.append(" …另有 ").append(total - hit.size()).append(" 条");
+            return sb.toString();
+        } catch (Throwable t) {
+            return null;
+        }
+    }
 
     private static Origin makeOrigin(String how) {
         Ctx c = CUR.get();
