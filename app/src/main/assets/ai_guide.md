@@ -304,6 +304,7 @@ quietCount=50
 | `viewDumpSet` `viewTap` | true / false | 视图树里文字控件带「设置自」；点哪查哪（点屏幕列出这个点上所有控件）。1.28.0 |
 | `annotFrames` `annotOwners` `annotSweep` `annotBudgetMs` `annotPerKey` | true / true / true / 40 / 6 | 标注（1.29.0）：调用栈每帧标分层·角色·稳定度并标入口帧 / 推荐钩点；方法追踪命中时反查 this / 参数被谁持有；任务开始 / 结束扫「容器 → 数据实体」；一次反查最多多少毫秒（5~500）；每个追踪方法前几次命中做反查（1~100） |
 | `treeOn` `treeDepth` `treeNodes` `treeEvery` `watchAuto` | true / 4 / 200 / 10 / true | 数据树（1.31.0）：方法追踪命中时把 this / 参数 / 返回值沿字段展开成树并记每个节点在每个任务里的值；展开几层（1~8）；一次最多多少节点（20~600）；每隔几次命中展开一次（1~100000，每个方法前 3 次必展开）；自动把值变过的叶子加成观察点（最多 24 个） |
+| `treeViews` | false | 1.32.1。数据树也展开控件（View）自己的业务字段；`this` 是控件时也展开。想看 `LongPressLayout` 这类自定义控件里记了什么状态就开，建议同时 `treeNodes=600`。控件里的别的控件只记一行 |
 | `watch` | 空 | 观察点，每行「类#方法:路径」，路径照导出里「数据树」抄（如 `com.a.B#foo:arg0.mAweme.userDigg`）；该方法必须同时写在 traceMethods 里；多行用 `\\n` 隔开。每次任何被追踪方法进入 / 返回时读一遍，变了就记下是哪个方法执行期间改的 |
 | `windowMs` `windowAll` | 0 / false | 触发窗口 |
 | `excludeInfra` `threadMode` `valueClock` | false / 0 / false | 见 7.2 |
