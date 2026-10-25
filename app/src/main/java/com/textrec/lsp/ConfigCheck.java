@@ -40,7 +40,7 @@ final class ConfigCheck {
             "enabled", "keywordMode", "regex", "traceSet", "traceDraw", "traceColor",
             "traceIcons", "autoParams", "traceSetOnly", "traceState", "traceOnly", "windowAll",
             "excludeInfra", "valueClock", "traceDump", "viewDump", "viewDumpSet", "viewTap",
-            "annotFrames", "treeOn", "watchAuto", "annotOwners", "annotSweep", "tlOn",
+            "annotFrames", "treeOn", "treeViews", "watchAuto", "annotOwners", "annotSweep", "tlOn",
             "tlOps", "tlSamples", "recOutside", "traceExclusive", "traceCompose", "composeObj",
             "composeDump", "tlTouch", "tlKey", "tlPage", "tlViewTree", "smpText",
             "smpState", "smpIcon", "smpTrace", "chainOn", "chainAsync", "chainEffects",
