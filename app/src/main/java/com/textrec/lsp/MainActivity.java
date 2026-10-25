@@ -534,6 +534,7 @@ public class MainActivity extends Activity {
         fineNumber("treeDepth", "往下展开几层", "默认 4，范围 1–8。越深越慢、节点越多");
         fineNumber("treeNodes", "一次最多记多少个节点", "默认 200，范围 20–600");
         fineNumber("treeEvery", "每隔几次命中展开一次", "默认 10。每个方法前 3 次必展开；进入新任务 / 新一遍 / 有新的用户输入时也会展开");
+        fineSwitch("treeViews", "数据树也展开控件的字段", "默认关。数据树遇到控件（View）时默认只记一行类名，看不到控件里的状态字段。打开后展开控件自己的业务字段（不含系统父类的），控件里碰到的别的控件仍只记一行。想看 LongPressLayout 这类自定义控件里记了什么就开它，字段多，建议把 treeNodes 调到 600");
         fineSwitch("watchAuto", "自动给「值变过的叶子」加观察点", "默认开，最多 24 个。每次被追踪方法进入 / 返回时重新读一遍，导出「观察点变化」里写出变化发生在哪个方法执行期间，或哪两次调用之间");
         fineSwitch("annotFrames", "调用栈每一帧标分层 / 角色 / 稳定度", "默认开。每帧后面标〔业务·ViewHolder·稳〕这样的标签，并标出 ★入口帧、◎推荐钩点、↯异步边界；方法追踪的钩点另有评级（框架回调 / 稳定业务 / 通用 / 混淆）和类角色");
         fineSwitch("annotOwners", "方法追踪命中时反查「谁持有这个对象」", "默认开。对 this 和前几个参数里的业务对象（比如抖音的 Aweme），从当前页面的 Activity / Fragment / ViewModel / 视图树里反向找出持有它的容器（ViewHolder、Fragment、ViewModel、控件标签、监听器），写成一条路径。在后台线程做，每个追踪方法只在前几次命中做");
