@@ -101,6 +101,8 @@ public final class RecConfig {
     public int treeDepth = 4;
     public int treeNodes = 200;
     public int treeEvery = 10;
+    /** treeViews（1.32.1）：打开后数据树也展开控件（View）自己的业务字段；控件里再碰到的别的控件仍只记一行，不往下走。默认关。 */
+    public boolean treeViews = false;
     public String watch = "";
     public boolean watchAuto = true;
     public boolean annotOwners = true;
@@ -480,6 +482,7 @@ public final class RecConfig {
             p.setProperty("treeDepth", String.valueOf(treeDepth));
             p.setProperty("treeNodes", String.valueOf(treeNodes));
             p.setProperty("treeEvery", String.valueOf(treeEvery));
+            p.setProperty("treeViews", String.valueOf(treeViews));
             p.setProperty("watch", watch);
             p.setProperty("watchAuto", String.valueOf(watchAuto));
             p.setProperty("annotOwners", String.valueOf(annotOwners));
@@ -622,6 +625,7 @@ public final class RecConfig {
         c.treeDepth = clamp(num(p, "treeDepth", c.treeDepth), 1, 8);
         c.treeNodes = clamp(num(p, "treeNodes", c.treeNodes), 20, 600);
         c.treeEvery = clamp(num(p, "treeEvery", c.treeEvery), 1, 100000);
+        c.treeViews = bool(p, "treeViews", c.treeViews);
         c.watch = p.getProperty("watch", c.watch);
         c.watchAuto = bool(p, "watchAuto", c.watchAuto);
         c.annotOwners = bool(p, "annotOwners", c.annotOwners);
