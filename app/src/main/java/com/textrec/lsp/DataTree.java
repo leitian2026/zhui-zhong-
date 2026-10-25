@@ -144,6 +144,9 @@ final class DataTree {
         final IdentityHashMap<Object, String> seen = new IdentityHashMap<>();
         final int maxDepth, maxNodes;
         boolean truncated;
+        /** treeViews：展开控件自己的业务字段；inView > 0 表示正在控件里面（里面碰到的别的控件只记一行）。 */
+        boolean views;
+        int inView;
 
         Ctx(int maxDepth, int maxNodes) {
             this.maxDepth = maxDepth;
@@ -206,6 +209,29 @@ final class DataTree {
                 } catch (Throwable ignored) {
                 }
                 put(cx, path, "view", tname(v), tname(v) + id);
+                // treeViews：只展开业务自定义控件自己的字段（系统父类不进）；控件里的别的控件不再展开，防止顺着父子关系走遍整棵视图树
+                if (cx.views && cx.inView == 0 && depth < cx.maxDepth && Annot.isApp(v.getClass().getName()) && cx.seen.get(v) == null) {
+                    cx.seen.put(v, path);
+                    cx.inView++;
+                    try {
+                        for (Class<?> c = v.getClass(); c != null && c != Object.class && Annot.isApp(c.getName()); c = c.getSuperclass()) {
+                            for (Field f : c.getDeclaredFields()) {
+                                if (cx.full()) {
+                                    cx.truncated = true;
+                                    return;
+                                }
+                                if (Modifier.isStatic(f.getModifiers())) continue;
+                                try {
+                                    f.setAccessible(true);
+                                    walk(f.get(v), path + "." + f.getName(), depth + 1, cx);
+                                } catch (Throwable ignored) {
+                                }
+                            }
+                        }
+                    } finally {
+                        cx.inView--;
+                    }
+                }
                 return;
             }
             if (v instanceof Activity) {
@@ -531,7 +557,8 @@ final class DataTree {
                 tr.lastInput = li;
                 tr.captures++;
                 Ctx cx = new Ctx(Math.max(1, c.treeDepth), Math.max(20, c.treeNodes));
-                if (self != null && !(self instanceof View) && Annot.isApp(self.getClass().getName())) walk(self, "this", 0, cx);
+                cx.views = c.treeViews;
+                if (self != null && (c.treeViews || !(self instanceof View)) && Annot.isApp(self.getClass().getName())) walk(self, "this", 0, cx);
                 if (args != null) for (int i = 0; i < args.length && i < 8; i++) walk(args[i], "arg" + i, 0, cx);
                 if (hasRet) walk(ret, "ret", 0, cx);
                 if (cx.truncated) tr.truncated = true;
