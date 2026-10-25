@@ -385,6 +385,7 @@ final class Store {
         cj.put("treeDepth", c.treeDepth);
         cj.put("treeNodes", c.treeNodes);
         cj.put("treeEvery", c.treeEvery);
+        cj.put("treeViews", c.treeViews);
         cj.put("watchAuto", c.watchAuto);
         cj.put("annotOwners", c.annotOwners);
         cj.put("annotSweep", c.annotSweep);
