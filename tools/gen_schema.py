@@ -60,16 +60,18 @@ def parse_meta():
         if not line.strip() or line.startswith("#"):
             continue
         p = line.split("|")
-        if len(p) != 6:
-            sys.exit("field_meta.txt 第 %d 行要有 6 段（key|group|level|parent|requires|说明）：%s" % (ln, line))
-        key, group, level, parent, req, desc = [x.strip() for x in p]
+        if len(p) != 8:
+            sys.exit("field_meta.txt 第 %d 行要有 8 段（key|group|level|parent|requires|title|desc|help）：%s" % (ln, line))
+        key, group, level, parent, req, title, desc, help_ = [x.strip() for x in p]
+        if not desc:
+            sys.exit("field_meta.txt 第 %d 行：desc 不能为空" % ln)
         if key in meta:
             sys.exit("field_meta.txt 第 %d 行：%s 重复" % (ln, key))
         if group not in GROUP_TITLE:
             sys.exit("field_meta.txt 第 %d 行：未知 group %s" % (ln, group))
         if level not in ("1", "2", "3"):
             sys.exit("field_meta.txt 第 %d 行：level 只能是 1/2/3" % ln)
-        meta[key] = {"group": group, "level": int(level), "parent": parent, "requires": req, "desc": desc}
+        meta[key] = {"group": group, "level": int(level), "parent": parent, "requires": req, "title": title, "desc": desc, "help": help_}
     return meta
 
 
@@ -122,12 +124,12 @@ def build():
     lines.append("    private ConfigSchema() {}")
     lines.append("")
     lines.append("    static final class F {")
-    lines.append("        final String key, type, def, group, parent, requires, desc;")
+    lines.append("        final String key, type, def, group, parent, requires, title, desc, help;")
     lines.append("        final boolean hasRange, parentInverse;")
     lines.append("        final long min, max;")
     lines.append("        final int level;")
     lines.append("")
-    lines.append("        F(String key, String type, String def, boolean hasRange, long min, long max, String group, int level, String parent, String requires, String desc) {")
+    lines.append("        F(String key, String type, String def, boolean hasRange, long min, long max, String group, int level, String parent, String requires, String title, String desc, String help) {")
     lines.append("            this.key = key;")
     lines.append("            this.type = type;")
     lines.append("            this.def = def;")
@@ -139,7 +141,9 @@ def build():
     lines.append("            this.parentInverse = parent.endsWith(\"!\");")
     lines.append("            this.parent = parent.endsWith(\"!\") ? parent.substring(0, parent.length() - 1) : parent;")
     lines.append("            this.requires = requires;")
+    lines.append("            this.title = title;")
     lines.append("            this.desc = desc;")
+    lines.append("            this.help = help;")
     lines.append("        }")
     lines.append("    }")
     lines.append("")
@@ -149,9 +153,9 @@ def build():
         f, m = fields[k], meta[k]
         t = {"boolean": "bool", "int": "int", "long": "long", "String": "string"}[f["type"]]
         has = "min" in f
-        lines.append("            new F(%s, %s, %s, %s, %dL, %dL, %s, %d, %s, %s, %s)," % (
+        lines.append("            new F(%s, %s, %s, %s, %dL, %dL, %s, %d, %s, %s, %s, %s, %s)," % (
             jstr(k), jstr(t), jstr(norm_def(f)), "true" if has else "false", f.get("min", 0), f.get("max", 0),
-            jstr(m["group"]), m["level"], jstr(m["parent"]), jstr(m["requires"]), jstr(m["desc"])))
+            jstr(m["group"]), m["level"], jstr(m["parent"]), jstr(m["requires"]), jstr(m["title"]), jstr(m["desc"]), jstr(m["help"])))
     lines.append("    };")
     lines.append("")
     lines.append("    static F get(String key) {")
