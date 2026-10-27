@@ -22,7 +22,7 @@
 | `icons` | 图标 / 按钮图片是谁设的 | `traceSet=false` `traceDraw=false` `traceColor=false` `autoParams=false` `traceSetOnly=false` `traceState=false` `traceIcons=true` |
 | `state` | 控件透明度 / 可见 / 选中是谁改的 | `traceSet=false` `traceDraw=false` `traceColor=false` `autoParams=false` `traceIcons=false` `traceSetOnly=false` `traceState=true` |
 | `trace` | 某个方法被谁调用、参数和返回值 | `traceSet=false` `traceDraw=false` `traceColor=false` `autoParams=false` `traceIcons=false` `traceSetOnly=false` `traceState=false` |
-| `statehook` | 找「判断状态」的钩子 / 谁改了某个字段 | `traceSet=false` `traceDraw=false` `traceColor=false` `autoParams=false` `traceIcons=false` `traceSetOnly=false` `traceState=false` `treeOn=true` `watchAuto=true` `annotOwners=true` `annotSweep=true` `annotFrames=true` |
+| `statehook` | 找「判断状态」的钩子 / 谁改了某个字段 | `traceSet=false` `traceDraw=false` `traceColor=false` `autoParams=false` `traceIcons=false` `traceSetOnly=false` `traceState=false` `treeOn=true` `watchAuto=true` `annotOwners=true` `annotSweep=true` `annotFrames=true` `excludeInfra=true` `quietCount=50` `quietSpanMs=3000` |
 | `viewtree` | 一块界面里有哪些控件、谁在谁里面 | `viewDump=true` `traceSet=true` `traceDraw=false` `traceColor=false` `autoParams=false` `traceIcons=false` `traceSetOnly=false` `traceState=false` |
 | `tap` | 不知道控件叫什么，只知道它在屏幕哪里 | `viewTap=true` `traceSet=true` `traceDraw=false` `traceColor=false` `autoParams=false` `traceIcons=false` `traceSetOnly=false` `traceState=false` `traceExclusive=false` |
 | `all` | 全部打开（最全，最卡） | `traceSet=true` `traceDraw=true` `traceColor=true` `autoParams=true` `traceIcons=true` `traceSetOnly=true` `traceState=true` `stackDepth=30` |
