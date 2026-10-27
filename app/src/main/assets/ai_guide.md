@@ -1,5 +1,6 @@
 # TextRec 使用说明（给 AI 读的）
 
+> **这是完整参考。如果你只需要写配置 / 任务清单，先读《写配置手册》（`ai_manual.md`，短得多，规则和示例都经过机器校验），需要查某个功能或字段时再回来翻这份。**
 > 你是被用户叫来帮他用 TextRec 的 AI。先读完「0. 硬规则」和「1. 这是什么」，再按「2. 用户想找什么 → 怎么配」查表。
 > 其余章节是查阅用的：功能清单（第 7 章）、配置字段（第 8 章）、记录页命令（第 9 章）。
 > 本文不依赖源码就能用；字段名和源码 `RecConfig.java` 的 public 字段名一致，以源码为准。
@@ -9,14 +10,14 @@
 ## 0. 硬规则（每次都要照做）
 
 1. **只要用户要研究的操作不止一个（两个及以上），就必须让他用任务浮窗，并且你必须同时给出任务清单。** 不要只给配置。任务清单是浮窗一步一步提示的依据，也是导出里「按任务阶段」分账的依据；没有它，记录里所有操作混在一起，分不清哪条属于哪个操作。
-2. **你的回复里必须有一整块「可直接粘贴」的文本**：采集配置（`key=value`）和任务清单（`名称|提示|秒数`）写在同一个代码块里，用户整块复制，粘贴进首页最上面的「粘贴配置和任务清单」框，点「回填并保存」或「打开浮窗」。不要拆成两次让用户分开粘贴。
+2. **你的回复里必须有一整块「可直接粘贴」的文本**：采集配置和任务清单写在同一个代码块里，用「块格式」（`[config]` / `[traceMethods]` / `[tasks]` 分段，见第 4 章末尾和《写配置手册》），用户整块复制，粘贴进首页「导入 / 导出」里的粘贴框，点「回填并保存」或「打开浮窗」。不要拆成两次让用户分开粘贴。
 3. 只有一个操作、且不需要分阶段时，才可以不要任务清单；这种情况要在回复里明说"这次只有一个操作，所以没写任务清单"。
 4. 提醒用户：**配置粘贴后只是回填表单，还没生效**，要点首页底部「应用并重新记录」（需要 root）。要记冷启动阶段的文字，必须强杀目标 App 再启动。
 5. 本模块**只读**，不会修改目标 App 的任何东西。要改颜色、隐藏元素，那是另一个模块的事；本模块只负责找出"该 hook 哪个方法"。
 6. 没在真机上验证过的功能要如实说，不要说成"肯定能用"。
-7. **配置里每个字段必须写在同一行**（一行 `key=value`）。多个关键字不能折成多行，否则后面几行会被当成任务清单：普通模式用逗号隔开（`keywords=福利,红包`），正则模式（`regex=true`）只能用转义的换行 `\n` 隔开（`keywords=\\d+小时前\n昨天`）。多行的 `traceMethods` 同理，用 `\n` 或行尾反斜杠续行。
-8. **不要留占位符**：配置里不能出现"你的地名"这类没替换的占位文字，不知道的内容就别写，改用全量模式（`keywordMode=false`）先抓一遍。
-9. **多行的列表型配置项（`traceMethods`、`keywords` 等）用行尾反斜杠续行时，续行是把下一行直接接在后面，不会补换行。** 每一条末尾必须先写 `\\n` 再写反斜杠（`类#方法 @count\\n\\`），或者整个配置项写在一行里用 `\\n` 隔开。模块 1.30.0 起会校验并指出这类错误，但你给出的文本最好一次就写对。
+7. **用块格式写，值里不要任何转义。** 一行一个 `key = 值` 写在 `[config]` 段；列表型的项（`traceMethods`、`keywords`、`watch`、`excludeList`、`threadFilter`、`pageFilter`、`viewFilter`、`valueFilter`、`viewDumpKey`、`dumpPrefixes`）各开一个 `[段名]`，**一行一项**；任务清单放 `[tasks]` 段。不要写 `\n`、不要写行尾反斜杠续行、正则不要双反斜杠。（旧的 Properties 写法仍然兼容，但转义容易写错，不要用。）
+8. **不要留占位符，也不要自己造名字。** 不知道的内容就别写。**类名、方法名只能从用户给你的导出记录里逐字复制**，绝不能凭印象写，也不能抄本文里的示例类名（`com.a.B` 之类，检查器会直接判错）；配置项名只能用字段表里有的。没有导出记录就先让用户抓一轮（`keywordMode=true` + 关键字，或 `preset=text`），拿到记录再写方法追踪。
+9. **收到 TextRec 的校验报告时，只改被点到的行，其余保持原样，然后把整块配置重新发一遍**（同一个代码块）。不要借机改别的地方，不要只发改动的几行。
 
 ---
 
@@ -64,8 +65,8 @@ TextRec 是一个 LSPosed 模块（需要 root），挂进目标 App（默认抖
 ## 3. 标准流程（告诉用户按这个走）
 
 1. 一次性准备：LSPosed 里启用模块，作用域勾目标 App；给 TextRec 授 root；浮窗要给「显示在其他应用上层」权限（首次点打开浮窗时会跳到设置）。
-2. 把你给的那一整块文本粘进首页最上面的框，点「回填并保存」。配置回填进下面的表单，任务清单存起来。
-3. 检查一遍表单，点首页底部「应用并重新记录」（推送配置 + 清空旧记录）。只想改设置不清记录，用流程卡片里的「只应用设置，不清空记录」。
+2. 把你给的那一整块文本粘进首页「导入 / 导出」里的框，点「回填并保存」。配置回填进下面的表单，任务清单存起来。
+3. 检查一遍表单，点首页底部「应用并重新记录」（推送配置 + 清空旧记录）。只想改设置不清记录，用首页「目标 App」卡片里的「只应用设置，不清空记录」。应用并强杀重开目标 App 后，可点首页「目标 App 实际生效的配置」里的读取按钮，确认配置真的生效、每个钩点有没有装上。
 4. **强杀目标 App 再启动**，切到要研究的界面，让视频已经在播。
 5. 回 TextRec 点「打开浮窗」（首页顶部，或粘贴框旁），浮窗停在「准备」；切回目标 App，点浮窗 ▶ 开始。
 6. 照浮窗提示一件一件做。每件事结束浮窗会自动检查有没有记录到，记到会变绿色「已记录完成 ✓」，点 ▶ 下一件。下一件要翻好几个界面，就点「⏸ 暂停记录」，翻到了再点「▶ 开始记录」。
@@ -107,23 +108,22 @@ TextRec 是一个 LSPosed 模块（需要 root），挂进目标 App（默认抖
 
 浮窗上有：✕ 关闭、↺ 重做（这一件重来，上一次作废）、◀ 上一件、▶ 提前结束 / 下一件。浮窗里**绿色面板是正在做的任务，灰蓝色面板是下一件**（提前准备用）。按住浮窗顶部文字可拖动。
 
-**一份完整的「可粘贴」回复长这样**（配置在前，任务清单在后，同一个块）：
-```
-keywordMode=true
-keywords=福利,红包
-traceSet=true
-traceDraw=true
-traceColor=true
-autoParams=false
-traceIcons=false
-traceSetOnly=false
-traceState=false
+**一份完整的「可粘贴」回复长这样**（块格式：配置、列表、任务清单各一段，同一个代码块；`preset` 先套一组预设，下面写的字段再覆盖它）：
+```textrec
+[config]
+preset = text
+keywordMode = true
 
+[keywords]
+福利
+红包
+
+[tasks]
 @基线|什么都不要操作，让视频正常播放|10
 划到下一个视频|向上划一次，等新视频开始播放||
 点进评论再返回|点评论图标，等评论出来，再按返回||
 ```
-程序按行区分：以 `英文标识符=` 开头的是配置行（行尾反斜杠表示续行），其余非空行是任务行。
+块格式的规则：第一个 `[段名]` 之前的行算 `[config]`；`[config]` 里一行一个 `key = 值`，`#` 开头是注释；列表段一行一项，`//` 开头是注释（`[keywords]` 段没有注释语法）；段名只能是 `config` `traceMethods` `keywords` `watch` `excludeList` `threadFilter` `pageFilter` `viewFilter` `valueFilter` `viewDumpKey` `dumpPrefixes` `tasks`（`任务清单` 也行）。程序对旧写法按行区分：以 `英文标识符=` 开头的是配置行（行尾反斜杠表示续行），其余非空行是任务行。
 
 ---
 
@@ -204,7 +204,7 @@ quietCount=50
 
 ## 7. 功能清单（每个功能做什么）
 
-### 7.1 采集（首页「记录哪些内容」）
+### 7.1 采集（首页「记录内容」分组）
 | 功能 | 配置字段 | 说明 |
 |---|---|---|
 | 总开关 | `enabled` | 关了目标 App 暂停记录 |
@@ -273,55 +273,198 @@ quietCount=50
 - 详情页：概览（含用途 / 触发原因、首次 / 最近时间、调用间隔、基线分账、当前标识、this 身份、钩点信息、栈上各层出现次数、状态快照、链路追踪）/ 设置栈 / 绘制栈 / hook 签名。
 
 ### 7.7 首页其他
-- 顶部：**粘贴配置和任务清单**（回填并保存 / 打开浮窗）。
+- 顶部：**我想找什么**（一键套预设）；其下「导入 / 导出」：**粘贴配置和任务清单**（回填并保存 / 打开浮窗 / 复制当前配置 / 复制手册）。
 - 「怎么用」三步卡片；「只应用设置，不清空记录」。
 - 目标 App 包名（多个用逗号分隔）；底部「查看记录」「应用并重新记录」。
 - 「高级」：抓栈参数、方法追踪、手写过滤条件，有「恢复默认参数」。
-- 「更多细分项」：每种记录各自的上限、栈深度、Compose 展开等。
+- 「记录容量与抓栈力度」分组：每种记录各自的上限、栈深度等；子项缩进放在各自的父开关下面。
 - 离开首页自动保存本地设置（不推送）。
 
 ---
 
-## 8. 采集配置字段速查（`key=value`，一行一个，`#` 开头是注释）
+## 8. 采集配置字段速查（块格式的 `[config]` 里一行一个 `key = 值`）
 
-没写的字段用默认值，**不是保持当前表单的值**；同一段配置粘贴几次结果一样。
+没写的字段用默认值，**不是保持当前表单的值**；同一段配置粘贴几次结果一样。下表由 `tools/gen_schema.py` 根据 `RecConfig.java` 和 `tools/field_meta.txt` 自动生成，不会和源码漂移；「父开关」指这个字段是某个总开关的子项，总开关关着时它写了也不起作用。
 
-| 字段 | 默认 | 含义 |
+<!-- GEN:fields-all -->
+
+**目标与总开关**
+
+| 字段 | 类型 | 默认 | 范围 | 说明 |
+|---|---|---|---|---|
+| `enabled` | true/false | `true` |  | 总开关；false = 目标 App 暂停记录 |
+
+**记录内容（文字 / 图标 / 状态）**
+
+| 字段 | 类型 | 默认 | 范围 | 说明 |
+|---|---|---|---|---|
+| `traceSet` | true/false | `true` |  | 记录「文字是谁 setText 的」（总开关） |
+| `traceDraw` | true/false | `true` |  | 记录「文字是谁画的」（总开关） |
+| `traceColor` | true/false | `true` |  | 记录文字颜色：画笔颜色和 setTextColor 位置（总开关） |
+| `traceIcons` | true/false | `false` |  | 记录 ImageView 图片和 contentDescription（找图标用，记录量大） |
+| `autoParams` | true/false | `true` |  | 自动观察 Compose 文字绘制参数（颜色、描边 / 填充） |
+| `traceSetOnly` | true/false | `false` |  | 也记「只被 setText、从未绘制」的文字（拖动才出现的文字） |
+| `traceState` | true/false | `false` |  | 记录 alpha / visibility / selected 的变化（总开关） |
+| `maxSetOnly` | 整数 | `500` | 10～5000 | 「没显示出来的文字」记录上限（父开关 `traceSetOnly` 关着时无效） |
+| `setText` | true/false | `true` |  | 子项：setText / append / setHint（父开关 `traceSet` 关着时无效） |
+| `setClear` | true/false | `true` |  | 子项：文字被清空（父开关 `traceSet` 关着时无效） |
+| `drawTextView` | true/false | `true` |  | 子项：TextView 的绘制（父开关 `traceDraw` 关着时无效） |
+| `drawCanvas` | true/false | `true` |  | 子项：自绘（非 Compose）的绘制（父开关 `traceDraw` 关着时无效） |
+| `drawCompose` | true/false | `true` |  | 子项：Compose 的绘制（父开关 `traceDraw` 关着时无效） |
+| `colorPaint` | true/false | `true` |  | 子项：画笔颜色（父开关 `traceColor` 关着时无效） |
+| `colorSet` | true/false | `true` |  | 子项：setTextColor 设置位置（父开关 `traceColor` 关着时无效） |
+| `iconImage` | true/false | `true` |  | 子项：ImageView 设置图片（父开关 `traceIcons` 关着时无效） |
+| `iconDesc` | true/false | `true` |  | 子项：setContentDescription（父开关 `traceIcons` 关着时无效） |
+| `stateAlpha` | true/false | `true` |  | 子项：透明度（父开关 `traceState` 关着时无效） |
+| `stateVisible` | true/false | `true` |  | 子项：可见性（父开关 `traceState` 关着时无效） |
+| `stateSelected` | true/false | `true` |  | 子项：选中态（父开关 `traceState` 关着时无效） |
+
+**记录范围（关键字）**
+
+| 字段 | 类型 | 默认 | 范围 | 说明 |
+|---|---|---|---|---|
+| `keywordMode` | true/false | `false` |  | true = 只记文字命中 keywords 的位置；false = 记全部文字（会拖慢目标 App） |
+| `keywords` | 文字 | 空 |  | 关键字列表；普通模式逗号或换行分隔，正则模式只能换行分隔（父开关 `keywordMode` 关着时无效） |
+| `regex` | true/false | `false` |  | keywords 按正则匹配（只在 keywordMode=true 时有效）（父开关 `keywordMode` 关着时无效） |
+
+**方法追踪**
+
+| 字段 | 类型 | 默认 | 范围 | 说明 |
+|---|---|---|---|---|
+| `traceMethods` | 文字 | 空 |  | 方法追踪清单；每行一个「类全名#方法名」，行尾可加 @选项 |
+| `traceDump` | true/false | `false` |  | 方法追踪时定期记录 this 周围的字段值（需要写了 `traceMethods`） |
+| `treeOn` | true/false | `true` |  | 方法追踪命中时把 this / 参数 / 返回值展开成数据树 |
+| `watch` | 文字 | 空 |  | 观察点清单；每行「类#方法:路径」，方法必须同时写在 traceMethods 里 |
+| `traceExclusive` | true/false | `true` |  | 填了方法追踪时，自动把文字 / 图标 / 颜色 / 状态记录当成关闭 |
+| `traceDumpEvery` | 整数 | `25` | 1～1000 | 字段快照：每隔几次调用记一份（父开关 `traceDump` 关着时无效） |
+| `traceDumpLines` | 整数 | `40` | 10～2000 | 字段快照：一份最多多少行（父开关 `traceDump` 关着时无效） |
+| `traceDumpDepth` | 整数 | `3` | 0～6 | 字段快照：往子对象里展开几层（父开关 `traceDump` 关着时无效） |
+| `annotFrames` | true/false | `true` |  | 调用栈每一帧标分层 / 角色 / 稳定度 |
+| `treeDepth` | 整数 | `4` | 1～8 | 数据树往下展开几层（父开关 `treeOn` 关着时无效） |
+| `treeNodes` | 整数 | `200` | 20～600 | 数据树一次最多多少节点（父开关 `treeOn` 关着时无效） |
+| `treeEvery` | 整数 | `10` | 1～100000 | 数据树每隔几次命中展开一次（父开关 `treeOn` 关着时无效） |
+| `treeViews` | true/false | `false` |  | 数据树也展开控件（View）自己的业务字段（父开关 `treeOn` 关着时无效） |
+| `watchAuto` | true/false | `true` |  | 自动把值变过的叶子加成观察点（父开关 `treeOn` 关着时无效） |
+| `annotOwners` | true/false | `true` |  | 方法追踪命中时反查「谁持有这个对象」 |
+| `annotSweep` | true/false | `true` |  | 任务开始 / 结束时扫「容器 → 数据实体」 |
+| `annotBudgetMs` | 整数 | `40` | 5～500 | 一次反查最多多少毫秒（父开关 `annotOwners` 关着时无效） |
+| `annotPerKey` | 整数 | `6` | 1～100 | 每个追踪方法前几次命中做反查（父开关 `annotOwners` 关着时无效） |
+| `traceStackDepth` | 整数 | `30` | 1～80 | 方法追踪保存的调用栈层数（需要写了 `traceMethods`） |
+
+**采集过滤**
+
+| 字段 | 类型 | 默认 | 范围 | 说明 |
+|---|---|---|---|---|
+| `windowMs` | 整数 | `0` | 0～600000 | 触发窗口：最近一次触摸后多少毫秒内才记；0 = 不限制（需要写了 `traceMethods`） |
+| `excludeList` | 文字 | 空 |  | 方法追踪排除名单；每行 类#方法 / 类#* / #方法 / 类名或包名前缀（需要写了 `traceMethods`） |
+| `valueFilter` | 文字 | 空 |  | 值匹配；参数或返回值包含其中任意一个值才记（需要写了 `traceMethods`） |
+| `excludeInfra` | true/false | `false` |  | 方法追踪排除 LiveData、Fragment 生命周期等通用基础设施（需要写了 `traceMethods`） |
+| `threadMode` | 整数 | `0` | 0～2 | 线程：0 全部，1 只主线程，2 只后台线程 |
+| `valueClock` | true/false | `false` |  | 方法追踪只记参数或返回值里带 00:00 这类时间的调用（需要写了 `traceMethods`） |
+| `quietCount` | 整数 | `0` | 0～10000000 | 压低高频方法：同一位置超过这个次数且持续一段时间后只计数；0 = 关（需要写了 `traceMethods`） |
+| `windowAll` | true/false | `false` |  | 触发窗口也管文字 / 图标 / 状态 / 绘制记录（默认只管方法追踪）（父开关 `windowMs` 关着时无效） |
+| `threadFilter` | 文字 | 空 |  | 线程名白名单；线程名包含其中任意一个词才记 |
+| `pageFilter` | 文字 | 空 |  | 页面白名单；页面标签包含其中任意一个词才记 |
+| `viewFilter` | 文字 | 空 |  | 控件白名单；View 类名或 id 包含其中任意一个词才记 |
+| `quietSpanMs` | 整数 | `3000` | 100～3600000 | 压低高频方法的持续时间（毫秒）（父开关 `quietCount` 关着时无效） |
+
+**视图树与点哪查哪**
+
+| 字段 | 类型 | 默认 | 范围 | 说明 |
+|---|---|---|---|---|
+| `viewDump` | true/false | `false` |  | 任务开始 / 结束 / 点标记时导出视图树 |
+| `viewTap` | true/false | `false` |  | 点哪查哪：点屏幕时列出这个点上所有控件 |
+| `viewDumpKey` | 文字 | `ScrollMentionTextView,MentionTextView` |  | 视图树以哪个控件为准（类名或 id 含的词，逗号分隔）（父开关 `viewDump` 关着时无效） |
+| `viewDumpUp` | 整数 | `5` | 0～12 | 从主角控件往上几层当容器（父开关 `viewDump` 关着时无效） |
+| `viewDumpDepth` | 整数 | `5` | 1～10 | 容器往下列几层（父开关 `viewDump` 关着时无效） |
+| `viewDumpLines` | 整数 | `400` | 50～3000 | 视图树一份最多多少行（父开关 `viewDump` 关着时无效） |
+| `viewDumpSet` | true/false | `true` |  | 视图树里的文字控件带「设置自」（父开关 `viewDump` 关着时无效） |
+
+**时间线与任务**
+
+| 字段 | 类型 | 默认 | 范围 | 说明 |
+|---|---|---|---|---|
+| `tlOn` | true/false | `true` |  | 时间线总开关 |
+| `recOutside` | true/false | `false` |  | 任务外也记录（单独一桶）；不写 = 只记任务内 |
+| `tlOps` | true/false | `true` |  | 时间线：记用户操作（父开关 `tlOn` 关着时无效） |
+| `tlSamples` | true/false | `true` |  | 时间线：记各位置的样本（父开关 `tlOn` 关着时无效） |
+| `tlTouch` | true/false | `true` |  | 时间线：触摸（父开关 `tlOps` 关着时无效） |
+| `tlKey` | true/false | `true` |  | 时间线：按键（父开关 `tlOps` 关着时无效） |
+| `tlPage` | true/false | `true` |  | 时间线：页面切换（父开关 `tlOn` 关着时无效） |
+| `tlViewTree` | true/false | `true` |  | 时间线：控件增删（父开关 `tlSamples` 关着时无效） |
+| `smpText` | true/false | `true` |  | 样本：setText / 清空（父开关 `tlSamples` 关着时无效） |
+| `smpState` | true/false | `true` |  | 样本：状态变化（父开关 `tlSamples` 关着时无效） |
+| `smpIcon` | true/false | `true` |  | 样本：图标（父开关 `tlSamples` 关着时无效） |
+| `smpTrace` | true/false | `true` |  | 样本：方法追踪调用（父开关 `tlSamples` 关着时无效） |
+| `tlClass` | true/false | `true` |  | 时间线：钩点可用（父开关 `tlOn` 关着时无效） |
+
+**链路追踪**
+
+| 字段 | 类型 | 默认 | 范围 | 说明 |
+|---|---|---|---|---|
+| `chainOn` | true/false | `false` |  | 链路追踪总开关（会拖慢目标 App，用完关掉）（需要写了 `traceMethods`） |
+| `chainCoroutine` | true/false | `true` |  | 链路上游：协程调度（父开关 `chainOn` 关着时无效） |
+| `chainAsync` | true/false | `true` |  | 链路上游：异步来源（Handler / 线程池）（父开关 `chainOn` 关着时无效） |
+| `chainEffects` | true/false | `true` |  | 链路下游：界面效果（父开关 `chainOn` 关着时无效） |
+| `chainDown` | true/false | `true` |  | 链路下游：被调用的方法（父开关 `chainOn` 关着时无效） |
+| `chainEvery` | 整数 | `20` | 1～100000 | 链路采样间隔（父开关 `chainOn` 关着时无效） |
+| `chainMaxDown` | 整数 | `120` | 10～1000 | 链里最多列多少个被调用的方法（父开关 `chainOn` 关着时无效） |
+
+**Compose**
+
+| 字段 | 类型 | 默认 | 范围 | 说明 |
+|---|---|---|---|---|
+| `traceCompose` | true/false | `true` |  | 观察 Compose 的 paint 参数 |
+| `composeObj` | true/false | `true` |  | Compose 记录带 MultiParagraph 对象身份（父开关 `traceCompose` 关着时无效） |
+| `composeDump` | true/false | `true` |  | Compose 记录展开对象字段（父开关 `traceCompose` 关着时无效） |
+| `composeDumpEvery` | 整数 | `50` | 1～100000 | Compose 字段展开的间隔（父开关 `composeDump` 关着时无效） |
+| `composeDumpLines` | 整数 | `60` | 5～300 | Compose 字段展开一份最多多少行（父开关 `composeDump` 关着时无效） |
+| `dumpPrefixes` | 文字 | `androidx.compose.ui.text.` |  | 字段展开额外放行的包 / 类名前缀（父开关 `composeDump` 关着时无效） |
+
+**记录容量与抓栈**
+
+| 字段 | 类型 | 默认 | 范围 | 说明 |
+|---|---|---|---|---|
+| `capTextView` | 整数 | `800` | 10～20000 | TextView 文字记录上限 |
+| `capCanvas` | 整数 | `300` | 10～20000 | 自绘文字记录上限 |
+| `capCompose` | 整数 | `400` | 10～20000 | Compose 文字记录上限 |
+| `capClear` | 整数 | `300` | 10～20000 | 文字清空记录上限 |
+| `capIcon` | 整数 | `300` | 10～20000 | 图标记录上限 |
+| `capState` | 整数 | `300` | 10～20000 | 状态变化记录上限 |
+| `capTrace` | 整数 | `600` | 10～20000 | 方法追踪记录上限 |
+| `depthSet` | 整数 | `0` | 0～60 | 设置栈深度；0 = 用 stackDepth |
+| `depthDraw` | 整数 | `0` | 0～60 | 绘制栈深度；0 = 用 stackDepth |
+| `depthColor` | 整数 | `0` | 0～60 | 颜色设置栈深度；0 = 用 stackDepth |
+| `depthIcon` | 整数 | `0` | 0～60 | 图标设置栈深度；0 = 用 stackDepth |
+| `depthState` | 整数 | `0` | 0～60 | 状态变化栈深度；0 = 用 stackDepth |
+| `splitFiles` | true/false | `true` |  | 分文件存；关掉 = 一个文件 + 总上限 maxRecords |
+| `stackDepth` | 整数 | `12` | 1～60 | 每条记录保存的调用栈层数 |
+| `perKeyStacks` | 整数 | `3` | 1～50 | 同一位置前几次抓栈 |
+| `sampleEvery` | 整数 | `200` | 10～100000 | 之后每隔多少次抽样抓一次 |
+| `stacksPerSec` | 整数 | `1000` | 1～5000 | 全局每秒最多抓栈次数 |
+| `maxRecords` | 整数 | `2000` | 10～20000 | 记录总上限（只在 splitFiles=false 时有效）（父开关 `splitFiles` 为 false 时才有效） |
+| `flushSec` | 整数 | `3` | 1～60 | 落盘节流（秒） |
+
+<!-- /GEN:fields-all -->
+
+预设（`preset=名字`，先展开成一组字段，再被你显式写的字段覆盖）：
+
+<!-- GEN:presets -->
+
+| 预设 | 用来找什么 | 展开成 |
 |---|---|---|
-| `enabled` | true | 总开关 |
-| `keywordMode` | false | true = 只记命中关键字的文字 |
-| `keywords` | 空 | 逗号或换行分隔 |
-| `regex` | false | 关键字按正则 |
-| `traceSet` `traceDraw` `traceColor` `traceIcons` `autoParams` `traceSetOnly` `traceState` | true / true / true / false / true / false / false | 见 7.1 |
-| `traceExclusive` | true | 填了方法追踪时自动关其他记录 |
-| `traceOnly` | — | 已废弃，写了也忽略 |
-| `maxSetOnly` | 500 | 「没显示的文字」上限（10~5000） |
-| `traceMethods` | 空 | 方法追踪清单，见第 5 章（多行用 `\n` 或续行写进 Properties） |
-| `traceStackDepth` | 30 | 方法追踪栈层数 |
-| `traceDump` `traceDumpEvery` | false / 25 | 记录 this 周围的字段值和第一个数值参数的 last / min / max |
-| `traceDumpLines` `traceDumpDepth` | 40 / 3 | 字段快照一份最多多少行（10~2000）、往子对象里展开几层（0~6，0 = 只列对象自己的数值和文字字段）。找某个对象有哪些字段时用 `2000`/`0`，用完调回默认，否则导出文件很大 |
-| `viewDump` `viewDumpKey` `viewDumpUp` `viewDumpDepth` `viewDumpLines` | false / `ScrollMentionTextView,MentionTextView` / 5 / 5 / 400 | 视图树导出（1.27.0）：开关；以哪个控件为准（类名或 id 含词，逗号分隔）；往上几层当容器（0~12，1.28.0 起默认 5）；往下列几层（1~10）；最多几行（50~3000） |
-| `viewDumpSet` `viewTap` | true / false | 视图树里文字控件带「设置自」；点哪查哪（点屏幕列出这个点上所有控件）。1.28.0 |
-| `annotFrames` `annotOwners` `annotSweep` `annotBudgetMs` `annotPerKey` | true / true / true / 40 / 6 | 标注（1.29.0）：调用栈每帧标分层·角色·稳定度并标入口帧 / 推荐钩点；方法追踪命中时反查 this / 参数被谁持有；任务开始 / 结束扫「容器 → 数据实体」；一次反查最多多少毫秒（5~500）；每个追踪方法前几次命中做反查（1~100） |
-| `treeOn` `treeDepth` `treeNodes` `treeEvery` `watchAuto` | true / 4 / 200 / 10 / true | 数据树（1.31.0）：方法追踪命中时把 this / 参数 / 返回值沿字段展开成树并记每个节点在每个任务里的值；展开几层（1~8）；一次最多多少节点（20~600）；每隔几次命中展开一次（1~100000，每个方法前 3 次必展开）；自动把值变过的叶子加成观察点（最多 24 个） |
-| `treeViews` | false | 1.32.1。数据树也展开控件（View）自己的业务字段；`this` 是控件时也展开。想看 `LongPressLayout` 这类自定义控件里记了什么状态就开，建议同时 `treeNodes=600`。控件里的别的控件只记一行 |
-| `watch` | 空 | 观察点，每行「类#方法:路径」，路径照导出里「数据树」抄（如 `com.a.B#foo:arg0.mAweme.userDigg`）；该方法必须同时写在 traceMethods 里；多行用 `\\n` 隔开。每次任何被追踪方法进入 / 返回时读一遍，变了就记下是哪个方法执行期间改的 |
-| `windowMs` `windowAll` | 0 / false | 触发窗口 |
-| `excludeInfra` `threadMode` `valueClock` | false / 0 / false | 见 7.2 |
-| `excludeList` `threadFilter` `pageFilter` `viewFilter` `valueFilter` | 空 | 见 7.2 |
-| `quietCount` `quietSpanMs` | 0 / 3000 | 降频 |
-| `stackDepth` `perKeyStacks` `sampleEvery` `stacksPerSec` | 12 / 3 / 200 / 1000 | 抓栈参数 |
-| `maxRecords` `flushSec` | 2000 / 3 | 记录总上限（仅关掉分文件时有效）/ 落盘节流 |
-| `splitFiles` | true | 分文件存 |
-| `capTextView` `capCanvas` `capCompose` `capClear` `capIcon` `capState` `capTrace` | 800 / 300 / 400 / 300 / 300 / 300 / 600 | 每种记录的上限 |
-| `depthSet` `depthDraw` `depthColor` `depthIcon` `depthState` | 0 | 每种栈的深度，0 = 用 `stackDepth` |
-| `chainOn` `chainAsync` `chainEffects` `chainDown` `chainEvery` `chainMaxDown` `chainCoroutine` | false / true / true / true / 20 / 120 / true | 链路追踪 |
-| `tlOn` `tlOps` `tlSamples` `tlTouch` `tlKey` `tlPage` `tlViewTree` `tlClass` | true | 时间线 |
-| `smpText` `smpState` `smpIcon` `smpTrace` | true | 样本 |
-| `recOutside` | false | 任务外也记录 |
-| `traceCompose` `composeObj` `composeDump` `composeDumpEvery` `composeDumpLines` `dumpPrefixes` | true / true / true / 50 / 60 / `androidx.compose.ui.text.` | Compose 展开 |
+| `text` | 文字是谁设置 / 谁画的 / 什么颜色 | `traceSet=true` `traceDraw=true` `traceColor=true` `autoParams=true` `traceIcons=false` `traceSetOnly=false` `traceState=false` `stackDepth=12` |
+| `icons` | 图标 / 按钮图片是谁设的 | `traceSet=false` `traceDraw=false` `traceColor=false` `autoParams=false` `traceSetOnly=false` `traceState=false` `traceIcons=true` |
+| `state` | 控件透明度 / 可见 / 选中是谁改的 | `traceSet=false` `traceDraw=false` `traceColor=false` `autoParams=false` `traceIcons=false` `traceSetOnly=false` `traceState=true` |
+| `trace` | 某个方法被谁调用、参数和返回值 | `traceSet=false` `traceDraw=false` `traceColor=false` `autoParams=false` `traceIcons=false` `traceSetOnly=false` `traceState=false` |
+| `statehook` | 找「判断状态」的钩子 / 谁改了某个字段 | `traceSet=false` `traceDraw=false` `traceColor=false` `autoParams=false` `traceIcons=false` `traceSetOnly=false` `traceState=false` `treeOn=true` `watchAuto=true` `annotOwners=true` `annotSweep=true` `annotFrames=true` |
+| `viewtree` | 一块界面里有哪些控件、谁在谁里面 | `viewDump=true` `traceSet=true` `traceDraw=false` `traceColor=false` `autoParams=false` `traceIcons=false` `traceSetOnly=false` `traceState=false` |
+| `tap` | 不知道控件叫什么，只知道它在屏幕哪里 | `viewTap=true` `traceSet=true` `traceDraw=false` `traceColor=false` `autoParams=false` `traceIcons=false` `traceSetOnly=false` `traceState=false` `traceExclusive=false` |
+| `all` | 全部打开（最全，最卡） | `traceSet=true` `traceDraw=true` `traceColor=true` `autoParams=true` `traceIcons=true` `traceSetOnly=true` `traceState=true` `stackDepth=30` |
+| `hook` | 找钩子（最窄） | `windowMs=1500` `windowAll=false` `excludeInfra=true` `threadMode=0` `valueClock=false` `quietCount=50` `quietSpanMs=3000` |
+| `nofilter` | 关掉全部过滤 | `windowMs=0` `windowAll=false` `excludeInfra=false` `threadMode=0` `valueClock=false` `quietCount=0` `threadFilter=` `pageFilter=` `viewFilter=` `excludeList=` `valueFilter=` |
 
-> 字段以 `RecConfig.java` 为准；上表是常用字段，没列到的字段在源码里都有注释。
+<!-- /GEN:presets -->
 
 ---
 
