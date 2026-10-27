@@ -214,6 +214,11 @@ final class Store {
             if (d == null) return;
             d.mkdirs();
             String safe = proc.replaceAll("[^A-Za-z0-9_.-]", "_");
+            String st = statusText;
+            if (statusDirty && st != null) {
+                statusDirty = false;
+                writeFile(d, "status-" + safe + ".txt", st);
+            }
             RecConfig c = conf;
             Snapped sn = snapRecords();
             if (!c.splitFiles) {
@@ -273,12 +278,17 @@ final class Store {
         }
     }
 
-    /** 本进程的状态文件（实际生效的配置 + 方法追踪安装结果），模块首页用 root 回读。只在配置重载 / 安装结果变化时写，不轮询。 */
-    void writeStatus(String content) {
-        File d = dir;
-        if (d == null) return;
-        d.mkdirs();
-        writeFile(d, "status-" + proc.replaceAll("[^A-Za-z0-9_.-]", "_") + ".txt", content);
+    private volatile String statusText;
+    private volatile boolean statusDirty;
+
+    /**
+     * 本进程的状态（实际生效的配置 + 方法追踪安装结果），模块首页用 root 回读。
+     * 不在调用线程（可能是目标 App 的类加载回调）上写盘，只记下内容并标脏，随下一次节流落盘一起写（最多晚 flushSec 秒）。
+     */
+    void setStatus(String content) {
+        statusText = content;
+        statusDirty = true;
+        markDirty();
     }
 
     String procName() {
