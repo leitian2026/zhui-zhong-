@@ -60,8 +60,9 @@ final class Presets {
                     "只记方法追踪：文字 / 图标 / 颜色 / 状态记录全关；方法清单写在 traceMethods。",
                     CONTENT_OFF),
             new P("statehook", "scene", "找「判断状态」的钩子 / 谁改了某个字段",
-                    "方法追踪 + 数据树 + 观察点 + 对象归属；任务清单要写成「对照 / 做这件事 / 做反向的事」。",
-                    cat(CONTENT_OFF, "treeOn=true", "watchAuto=true", "annotOwners=true", "annotSweep=true", "annotFrames=true")),
+                    "方法追踪 + 数据树 + 观察点 + 对象归属，并排除通用基础设施、压低高频方法；任务清单要写成「对照 / 做这件事 / 做反向的事」。",
+                    cat(CONTENT_OFF, "treeOn=true", "watchAuto=true", "annotOwners=true", "annotSweep=true", "annotFrames=true",
+                            "excludeInfra=true", "quietCount=50", "quietSpanMs=3000")),
             new P("viewtree", "scene", "一块界面里有哪些控件、谁在谁里面",
                     "任务开始 / 结束 / 点标记时各抓一份视图树；用 viewDumpKey 指定以哪个控件为准。",
                     "viewDump=true", "traceSet=true", "traceDraw=false", "traceColor=false", "autoParams=false",
@@ -161,6 +162,19 @@ final class Presets {
             }
         }
         return true;
+    }
+
+    /**
+     * 当前配置最贴近的预设：在 kind 这一类里，满足全部字段的预设中字段最多（最具体）的那个，没有返回 null。
+     * 例：只设了「文字全关」时匹配 trace；statehook 比 trace 多设了几项，配置满足 statehook 时选 statehook 而不是 trace。
+     */
+    static P best(RecConfig c, String kind) {
+        P hit = null;
+        for (P p : ALL) {
+            if (!p.kind.equals(kind) || !matches(c, p.name)) continue;
+            if (hit == null || p.kv.length > hit.kv.length) hit = p;
+        }
+        return hit;
     }
 
     /** 给文档用的预设表（Markdown）。 */
