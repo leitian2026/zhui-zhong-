@@ -144,6 +144,21 @@ final class RootShell {
         return run(script, 60);
     }
 
+    /** 读取目标 App 每个进程回写的状态文件（status-进程名.txt：实际生效的配置 + 方法追踪安装结果）。每个文件前有一行 "__FILE__ 路径"。 */
+    static Result pullStatus(String pkg) {
+        String script = findDirs(pkg)
+                + "for D in $DIRS; do\n"
+                + "for f in $D/files/textrec/status-*.txt; do\n"
+                + "[ -f \"$f\" ] || continue\n"
+                + "echo \"__FILE__ $f\"\n"
+                + "cat \"$f\"\n"
+                + "echo\n"
+                + "done\n"
+                + "done\n"
+                + "true\n";
+        return run(script, 30);
+    }
+
     /** 给目标进程发一条标记（时间线 / 基线用）：往 markers.log 追加一行「序号|发送时刻|内容」；目标进程读走新增的行。 */
     static Result pushMarker(String pkg, long seq, String label) {
         StringBuilder lb = new StringBuilder();
