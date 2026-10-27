@@ -269,31 +269,7 @@ public final class RecConfig {
      * 配置段为空 = 这次没带配置，界面开关保持不动；任务段为空 = 没带任务清单，保留原来存的清单。
      */
     public static String[] splitPaste(String text) {
-        StringBuilder cfg = new StringBuilder(), tasks = new StringBuilder();
-        boolean forceTasks = false, cont = false;
-        if (text == null) text = "";
-        for (String line : text.split("\\r?\\n")) {
-            String t = line.trim();
-            if (cont) { // 上一条配置行以反斜杠结尾，这一行是它的续行
-                cfg.append(line).append('\n');
-                cont = endsWithOddBackslash(line);
-                continue;
-            }
-            if (t.equalsIgnoreCase("[tasks]") || t.equals("[任务清单]")) {
-                forceTasks = true;
-                continue;
-            }
-            if (t.isEmpty()) continue;
-            if (!forceTasks && t.matches("^[A-Za-z_][A-Za-z0-9_]*\\s*[=:].*") && !t.startsWith("//")) {
-                cfg.append(line).append('\n');
-                cont = endsWithOddBackslash(line);
-            } else if (t.startsWith("#") && !forceTasks) {
-                cfg.append(line).append('\n'); // Properties 注释
-            } else {
-                tasks.append(line).append('\n');
-            }
-        }
-        return new String[]{cfg.toString(), tasks.toString()};
+        return PasteBlocks.split(text);
     }
 
     private static boolean endsWithOddBackslash(String s) {
