@@ -297,6 +297,7 @@ public class RecordsActivity extends Activity {
             final List<Snap.Item> items = new ArrayList<>();
             final List<String> infos = new ArrayList<>();
             Snap.resetExtras();
+            java.util.Set<String> freshNames = new java.util.HashSet<>(); // 顺手学类名：方法追踪的类名查表用，不需要再拉一遍快照
             for (String pkg : pkgs) {
                 if (!RootShell.validPkg(pkg)) {
                     infos.add(pkg + "：包名格式不对");
@@ -312,6 +313,7 @@ public class RecordsActivity extends Activity {
                     continue;
                 }
                 List<String> sub = new ArrayList<>();
+                freshNames.addAll(KnownNames.extract(r.out));
                 List<Snap.Item> got = Snap.parse(r.out, sub);
                 if (got.isEmpty() && sub.isEmpty()) {
                     infos.add(pkg + "：还没有记录（确认已在 LSPosed 启用并勾选作用域、已推送配置、强杀后冷启动过目标 App）");
@@ -319,6 +321,7 @@ public class RecordsActivity extends Activity {
                 for (String s : sub) infos.add(pkg + "  " + s);
                 items.addAll(got);
             }
+            if (!freshNames.isEmpty()) KnownNames.learn(new java.io.File(getFilesDir(), "known_classes.txt"), freshNames);
             final StringBuilder ib = new StringBuilder();
             for (String s : infos) ib.append(s).append('\n');
             runOnUiThread(() -> {
