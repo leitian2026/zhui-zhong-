@@ -138,7 +138,7 @@ final class PasteBlocks {
             if (hm.matches()) {
                 String canon = sectionOf(hm.group(1));
                 if (canon == null) {
-                    String near = ConfigCheck.nearest(hm.group(1).trim(), sectionNames());
+                    String near = CheckText.nearest(hm.group(1).trim(), sectionNames());
                     out.msgs.add(new Msg(no, true, "不认识的段名 `" + t + "`，这一段的内容全部被忽略。可用的段名：" + joinNames()
                             + (near != null ? "。你是不是想写 `[" + near + "]`？" : "")));
                     unknownSection = true;
