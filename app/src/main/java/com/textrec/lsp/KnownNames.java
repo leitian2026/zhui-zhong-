@@ -13,17 +13,22 @@ final class KnownNames {
     private KnownNames() {}
 
     private static final Pattern CLS = Pattern.compile("[A-Za-z_$][A-Za-z0-9_$]*(?:\\.[A-Za-z_$][A-Za-z0-9_$]*){2,}");
-    static final int MAX = 60000;
+    static final int MAX = 100000;
 
+    /**
+     * 提取类全名。调用栈里的帧是「类全名.方法名(文件:行号)」，正则会把最后的方法名一起吃进去，
+     * 所以每个匹配到的名字同时登记「去掉最后一段」的前缀（它才是类名）；钩点签名「类#方法」不受影响。
+     */
     static Set<String> extract(String text) {
         HashSet<String> out = new HashSet<>();
         if (text == null) return out;
         Matcher m = CLS.matcher(text);
         while (m.find() && out.size() < MAX) {
             String s = m.group();
-            // 去掉明显是文件名 / 域名的结尾
             if (s.endsWith(".java") || s.endsWith(".kt") || s.endsWith(".json") || s.endsWith(".png")) continue;
             out.add(s);
+            int dot = s.lastIndexOf('.');
+            if (dot > 0 && s.substring(0, dot).split("\\.").length >= 3) out.add(s.substring(0, dot)); // 帧里的「类.方法」→ 类
         }
         return out;
     }
