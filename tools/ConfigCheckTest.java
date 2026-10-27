@@ -53,6 +53,8 @@ public class ConfigCheckTest {
         blockFormatTests();
         roundTripTests();
         statusTests();
+        regressionTests();
+        formModelTests();
         boolean fix = false;
         for (String f : args) if (f.equals("--fix")) fix = true;
         for (String f : args) if (!f.equals("--fix")) docTests(f, fix);
@@ -222,11 +224,99 @@ public class ConfigCheckTest {
         java.util.Set<String> kn = KnownNames.extract("at com.ss.android.ugc.aweme.feed.X0.a.b(Foo.java:12) 以及 java.lang.String");
         ok(kn.contains("com.ss.android.ugc.aweme.feed.X0.a.b") || kn.contains("com.ss.android.ugc.aweme.feed.X0.a"), "类名提取：" + kn);
         // 类名查表：已知类集合非空时，没见过的类给警告；见过的不警告
-        ConfigCheck.knownClasses = new java.util.HashSet<>(java.util.Arrays.asList("com.q.Real"));
-        expect("类名查表", "traceMethods=com.q.Made#foo\n", false, "没有在已有记录");
-        List<ConfigCheck.Issue> okl = run("traceMethods=com.q.Real#foo\n");
-        ok(!has(okl, false, "没有在已有记录"), "见过的类不应警告");
-        ConfigCheck.knownClasses = null;
+        ConfigCheck.Options o = new ConfigCheck.Options().known(new java.util.HashSet<>(java.util.Arrays.asList("com.q.Real")));
+        List<ConfigCheck.Issue> l1 = ConfigCheck.checkPaste("traceMethods=com.q.Made#foo\n", o);
+        ok(has(l1, false, "没有在已有记录"), "没见过的类应警告：\n" + ConfigCheck.format(l1));
+        List<ConfigCheck.Issue> l2 = ConfigCheck.checkPaste("traceMethods=com.q.Real#foo\n", o);
+        ok(!has(l2, false, "没有在已有记录"), "见过的类不应警告");
+        // 回归：调用栈里的帧是「类.方法(文件:行号)」，类名必须能从帧里提取出来
+        java.util.Set<String> fromFrame = KnownNames.extract("at com.q.deep.Real.doIt(Real.java:42)\nat com.q.deep.Real$Inner.run(Real.java:50)");
+        ok(fromFrame.contains("com.q.deep.Real") && fromFrame.contains("com.q.deep.Real$Inner"), "从栈帧提取类名：" + fromFrame);
+        List<ConfigCheck.Issue> l3 = ConfigCheck.checkPaste("traceMethods=com.q.deep.Real#doIt\n", new ConfigCheck.Options().known(fromFrame));
+        ok(!has(l3, false, "没有在已有记录"), "从栈帧学到的类不应被误报：\n" + ConfigCheck.format(l3));
+    }
+
+    // 回归：任务清单在别处已有时，不该报「没有任务清单」；常见示例包名只警告不判错；预设只亮最贴近的一个
+    static void regressionTests() {
+        RecConfig c = new RecConfig();
+        c.viewDump = true;
+        c.traceMethods = "com.q.Real#foo @seq";
+        ok(has(ConfigCheck.checkForm(c, "", new ConfigCheck.Options()), false, "没有任务清单"), "没有任务清单时应提醒");
+        ok(!has(ConfigCheck.checkForm(c, "", new ConfigCheck.Options().tasksElsewhere(true)), false, "没有任务清单"), "任务清单在别处已有时不应提醒");
+        ok(!has(ConfigCheck.checkPaste("[config]\nviewDump = true\n", new ConfigCheck.Options().tasksElsewhere(true)), false, "没有任务清单"), "粘贴路径同样");
+        List<ConfigCheck.Issue> ex = run("traceMethods=com.example.app.Main#foo\n");
+        ok(!ConfigCheck.hasError(ex) && has(ex, false, "示例包名"), "com.example 应只警告：\n" + ConfigCheck.format(ex));
+        expect("com.demo 仍判错", "traceMethods=com.demo.A#foo\n", true, "占位类名");
+        RecConfig t = new RecConfig();
+        Presets.applyTo(t, "trace");
+        ok(Presets.best(t, "scene") != null && Presets.best(t, "scene").name.equals("trace"), "只选 trace 时最贴近的应是 trace");
+        Presets.applyTo(t, "statehook");
+        ok(Presets.best(t, "scene").name.equals("statehook"), "选了 statehook 时最贴近的应是 statehook");
+        RecConfig t2 = new RecConfig();
+        Presets.applyTo(t2, "trace");
+        ok(!Presets.matches(t2, "statehook"), "trace 不应同时匹配 statehook");
+    }
+
+    // ------------------------------------------------------------ 首页表单 <-> 配置
+
+    static void formModelTests() {
+        // 假设首页对所有「非内部、非分段控件」的字段都有控件；keywordMode / threadMode 是分段控件，单独传
+        java.util.LinkedHashSet<String> widgets = new java.util.LinkedHashSet<>();
+        for (ConfigSchema.F f : ConfigSchema.ALL) {
+            if (f.group.equals("internal") || f.key.equals("keywordMode") || f.key.equals("threadMode")) continue;
+            widgets.add(f.key);
+        }
+        RecConfig c = new RecConfig();
+        c.traceMethods = "com.x.Y#foo @seq\ncom.x.Z#bar";
+        c.keywords = "福利\n\\d+";
+        c.regex = true;
+        c.keywordMode = true;
+        c.threadMode = 2;
+        c.windowMs = 2000;
+        c.quietCount = 200;
+        c.flushSec = 5;
+        c.treeViews = true;
+        c.capTrace = 123;
+        c.epoch = 77;
+        RecConfig base = new RecConfig();
+        java.util.Map<String, String> vals = FormModel.toValues(c, widgets);
+        RecConfig back = FormModel.read(base, vals, c.keywordMode, c.threadMode, c.epoch);
+        ok(back.toText().replaceAll("(?m)^#.*\\n", "").equals(c.toText().replaceAll("(?m)^#.*\\n", "")), "写进控件再读出来应是同一份配置");
+        ok(back.windowMs == 2000 && back.quietCount == 200 && back.flushSec == 5, "windowMs / quietCount / flushSec 不应被重置");
+        // 没有控件的字段保持 base 里的值
+        RecConfig b2 = new RecConfig();
+        b2.flushSec = 9;
+        java.util.Map<String, String> v2 = new java.util.LinkedHashMap<>(vals);
+        v2.remove("flushSec");
+        ok(FormModel.read(b2, v2, true, 0, 1).flushSec == 9, "没有控件的字段应保持原值");
+        // 钳制和坏值
+        java.util.Map<String, String> v3 = new java.util.LinkedHashMap<>();
+        v3.put("stackDepth", "9999");
+        v3.put("windowMs", "abc");
+        v3.put("viewDumpKey", "  ");
+        RecConfig r3 = FormModel.read(new RecConfig(), v3, false, 7, 1);
+        ConfigSchema.F sd = ConfigSchema.get("stackDepth");
+        ok(r3.stackDepth == sd.max, "超范围应钳制到上限：" + r3.stackDepth);
+        ok(r3.windowMs == new RecConfig().windowMs, "非数字应保持原值");
+        ok(r3.viewDumpKey.equals(new RecConfig().viewDumpKey), "viewDumpKey 空白应回退默认值");
+        ok(r3.threadMode == 2, "threadMode 应钳制到 0～2");
+        // 每个字段都能走一遍「写进控件 / 读出」而不丢
+        for (ConfigSchema.F f : ConfigSchema.ALL) {
+            if (!widgets.contains(f.key)) continue;
+            java.util.Map<String, String> one = FormModel.toValues(new RecConfig(), widgets);
+            ok(one.containsKey(f.key), "字段 " + f.key + " 应有控件值");
+        }
+        // 已改项计数
+        RecConfig ch = new RecConfig();
+        ch.windowMs = 1500;
+        ch.traceMethods = "com.x.Y#foo";
+        ch.stackDepth = 20;
+        java.util.Map<String, Integer> n = FormModel.changedCounts(ch);
+        ok(n.get("filter") != null && n.get("filter") == 1 && n.get("trace") != null && n.get("trace") == 1 && n.get("limits") != null && n.get("limits") == 1, "已改项计数：" + n);
+        ok(FormModel.changedCounts(new RecConfig()).isEmpty(), "默认配置没有已改项");
+        // 变灰规则
+        ok(FormModel.dead(ConfigSchema.get("setText"), false) && !FormModel.dead(ConfigSchema.get("setText"), true), "子项变灰：父开关关着时灰");
+        ok(FormModel.dead(ConfigSchema.get("maxRecords"), true) && !FormModel.dead(ConfigSchema.get("maxRecords"), false), "maxRecords：splitFiles 开着时灰");
     }
 
     // ------------------------------------------------------------ 文档里的示例
@@ -255,9 +345,10 @@ public class ConfigCheckTest {
             String where = file + " 第 " + startLine + " 行起的示例";
             if (kind.equals("textrec")) {
                 good++;
-                ConfigCheck.allowExampleClasses = true; // 文档里的示例用 com.demo.* 这类示例类名；检查真实配置时它们会被判错
-                clean(where, body);
-                ConfigCheck.allowExampleClasses = false;
+                ConfigCheck.Options o = new ConfigCheck.Options();
+                o.allowExampleClasses = true; // 文档里的示例用 com.demo.* 这类示例类名；检查真实配置时它们会被判错
+                List<ConfigCheck.Issue> l = ConfigCheck.checkPaste(body, o);
+                ok(l.isEmpty(), where + "：应该没有任何问题，实际：\n" + ConfigCheck.format(l));
             } else {
                 bad++;
                 Matcher em = Pattern.compile("^#\\s*expect(-warn)?:\\s*(.+)$", Pattern.MULTILINE).matcher(body);
