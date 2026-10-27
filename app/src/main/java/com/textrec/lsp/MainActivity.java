@@ -45,65 +45,14 @@ public class MainActivity extends Activity {
     private RecConfig cur = new RecConfig();
     private boolean loading;
     private String lastWarnSig = "";
+    /** 已有记录里出现过的类名（记录页读取时学到），给方法追踪的类名查表用。 */
+    private volatile java.util.Set<String> knownClasses;
     private android.text.TextWatcher tw;
 
     private static final String[] SCENE = {"text", "icons", "state", "all", "trace", "statehook", "viewtree", "tap"};
     private static final String[] SCENE_LABEL = {"文字", "图标", "状态", "全部", "方法追踪", "状态钩子", "视图树", "点哪查哪"};
     private static final String[] SCENE_GROUP = {"content", "content", "content", "content", "trace", "trace", "view", "view"};
     private static final HashSet<String> MULTI = new HashSet<>(java.util.Arrays.asList("traceMethods", "watch", "excludeList", "keywords", "dumpPrefixes", "valueFilter"));
-
-    // 首页上手写了人话说明的项：key, 标题, 说明。没有的项用 field_meta.txt 里的一句话说明。
-    private static final String[][] RICH = {
-            {"enabled", "启用记录", "关闭后目标 App 暂停记录，不会再产生新的记录"},
-            {"traceSet", "文字是谁设置的", "记下每段文字由哪行代码 setText 出来（最常用）"},
-            {"traceDraw", "文字是谁画的", "记下每段文字由哪行代码画到屏幕上；自绘和 Compose 的文字只能靠它"},
-            {"traceColor", "文字颜色", "记下画笔颜色，以及谁调用了 setTextColor"},
-            {"autoParams", "Compose 文字参数", "自动抓取 Compose 文字的颜色、描边 / 填充（如弹幕的黑边 + 白字）"},
-            {"traceIcons", "图标和按钮图片", "记下 ImageView 设置的图片和内容描述，用来找图标按钮；记录量会明显增加"},
-            {"traceSetOnly", "没显示出来的文字", "也记下只被设置、从未画出的文字，如拖动进度条才出现的时长"},
-            {"traceState", "状态变化", "记下透明度 / 可见性 / 选中态的变化，研究“选中”效果怎么实现的。默认只记已经记过文字或图标的控件；在「采集过滤」里填了「控件包含」，匹配的任何控件都记"},
-            {"traceCompose", "Compose 文字绘制", "钩 MultiParagraph.paint*（颜色 / 描边 / 填充），Compose 才有"},
-            {"composeObj", "Compose：记对象身份", "每条 Compose 记录记下 MultiParagraph 对象的身份哈希（看是同一个对象反复画还是每次新建）"},
-            {"composeDump", "Compose：展开对象字段", "每条 Compose 记录展开一次 MultiParagraph 的字段（含文字）"},
-            {"dumpPrefixes", "额外放行的类", "字段展开默认只进 App 自己的类。这里的包名 / 类名前缀也会进，逗号或换行分隔"},
-            {"traceExclusive", "方法追踪时只记方法追踪", "默认开：填了要追踪的方法时，文字 / 图标 / 颜色 / 状态 / 绘制这些记录开关在目标 App 里自动当成关闭（界面上的开关不会被改，方法清单清空后恢复），记录里只剩方法追踪，更干净。想一起记就关掉它"},
-            {"windowMs", "触发窗口（毫秒）", "只记最近一次触摸之后这段时间内发生的调用；0 = 不限。常用 1500 / 3000 / 5000。适合“做一次操作看一组记录”，后台刷新基本都被挡掉。方法追踪默认受它管"},
-            {"windowAll", "触发窗口也用于文字 / 图标 / 状态", "默认只管方法追踪；打开后文字、颜色、图标、状态变化、绘制记录也只在触摸后的窗口内记"},
-            {"excludeInfra", "排除通用基础设施", "不记 LiveData、Fragment 生命周期、字节的异步包装等几乎所有功能都会经过的类（只对方法追踪生效）"},
-            {"valueClock", "只记带时间的调用", "方法追踪只记参数或返回值里带 00:00 这类时间的调用，找视频时长用"},
-            {"quietCount", "压低高频方法（次数）", "同一位置调用超过这个次数且持续一段时间后只计数、不再抓栈，进度条刷新之类就不会淹没记录；0 = 关，常用 50（只对方法追踪生效）"},
-            {"threadFilter", "线程名包含", "线程名包含其中任意一个词才记，逗号或换行分隔，如 LegoHandler"},
-            {"pageFilter", "页面包含", "页面标签（如 MainActivity > FeedItemFragment）包含其中任意一个词才记，不区分大小写"},
-            {"viewFilter", "控件包含", "只对文字 / 图标 / 状态 / 绘制记录生效：View 类名或 id 包含其中任意一个词才记。自绘和 Compose 没有 View，填了就不记"},
-            {"excludeList", "额外排除", "只对方法追踪生效，每行一项：类#方法、类#*（整个类）、#方法（任何类里的这个方法）、或类名 / 包名前缀"},
-            {"valueFilter", "额外值匹配", "只对方法追踪生效：参数或返回值里包含其中任意一个值才记。时长会自动展开，填 01:37 会同时匹配 97000"},
-            {"traceDump", "记录对象字段值", "方法追踪时，每隔几次调用把被追踪对象（this）周围的字段值记一份：找进度、总时长存在哪时用，用完关掉（只对方法追踪生效）"},
-            {"treeOn", "展开数据树", "默认开。导出里有「数据树」「值差异」两节：树上每个节点在每个任务里的值，值随任务不同的节点（✦）往往就是判断状态的字段"},
-            {"treeViews", "数据树也展开控件的字段", "默认关。打开后展开控件自己的业务字段，字段多，建议把 treeNodes 调到 600"},
-            {"watchAuto", "自动给「值变过的叶子」加观察点", "默认开，最多 24 个；导出「观察点变化」里写出变化发生在哪个方法执行期间"},
-            {"annotFrames", "调用栈每一帧标分层 / 角色 / 稳定度", "默认开。每帧后面标〔业务·ViewHolder·稳〕这样的标签，并标出 ★入口帧、◎推荐钩点、↯异步边界"},
-            {"annotOwners", "方法追踪命中时反查「谁持有这个对象」", "默认开。从当前页面的 Activity / Fragment / ViewModel / 视图树里反向找出持有它的容器，在后台线程做，有时间上限"},
-            {"annotSweep", "任务开始 / 结束 / 点标记时扫「容器 → 数据实体」", "默认开。导出里有「对象归属」一节，不需要追踪任何方法就能知道 Aweme 住在哪个容器里"},
-            {"chainOn", "链路追踪", "以方法追踪里的方法为落脚点，记下它的上游（谁调用它、谁异步投递）和下游（它执行期间调用了哪些方法、改了哪些界面）。会拖慢目标 App，用完关掉"},
-            {"chainAsync", "上游：异步来源", "钩 Handler 消息队列和线程池，记下异步任务是谁投递的"},
-            {"chainDown", "下游：被调用的方法", "锚点所在的类（最多 8 个类、300 个方法）会被临时钩住，记下锚点执行期间它们被调用的先后和嵌套"},
-            {"chainEffects", "下游：界面效果", "锚点执行期间发生的 setText / 清空 / 图标 / 状态变化"},
-            {"traceStackDepth", "方法追踪栈层数", "方法追踪的调用栈保存多少层。默认 30"},
-            {"viewDump", "任务开始 / 结束 / 点标记时导出视图树", "弄清一块界面里各个控件的父子关系和布局类型。默认关，用完关掉"},
-            {"viewDumpKey", "以哪个控件为准", "屏幕上类名或 id 含这些词（逗号分隔）的控件当作「主角」，取可见面积最大的一个。默认是抖音视频文案的两个类"},
-            {"viewTap", "点哪查哪", "默认关。开了以后，每次点一下屏幕，把这个点上所有控件列出来：类名、id、可见性、坐标、文字，从外层排到最上层"},
-            {"tlOn", "时间线（总开关）", "把用户操作、页面切换、各位置的记录样本按毫秒排成一条时间线；开销很小，默认开"},
-            {"tlOps", "记用户操作", "点击、滑动、返回键，带坐标和点中的控件"},
-            {"tlSamples", "记各位置的样本", "每个位置前 5 次、之后每 100 次进一次时间线"},
-            {"recOutside", "任务外也记录", "默认关：用任务浮窗录的时候，只有「任务开始 → 任务结束」之间才建记录。打开后任务外也记，但单独一桶存"},
-            {"splitFiles", "分文件存", "每种记录一个快照文件、时间线一个文件，各自独立、各自有上限；关掉 = 一个文件 + 总上限"},
-            {"stackDepth", "调用栈保存层数", "每条记录保存多少层调用栈。越大越完整，文件也越大。默认 12"},
-            {"perKeyStacks", "同一位置先抓几次栈", "同一处代码前几次完整记录调用栈，之后只计数。默认 3"},
-            {"sampleEvery", "之后每隔多少次再抽样", "用来发现同一控件的其他调用路径。默认 200"},
-            {"stacksPerSec", "每秒最多抓栈次数", "防止拖垮目标 App 的总闸。冷启动文字很多，设太小会丢文字。默认 1000"},
-            {"maxRecords", "最多保存记录数", "超过后新记录会被丢弃（分文件存关掉时才用）。默认 2000"},
-            {"maxSetOnly", "“没显示出来的文字”上限", "这类记录单独计数。默认 500"},
-    };
 
     private static final String[][] HINT = {
             {"traceMethods", "androidx.compose.ui.text.MultiParagraph#paint-LG529CI"},
@@ -117,11 +66,6 @@ public class MainActivity extends Activity {
             {"dumpPrefixes", "androidx.compose.ui.text."},
             {"viewDumpKey", "ScrollMentionTextView,MentionTextView"},
     };
-
-    private static String[] rich(String key) {
-        for (String[] r : RICH) if (r[0].equals(key)) return r;
-        return null;
-    }
 
     private static String hint(String key) {
         for (String[] r : HINT) if (r[0].equals(key)) return r[1];
@@ -243,10 +187,21 @@ public class MainActivity extends Activity {
 
         setContentView(page);
         load();
-        new Thread(() -> {
-            java.util.Set<String> kn = KnownNames.load(new java.io.File(getFilesDir(), "known_classes.txt"));
-            if (!kn.isEmpty()) ConfigCheck.knownClasses = kn;
-        }).start();
+        reloadKnown();
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        reloadKnown(); // 从记录页回来时，那边可能刚学到新的类名
+    }
+
+    private void reloadKnown() {
+        new Thread(() -> knownClasses = KnownNames.load(new java.io.File(getFilesDir(), "known_classes.txt"))).start();
+    }
+
+    private ConfigCheck.Options checkOptions(boolean tasksElsewhere) {
+        return new ConfigCheck.Options().known(knownClasses).tasksElsewhere(tasksElsewhere);
     }
 
     @Override
@@ -267,9 +222,8 @@ public class MainActivity extends Activity {
         ConfigSchema.F f = ConfigSchema.get(key);
         if (f == null) return;
         placed.add(key);
-        String[] r = rich(key);
-        String title = r != null ? r[1] : f.desc;
-        String desc = r != null ? r[2] : "";
+        String title = f.title.isEmpty() ? f.desc : f.title; // 标题和说明只在 tools/field_meta.txt 里写一份
+        String desc = f.help;
         String tail = "〔" + key + (f.hasRange ? "，" + f.min + "～" + f.max : "") + "〕";
         desc = desc.isEmpty() ? tail : desc + "  " + tail;
         if (f.type.equals("bool")) {
@@ -396,20 +350,12 @@ public class MainActivity extends Activity {
     private void refreshScenes() {
         if (tvSceneDesc == null) return;
         RecConfig c = readUi(cur.epoch);
-        String hit = null;
-        for (int i = 0; i < SCENE.length; i++) {
-            boolean on = Presets.matches(c, SCENE[i]);
-            Ui.setChip(sceneChips.get(SCENE[i]), on, SCENE_LABEL[i]);
-            if (on && hit == null) hit = SCENE[i];
-        }
+        Presets.P best = Presets.best(c, "scene"); // 只亮最贴近的一个（statehook 比 trace 多设了几项，满足它时不再同时亮 trace）
+        for (int i = 0; i < SCENE.length; i++) Ui.setChip(sceneChips.get(SCENE[i]), best != null && best.name.equals(SCENE[i]), SCENE_LABEL[i]);
         if (chHook != null) Ui.setChip(chHook, Presets.matches(c, "hook"), "找钩子（最窄）");
         if (chOff != null) Ui.setChip(chOff, Presets.matches(c, "nofilter"), "关掉全部过滤");
-        if (hit != null) {
-            Presets.P p = Presets.get(hit);
-            tvSceneDesc.setText(p.title + "\n" + p.desc);
-        } else {
-            tvSceneDesc.setText("当前是自定义组合（和上面任何一个场景都不完全相同）。");
-        }
+        if (best != null) tvSceneDesc.setText(best.title + "\n" + best.desc);
+        else tvSceneDesc.setText("当前是自定义组合（和上面任何一个场景都不完全相同）。");
     }
 
     private LinearLayout filterChips() {
@@ -497,7 +443,8 @@ public class MainActivity extends Activity {
     /** 处理粘贴框：先校验，再拆开配置和任务清单各自生效；openGuide = true 时接着打开浮窗。 */
     private void applyPaste(final boolean openGuide) {
         final String text = etPaste.getText().toString();
-        List<ConfigCheck.Issue> issues = ConfigCheck.checkPaste(text);
+        // 粘贴里没带任务清单但之前已存过：浮窗会用已存的，不报「没有任务清单」
+        List<ConfigCheck.Issue> issues = ConfigCheck.checkPaste(text, checkOptions(!savedTasks().trim().isEmpty()));
         if (ConfigCheck.hasError(issues)) {
             showIssues("配置有 " + ConfigCheck.count(issues, true) + " 处错误，没有回填", issues, text, "忽略错误，仍然回填", new Runnable() {
                 @Override
@@ -696,17 +643,13 @@ public class MainActivity extends Activity {
         final String pushedText = sp.getString("pushed", sp.getString("cfg", ""));
         tvEffective.setText("正在读取…（需要 root）");
         new Thread(() -> {
-            StringBuilder raw = new StringBuilder(), snaps = new StringBuilder();
+            StringBuilder raw = new StringBuilder();
             for (String pkg : list) {
                 if (!RootShell.validPkg(pkg)) continue;
-                raw.append(RootShell.pullStatus(pkg).out);
-                snaps.append(RootShell.pullSnapshots(pkg).out);
+                raw.append(RootShell.pullStatus(pkg).out); // 只读几个很小的状态文件，不拉整份记录
             }
             List<TargetStatus.Proc> ps = TargetStatus.parse(raw.toString());
-            java.util.Set<String> fresh = KnownNames.extract(snaps.toString());
-            if (!fresh.isEmpty()) ConfigCheck.knownClasses = KnownNames.learn(new java.io.File(getFilesDir(), "known_classes.txt"), fresh);
-            final String text = TargetStatus.describe(ps, RecConfig.fromText(pushedText), System.currentTimeMillis())
-                    + (fresh.isEmpty() ? "" : "\n（已从目标 App 的记录里学到 " + fresh.size() + " 个类名，写方法追踪时会拿它核对）");
+            final String text = TargetStatus.describe(ps, RecConfig.fromText(pushedText), System.currentTimeMillis());
             runOnUiThread(() -> {
                 if (isFinishing() || isDestroyed()) return;
                 tvEffective.setText(text.trim());
@@ -737,55 +680,17 @@ public class MainActivity extends Activity {
             View row = rows.get(f.key);
             if (row == null) continue;
             boolean on = parentOn(f.parent);
-            boolean dead = f.parentInverse ? on : !on;
-            row.setAlpha(dead ? 0.45f : 1f);
+            row.setAlpha(FormModel.dead(f, on) ? 0.45f : 1f);
         }
         refreshScenes();
         refreshBadges();
     }
 
-    private static String uiGroup(ConfigSchema.F f) {
-        switch (f.group) {
-            case "content":
-            case "compose":
-                return "content";
-            case "range":
-                return "range";
-            case "chain":
-                return "trace";
-            case "view":
-            case "timeline":
-                return "view";
-            case "limits":
-                return "limits";
-            case "filter":
-                return f.key.equals("windowMs") || f.key.equals("windowAll") || f.key.equals("threadMode") || f.key.equals("threadFilter")
-                        || f.key.equals("pageFilter") || f.key.equals("viewFilter") ? "filter" : "trace";
-            default:
-                return f.group;
-        }
-    }
-
     private void refreshBadges() {
-        RecConfig c = readUi(cur.epoch);
-        RecConfig d = new RecConfig();
-        HashMap<String, Integer> n = new HashMap<>();
-        for (ConfigSchema.F f : ConfigSchema.ALL) {
-            if (f.group.equals("internal") || f.group.equals("target")) continue;
-            try {
-                java.lang.reflect.Field fl = RecConfig.class.getField(f.key);
-                if (!String.valueOf(fl.get(c)).equals(String.valueOf(fl.get(d)))) {
-                    String gid = uiGroup(f);
-                    Integer old = n.get(gid);
-                    n.put(gid, old == null ? 1 : old + 1);
-                }
-            } catch (Throwable ignored) {
-            }
-        }
+        java.util.Map<String, Integer> n = FormModel.changedCounts(readUi(cur.epoch));
         for (Group g : groups.values()) {
             if (g.id.equals("paste") || g.id.equals("effective")) continue;
             Integer k = n.get(g.id);
-            // 「其他」组里的项算在各自原来的分组里；这里按组 id 对不上的归 other
             g.setCount(k == null ? 0 : k);
         }
     }
@@ -809,21 +714,16 @@ public class MainActivity extends Activity {
         try {
             cur = RecConfig.fromText(c.toText());
             cur.epoch = c.epoch;
-            for (ConfigSchema.F f : ConfigSchema.ALL) {
-                try {
-                    java.lang.reflect.Field fl = RecConfig.class.getField(f.key);
-                    if (f.type.equals("bool")) {
-                        Switch s = sw.get(f.key);
-                        if (s != null) s.setChecked(fl.getBoolean(c));
-                    } else if (f.type.equals("int")) {
-                        EditText e = ed.get(f.key);
-                        if (e != null) e.setText(String.valueOf(fl.getInt(c)));
-                    } else if (f.type.equals("string")) {
-                        EditText e = ed.get(f.key);
-                        if (e != null) e.setText(String.valueOf(fl.get(c)));
-                    }
-                } catch (Throwable ignored) {
+            java.util.HashSet<String> keys = new java.util.HashSet<>(sw.keySet());
+            keys.addAll(ed.keySet());
+            for (java.util.Map.Entry<String, String> e : FormModel.toValues(c, keys).entrySet()) {
+                Switch s = sw.get(e.getKey());
+                if (s != null) {
+                    s.setChecked(e.getValue().equals("true"));
+                    continue;
                 }
+                EditText x = ed.get(e.getKey());
+                if (x != null) x.setText(e.getValue());
             }
             segRange.select(c.keywordMode ? 1 : 0);
             segThread.select(Math.max(0, Math.min(2, c.threadMode)));
@@ -836,34 +736,12 @@ public class MainActivity extends Activity {
         refreshUi();
     }
 
-    /** 从控件读出一份配置：没有控件的字段保持 cur 里的值。 */
+    /** 从控件读出一份配置：没有控件的字段保持 cur 里的值（转换规则在 {@link FormModel}，有单元测试）。 */
     private RecConfig readUi(long epoch) {
-        RecConfig c = RecConfig.fromText(cur.toText());
-        for (ConfigSchema.F f : ConfigSchema.ALL) {
-            try {
-                java.lang.reflect.Field fl = RecConfig.class.getField(f.key);
-                if (f.type.equals("bool")) {
-                    Switch s = sw.get(f.key);
-                    if (s != null) fl.setBoolean(c, s.isChecked());
-                } else if (f.type.equals("int")) {
-                    EditText e = ed.get(f.key);
-                    if (e != null) {
-                        int v = parse(e, fl.getInt(c));
-                        if (f.hasRange) v = RecConfig.clamp(v, (int) f.min, (int) f.max);
-                        fl.setInt(c, v);
-                    }
-                } else if (f.type.equals("string")) {
-                    EditText e = ed.get(f.key);
-                    if (e != null) fl.set(c, e.getText().toString());
-                }
-            } catch (Throwable ignored) {
-            }
-        }
-        if (c.viewDumpKey.trim().isEmpty()) c.viewDumpKey = new RecConfig().viewDumpKey;
-        c.keywordMode = segRange.sel == 1;
-        c.threadMode = Math.max(0, Math.min(2, segThread.sel));
-        c.epoch = epoch;
-        return c;
+        java.util.HashMap<String, String> values = new java.util.HashMap<>();
+        for (java.util.Map.Entry<String, Switch> e : sw.entrySet()) values.put(e.getKey(), e.getValue().isChecked() ? "true" : "false");
+        for (java.util.Map.Entry<String, EditText> e : ed.entrySet()) values.put(e.getKey(), e.getValue().getText().toString());
+        return FormModel.read(cur, values, segRange.sel == 1, segThread.sel, epoch);
     }
 
     private static int parse(EditText e, int d) {
@@ -892,7 +770,8 @@ public class MainActivity extends Activity {
 
         if (push && !skipCheck) {
             // 整份配置过一遍和粘贴框同一套检查（写法 + 父子开关 + 排除名单 + 任务清单配套……）
-            final List<ConfigCheck.Issue> tl = ConfigCheck.checkForm(c, savedTasks());
+            // 没保存过任务清单时浮窗用默认清单，所以任务清单总是有的
+            final List<ConfigCheck.Issue> tl = ConfigCheck.checkForm(c, savedTasks(), checkOptions(true));
             if (!tl.isEmpty()) {
                 final boolean fp = push, fr = reset;
                 if (ConfigCheck.hasError(tl)) {
