@@ -326,6 +326,43 @@ final class Recorder {
             Chain.configure(c);
             Timeline.configure(c);
             store.markDirty();
+            publishStatus();
+        }
+    }
+
+    private static final Object STATUS_LOCK = new Object();
+
+    /**
+     * 把「目标 App 里实际生效的配置」（已经过范围钳制和方法追踪独占）和每条方法追踪的安装结果写进 status-进程名.txt，
+     * 模块首页用 root 读回来，和你推送的配置对比：哪些开关被自动关了、哪个钩点装上了 / 没装上。
+     * 只在配置重载和安装结果变化时写一次（事件触发），不轮询。格式见 TargetStatus.parse。
+     */
+    private static void publishStatus() {
+        try {
+            synchronized (STATUS_LOCK) {
+                RecConfig c = cfg;
+                StringBuilder sb = new StringBuilder();
+                sb.append("#textrec-status 1\n");
+                sb.append("proc=").append(store.procName()).append('\n');
+                sb.append("epoch=").append(c.epoch).append('\n');
+                sb.append("time=").append(System.currentTimeMillis()).append('\n');
+                sb.append("[trace]\n");
+                synchronized (TRACE_LOCK) {
+                    for (String tg : traceActive) {
+                        String msg = traceMsg.get(tg);
+                        boolean done = traceHooked.contains(tg);
+                        if (msg == null) {
+                            if (done) sb.append("OK ").append(tg).append('\n');
+                            else sb.append("WAIT ").append(tg).append(" | 还没安装（类还没加载，进入相关页面后会自动重试）\n");
+                        } else {
+                            sb.append(done ? "ERR " : "WAIT ").append(tg).append(" | ").append(msg.replace('\n', ' ')).append('\n');
+                        }
+                    }
+                }
+                sb.append("[effective]\n").append(c.toText());
+                store.writeStatus(sb.toString());
+            }
+        } catch (Throwable ignored) {
         }
     }
 
@@ -1154,6 +1191,7 @@ final class Recorder {
         }
         store.setTraceWarn(sb.toString());
         store.markDirty();
+        publishStatus();
     }
 
 
