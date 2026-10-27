@@ -15,6 +15,9 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Config checker tests (schema in sync, regression, doc examples)
+        run: sh tools/run_config_tests.sh
+
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
