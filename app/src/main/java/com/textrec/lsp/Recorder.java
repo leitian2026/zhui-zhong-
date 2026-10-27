@@ -335,7 +335,7 @@ final class Recorder {
     /**
      * 把「目标 App 里实际生效的配置」（已经过范围钳制和方法追踪独占）和每条方法追踪的安装结果写进 status-进程名.txt，
      * 模块首页用 root 读回来，和你推送的配置对比：哪些开关被自动关了、哪个钩点装上了 / 没装上。
-     * 只在配置重载和安装结果变化时写一次（事件触发），不轮询。格式见 TargetStatus.parse。
+     * 只在配置重载和安装结果变化时记下（事件触发，不轮询），写盘交给 Store 的节流落盘，不在这里做文件 IO。格式见 TargetStatus.parse。
      */
     private static void publishStatus() {
         try {
@@ -360,7 +360,7 @@ final class Recorder {
                     }
                 }
                 sb.append("[effective]\n").append(c.toText());
-                store.writeStatus(sb.toString());
+                store.setStatus(sb.toString());
             }
         } catch (Throwable ignored) {
         }
