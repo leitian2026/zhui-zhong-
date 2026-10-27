@@ -1,116 +1,120 @@
-# 字段元数据：key | group | level | parent | requires | 一句话说明
+# 字段元数据：key | group | level | parent | requires | title | desc | help
 # group  : target content range trace chain filter limits timeline view compose internal
 # level  : 1 常用 / 2 进阶 / 3 专家
 # parent : 父开关。父开关关着（布尔 false；整数项为 0）时，这个字段写了也不起作用。以 ! 结尾（如 splitFiles!）表示「父开关为 true 时无效」
 # requires: 需要「方法追踪清单非空」(traceMethods) 才有意义
+# title  : 首页上的短标题（可空；空则首页直接用 desc）
+# desc   : 一句话说明（文档字段表、检查器、首页没有 help 时都用它）
+# help   : 首页上的详细说明（可空）。不能含竖线 |
+# 首页的标题和说明只在这里写一份，MainActivity 里不再有第二份
 # 类型 / 默认值 / 范围不写在这里，由 tools/gen_schema.py 从 RecConfig.java 读出，不会漂移
-enabled|target|1|||总开关；false = 目标 App 暂停记录
-keywordMode|range|1|||true = 只记文字命中 keywords 的位置；false = 记全部文字（会拖慢目标 App）
-keywords|range|1|keywordMode||关键字列表；普通模式逗号或换行分隔，正则模式只能换行分隔
-regex|range|2|keywordMode||keywords 按正则匹配（只在 keywordMode=true 时有效）
-traceOnly|internal|3|||已废弃，写了也忽略
-traceSet|content|1|||记录「文字是谁 setText 的」（总开关）
-traceDraw|content|1|||记录「文字是谁画的」（总开关）
-traceColor|content|1|||记录文字颜色：画笔颜色和 setTextColor 位置（总开关）
-traceIcons|content|1|||记录 ImageView 图片和 contentDescription（找图标用，记录量大）
-autoParams|content|2|||自动观察 Compose 文字绘制参数（颜色、描边 / 填充）
-traceSetOnly|content|2|||也记「只被 setText、从未绘制」的文字（拖动才出现的文字）
-traceState|content|2|||记录 alpha / visibility / selected 的变化（总开关）
-maxSetOnly|content|3|traceSetOnly||「没显示出来的文字」记录上限
-traceMethods|trace|1|||方法追踪清单；每行一个「类全名#方法名」，行尾可加 @选项
-windowMs|filter|2||traceMethods|触发窗口：最近一次触摸后多少毫秒内才记；0 = 不限制
-windowAll|filter|3|windowMs||触发窗口也管文字 / 图标 / 状态 / 绘制记录（默认只管方法追踪）
-excludeInfra|filter|2||traceMethods|方法追踪排除 LiveData、Fragment 生命周期等通用基础设施
-threadMode|filter|2|||线程：0 全部，1 只主线程，2 只后台线程
-valueClock|filter|2||traceMethods|方法追踪只记参数或返回值里带 00:00 这类时间的调用
-traceDump|trace|2||traceMethods|方法追踪时定期记录 this 周围的字段值
-traceDumpEvery|trace|3|traceDump||字段快照：每隔几次调用记一份
-traceDumpLines|trace|3|traceDump||字段快照：一份最多多少行
-traceDumpDepth|trace|3|traceDump||字段快照：往子对象里展开几层
-viewDump|view|2|||任务开始 / 结束 / 点标记时导出视图树
-viewDumpKey|view|3|viewDump||视图树以哪个控件为准（类名或 id 含的词，逗号分隔）
-viewDumpUp|view|3|viewDump||从主角控件往上几层当容器
-viewDumpDepth|view|3|viewDump||容器往下列几层
-viewDumpLines|view|3|viewDump||视图树一份最多多少行
-viewDumpSet|view|3|viewDump||视图树里的文字控件带「设置自」
-viewTap|view|2|||点哪查哪：点屏幕时列出这个点上所有控件
-annotFrames|trace|3|||调用栈每一帧标分层 / 角色 / 稳定度
-treeOn|trace|2|||方法追踪命中时把 this / 参数 / 返回值展开成数据树
-treeDepth|trace|3|treeOn||数据树往下展开几层
-treeNodes|trace|3|treeOn||数据树一次最多多少节点
-treeEvery|trace|3|treeOn||数据树每隔几次命中展开一次
-treeViews|trace|3|treeOn||数据树也展开控件（View）自己的业务字段
-watch|trace|2|||观察点清单；每行「类#方法:路径」，方法必须同时写在 traceMethods 里
-watchAuto|trace|3|treeOn||自动把值变过的叶子加成观察点
-annotOwners|trace|3|||方法追踪命中时反查「谁持有这个对象」
-annotSweep|trace|3|||任务开始 / 结束时扫「容器 → 数据实体」
-annotBudgetMs|trace|3|annotOwners||一次反查最多多少毫秒
-annotPerKey|trace|3|annotOwners||每个追踪方法前几次命中做反查
-tlOn|timeline|2|||时间线总开关
-tlOps|timeline|3|tlOn||时间线：记用户操作
-tlSamples|timeline|3|tlOn||时间线：记各位置的样本
-recOutside|timeline|2|||任务外也记录（单独一桶）；不写 = 只记任务内
-traceExclusive|trace|2|||填了方法追踪时，自动把文字 / 图标 / 颜色 / 状态记录当成关闭
-traceCompose|compose|3|||观察 Compose 的 paint 参数
-composeObj|compose|3|traceCompose||Compose 记录带 MultiParagraph 对象身份
-composeDump|compose|3|traceCompose||Compose 记录展开对象字段
-tlTouch|timeline|3|tlOps||时间线：触摸
-tlKey|timeline|3|tlOps||时间线：按键
-tlPage|timeline|3|tlOn||时间线：页面切换
-tlViewTree|timeline|3|tlSamples||时间线：控件增删
-smpText|timeline|3|tlSamples||样本：setText / 清空
-smpState|timeline|3|tlSamples||样本：状态变化
-smpIcon|timeline|3|tlSamples||样本：图标
-smpTrace|timeline|3|tlSamples||样本：方法追踪调用
-traceStackDepth|trace|3||traceMethods|方法追踪保存的调用栈层数
-maxPerKind|internal|3|||已废弃的每类上限，只给没有单独上限的种类用
-chainOn|chain|2||traceMethods|链路追踪总开关（会拖慢目标 App，用完关掉）
-chainAsync|chain|3|chainOn||链路上游：异步来源（Handler / 线程池）
-chainEffects|chain|3|chainOn||链路下游：界面效果
-chainDown|chain|3|chainOn||链路下游：被调用的方法
-chainEvery|chain|3|chainOn||链路采样间隔
-chainMaxDown|chain|3|chainOn||链里最多列多少个被调用的方法
-excludeList|filter|2||traceMethods|方法追踪排除名单；每行 类#方法 / 类#* / #方法 / 类名或包名前缀
-threadFilter|filter|3|||线程名白名单；线程名包含其中任意一个词才记
-pageFilter|filter|3|||页面白名单；页面标签包含其中任意一个词才记
-viewFilter|filter|3|||控件白名单；View 类名或 id 包含其中任意一个词才记
-valueFilter|filter|2||traceMethods|值匹配；参数或返回值包含其中任意一个值才记
-quietCount|filter|2||traceMethods|压低高频方法：同一位置超过这个次数且持续一段时间后只计数；0 = 关
-quietSpanMs|filter|3|quietCount||压低高频方法的持续时间（毫秒）
-stackDepth|limits|3|||每条记录保存的调用栈层数
-perKeyStacks|limits|3|||同一位置前几次抓栈
-sampleEvery|limits|3|||之后每隔多少次抽样抓一次
-stacksPerSec|limits|3|||全局每秒最多抓栈次数
-maxRecords|limits|3|splitFiles!||记录总上限（只在 splitFiles=false 时有效）
-flushSec|limits|3|||落盘节流（秒）
-setText|content|3|traceSet||子项：setText / append / setHint
-setClear|content|3|traceSet||子项：文字被清空
-drawTextView|content|3|traceDraw||子项：TextView 的绘制
-drawCanvas|content|3|traceDraw||子项：自绘（非 Compose）的绘制
-drawCompose|content|3|traceDraw||子项：Compose 的绘制
-colorPaint|content|3|traceColor||子项：画笔颜色
-colorSet|content|3|traceColor||子项：setTextColor 设置位置
-iconImage|content|3|traceIcons||子项：ImageView 设置图片
-iconDesc|content|3|traceIcons||子项：setContentDescription
-stateAlpha|content|3|traceState||子项：透明度
-stateVisible|content|3|traceState||子项：可见性
-stateSelected|content|3|traceState||子项：选中态
-tlClass|timeline|3|tlOn||时间线：钩点可用
-chainCoroutine|chain|3|chainOn||链路上游：协程调度
-splitFiles|limits|3|||分文件存；关掉 = 一个文件 + 总上限 maxRecords
-composeDumpEvery|compose|3|composeDump||Compose 字段展开的间隔
-composeDumpLines|compose|3|composeDump||Compose 字段展开一份最多多少行
-capTextView|limits|3|||TextView 文字记录上限
-capCanvas|limits|3|||自绘文字记录上限
-capCompose|limits|3|||Compose 文字记录上限
-capClear|limits|3|||文字清空记录上限
-capIcon|limits|3|||图标记录上限
-capState|limits|3|||状态变化记录上限
-capTrace|limits|3|||方法追踪记录上限
-depthSet|limits|3|||设置栈深度；0 = 用 stackDepth
-depthDraw|limits|3|||绘制栈深度；0 = 用 stackDepth
-depthColor|limits|3|||颜色设置栈深度；0 = 用 stackDepth
-depthIcon|limits|3|||图标设置栈深度；0 = 用 stackDepth
-depthState|limits|3|||状态变化栈深度；0 = 用 stackDepth
-dumpPrefixes|compose|3|composeDump||字段展开额外放行的包 / 类名前缀
-epoch|internal|3|||变了就清空已有记录；一般不手写
+enabled|target|1|||启用记录|总开关；false = 目标 App 暂停记录|关闭后目标 App 暂停记录，不会再产生新的记录
+keywordMode|range|1||||true = 只记文字命中 keywords 的位置；false = 记全部文字（会拖慢目标 App）|
+keywords|range|1|keywordMode|||关键字列表；普通模式逗号或换行分隔，正则模式只能换行分隔|
+regex|range|2|keywordMode|||keywords 按正则匹配（只在 keywordMode=true 时有效）|
+traceOnly|internal|3||||已废弃，写了也忽略|
+traceSet|content|1|||文字是谁设置的|记录「文字是谁 setText 的」（总开关）|记下每段文字由哪行代码 setText 出来（最常用）
+traceDraw|content|1|||文字是谁画的|记录「文字是谁画的」（总开关）|记下每段文字由哪行代码画到屏幕上；自绘和 Compose 的文字只能靠它
+traceColor|content|1|||文字颜色|记录文字颜色：画笔颜色和 setTextColor 位置（总开关）|记下画笔颜色，以及谁调用了 setTextColor
+traceIcons|content|1|||图标和按钮图片|记录 ImageView 图片和 contentDescription（找图标用，记录量大）|记下 ImageView 设置的图片和内容描述，用来找图标按钮；记录量会明显增加
+autoParams|content|2|||Compose 文字参数|自动观察 Compose 文字绘制参数（颜色、描边 / 填充）|自动抓取 Compose 文字的颜色、描边 / 填充（如弹幕的黑边 + 白字）
+traceSetOnly|content|2|||没显示出来的文字|也记「只被 setText、从未绘制」的文字（拖动才出现的文字）|也记下只被设置、从未画出的文字，如拖动进度条才出现的时长
+traceState|content|2|||状态变化|记录 alpha / visibility / selected 的变化（总开关）|记下透明度 / 可见性 / 选中态的变化，研究“选中”效果怎么实现的。默认只记已经记过文字或图标的控件；在「采集过滤」里填了「控件包含」，匹配的任何控件都记
+maxSetOnly|content|3|traceSetOnly||“没显示出来的文字”上限|「没显示出来的文字」记录上限|这类记录单独计数。默认 500
+traceMethods|trace|1||||方法追踪清单；每行一个「类全名#方法名」，行尾可加 @选项|
+windowMs|filter|2||traceMethods|触发窗口（毫秒）|触发窗口：最近一次触摸后多少毫秒内才记；0 = 不限制|只记最近一次触摸之后这段时间内发生的调用；0 = 不限。常用 1500 / 3000 / 5000。适合“做一次操作看一组记录”，后台刷新基本都被挡掉。方法追踪默认受它管
+windowAll|filter|3|windowMs||触发窗口也用于文字 / 图标 / 状态|触发窗口也管文字 / 图标 / 状态 / 绘制记录（默认只管方法追踪）|默认只管方法追踪；打开后文字、颜色、图标、状态变化、绘制记录也只在触摸后的窗口内记
+excludeInfra|filter|2||traceMethods|排除通用基础设施|方法追踪排除 LiveData、Fragment 生命周期等通用基础设施|不记 LiveData、Fragment 生命周期、字节的异步包装等几乎所有功能都会经过的类（只对方法追踪生效）
+threadMode|filter|2||||线程：0 全部，1 只主线程，2 只后台线程|
+valueClock|filter|2||traceMethods|只记带时间的调用|方法追踪只记参数或返回值里带 00:00 这类时间的调用|方法追踪只记参数或返回值里带 00:00 这类时间的调用，找视频时长用
+traceDump|trace|2||traceMethods|记录对象字段值|方法追踪时定期记录 this 周围的字段值|方法追踪时，每隔几次调用把被追踪对象（this）周围的字段值记一份：找进度、总时长存在哪时用，用完关掉（只对方法追踪生效）
+traceDumpEvery|trace|3|traceDump|||字段快照：每隔几次调用记一份|
+traceDumpLines|trace|3|traceDump|||字段快照：一份最多多少行|
+traceDumpDepth|trace|3|traceDump|||字段快照：往子对象里展开几层|
+viewDump|view|2|||任务开始 / 结束 / 点标记时导出视图树|任务开始 / 结束 / 点标记时导出视图树|弄清一块界面里各个控件的父子关系和布局类型。默认关，用完关掉
+viewDumpKey|view|3|viewDump||以哪个控件为准|视图树以哪个控件为准（类名或 id 含的词，逗号分隔）|屏幕上类名或 id 含这些词（逗号分隔）的控件当作「主角」，取可见面积最大的一个。默认是抖音视频文案的两个类
+viewDumpUp|view|3|viewDump|||从主角控件往上几层当容器|
+viewDumpDepth|view|3|viewDump|||容器往下列几层|
+viewDumpLines|view|3|viewDump|||视图树一份最多多少行|
+viewDumpSet|view|3|viewDump|||视图树里的文字控件带「设置自」|
+viewTap|view|2|||点哪查哪|点哪查哪：点屏幕时列出这个点上所有控件|默认关。开了以后，每次点一下屏幕，把这个点上所有控件列出来：类名、id、可见性、坐标、文字，从外层排到最上层
+annotFrames|trace|3|||调用栈每一帧标分层 / 角色 / 稳定度|调用栈每一帧标分层 / 角色 / 稳定度|默认开。每帧后面标〔业务·ViewHolder·稳〕这样的标签，并标出 ★入口帧、◎推荐钩点、↯异步边界
+treeOn|trace|2|||展开数据树|方法追踪命中时把 this / 参数 / 返回值展开成数据树|默认开。导出里有「数据树」「值差异」两节：树上每个节点在每个任务里的值，值随任务不同的节点（✦）往往就是判断状态的字段
+treeDepth|trace|3|treeOn|||数据树往下展开几层|
+treeNodes|trace|3|treeOn|||数据树一次最多多少节点|
+treeEvery|trace|3|treeOn|||数据树每隔几次命中展开一次|
+treeViews|trace|3|treeOn||数据树也展开控件的字段|数据树也展开控件（View）自己的业务字段|默认关。打开后展开控件自己的业务字段，字段多，建议把 treeNodes 调到 600
+watch|trace|2||||观察点清单；每行「类#方法:路径」，方法必须同时写在 traceMethods 里|
+watchAuto|trace|3|treeOn||自动给「值变过的叶子」加观察点|自动把值变过的叶子加成观察点|默认开，最多 24 个；导出「观察点变化」里写出变化发生在哪个方法执行期间
+annotOwners|trace|3|||方法追踪命中时反查「谁持有这个对象」|方法追踪命中时反查「谁持有这个对象」|默认开。从当前页面的 Activity / Fragment / ViewModel / 视图树里反向找出持有它的容器，在后台线程做，有时间上限
+annotSweep|trace|3|||任务开始 / 结束 / 点标记时扫「容器 → 数据实体」|任务开始 / 结束时扫「容器 → 数据实体」|默认开。导出里有「对象归属」一节，不需要追踪任何方法就能知道 Aweme 住在哪个容器里
+annotBudgetMs|trace|3|annotOwners|||一次反查最多多少毫秒|
+annotPerKey|trace|3|annotOwners|||每个追踪方法前几次命中做反查|
+tlOn|timeline|2|||时间线（总开关）|时间线总开关|把用户操作、页面切换、各位置的记录样本按毫秒排成一条时间线；开销很小，默认开
+tlOps|timeline|3|tlOn||记用户操作|时间线：记用户操作|点击、滑动、返回键，带坐标和点中的控件
+tlSamples|timeline|3|tlOn||记各位置的样本|时间线：记各位置的样本|每个位置前 5 次、之后每 100 次进一次时间线
+recOutside|timeline|2|||任务外也记录|任务外也记录（单独一桶）；不写 = 只记任务内|默认关：用任务浮窗录的时候，只有「任务开始 → 任务结束」之间才建记录。打开后任务外也记，但单独一桶存
+traceExclusive|trace|2|||方法追踪时只记方法追踪|填了方法追踪时，自动把文字 / 图标 / 颜色 / 状态记录当成关闭|默认开：填了要追踪的方法时，文字 / 图标 / 颜色 / 状态 / 绘制这些记录开关在目标 App 里自动当成关闭（界面上的开关不会被改，方法清单清空后恢复），记录里只剩方法追踪，更干净。想一起记就关掉它
+traceCompose|compose|3|||Compose 文字绘制|观察 Compose 的 paint 参数|钩 MultiParagraph.paint*（颜色 / 描边 / 填充），Compose 才有
+composeObj|compose|3|traceCompose||Compose：记对象身份|Compose 记录带 MultiParagraph 对象身份|每条 Compose 记录记下 MultiParagraph 对象的身份哈希（看是同一个对象反复画还是每次新建）
+composeDump|compose|3|traceCompose||Compose：展开对象字段|Compose 记录展开对象字段|每条 Compose 记录展开一次 MultiParagraph 的字段（含文字）
+tlTouch|timeline|3|tlOps|||时间线：触摸|
+tlKey|timeline|3|tlOps|||时间线：按键|
+tlPage|timeline|3|tlOn|||时间线：页面切换|
+tlViewTree|timeline|3|tlSamples|||时间线：控件增删|
+smpText|timeline|3|tlSamples|||样本：setText / 清空|
+smpState|timeline|3|tlSamples|||样本：状态变化|
+smpIcon|timeline|3|tlSamples|||样本：图标|
+smpTrace|timeline|3|tlSamples|||样本：方法追踪调用|
+traceStackDepth|trace|3||traceMethods|方法追踪栈层数|方法追踪保存的调用栈层数|方法追踪的调用栈保存多少层。默认 30
+maxPerKind|internal|3||||已废弃的每类上限，只给没有单独上限的种类用|
+chainOn|chain|2||traceMethods|链路追踪|链路追踪总开关（会拖慢目标 App，用完关掉）|以方法追踪里的方法为落脚点，记下它的上游（谁调用它、谁异步投递）和下游（它执行期间调用了哪些方法、改了哪些界面）。会拖慢目标 App，用完关掉
+chainAsync|chain|3|chainOn||上游：异步来源|链路上游：异步来源（Handler / 线程池）|钩 Handler 消息队列和线程池，记下异步任务是谁投递的
+chainEffects|chain|3|chainOn||下游：界面效果|链路下游：界面效果|锚点执行期间发生的 setText / 清空 / 图标 / 状态变化
+chainDown|chain|3|chainOn||下游：被调用的方法|链路下游：被调用的方法|锚点所在的类（最多 8 个类、300 个方法）会被临时钩住，记下锚点执行期间它们被调用的先后和嵌套
+chainEvery|chain|3|chainOn|||链路采样间隔|
+chainMaxDown|chain|3|chainOn|||链里最多列多少个被调用的方法|
+excludeList|filter|2||traceMethods|额外排除|方法追踪排除名单；每行 类#方法 / 类#* / #方法 / 类名或包名前缀|只对方法追踪生效，每行一项：类#方法、类#*（整个类）、#方法（任何类里的这个方法）、或类名 / 包名前缀
+threadFilter|filter|3|||线程名包含|线程名白名单；线程名包含其中任意一个词才记|线程名包含其中任意一个词才记，逗号或换行分隔，如 LegoHandler
+pageFilter|filter|3|||页面包含|页面白名单；页面标签包含其中任意一个词才记|页面标签（如 MainActivity > FeedItemFragment）包含其中任意一个词才记，不区分大小写
+viewFilter|filter|3|||控件包含|控件白名单；View 类名或 id 包含其中任意一个词才记|只对文字 / 图标 / 状态 / 绘制记录生效：View 类名或 id 包含其中任意一个词才记。自绘和 Compose 没有 View，填了就不记
+valueFilter|filter|2||traceMethods|额外值匹配|值匹配；参数或返回值包含其中任意一个值才记|只对方法追踪生效：参数或返回值里包含其中任意一个值才记。时长会自动展开，填 01:37 会同时匹配 97000
+quietCount|filter|2||traceMethods|压低高频方法（次数）|压低高频方法：同一位置超过这个次数且持续一段时间后只计数；0 = 关|同一位置调用超过这个次数且持续一段时间后只计数、不再抓栈，进度条刷新之类就不会淹没记录；0 = 关，常用 50（只对方法追踪生效）
+quietSpanMs|filter|3|quietCount|||压低高频方法的持续时间（毫秒）|
+stackDepth|limits|3|||调用栈保存层数|每条记录保存的调用栈层数|每条记录保存多少层调用栈。越大越完整，文件也越大。默认 12
+perKeyStacks|limits|3|||同一位置先抓几次栈|同一位置前几次抓栈|同一处代码前几次完整记录调用栈，之后只计数。默认 3
+sampleEvery|limits|3|||之后每隔多少次再抽样|之后每隔多少次抽样抓一次|用来发现同一控件的其他调用路径。默认 200
+stacksPerSec|limits|3|||每秒最多抓栈次数|全局每秒最多抓栈次数|防止拖垮目标 App 的总闸。冷启动文字很多，设太小会丢文字。默认 1000
+maxRecords|limits|3|splitFiles!||最多保存记录数|记录总上限（只在 splitFiles=false 时有效）|超过后新记录会被丢弃（分文件存关掉时才用）。默认 2000
+flushSec|limits|3||||落盘节流（秒）|
+setText|content|3|traceSet|||子项：setText / append / setHint|
+setClear|content|3|traceSet|||子项：文字被清空|
+drawTextView|content|3|traceDraw|||子项：TextView 的绘制|
+drawCanvas|content|3|traceDraw|||子项：自绘（非 Compose）的绘制|
+drawCompose|content|3|traceDraw|||子项：Compose 的绘制|
+colorPaint|content|3|traceColor|||子项：画笔颜色|
+colorSet|content|3|traceColor|||子项：setTextColor 设置位置|
+iconImage|content|3|traceIcons|||子项：ImageView 设置图片|
+iconDesc|content|3|traceIcons|||子项：setContentDescription|
+stateAlpha|content|3|traceState|||子项：透明度|
+stateVisible|content|3|traceState|||子项：可见性|
+stateSelected|content|3|traceState|||子项：选中态|
+tlClass|timeline|3|tlOn|||时间线：钩点可用|
+chainCoroutine|chain|3|chainOn|||链路上游：协程调度|
+splitFiles|limits|3|||分文件存|分文件存；关掉 = 一个文件 + 总上限 maxRecords|每种记录一个快照文件、时间线一个文件，各自独立、各自有上限；关掉 = 一个文件 + 总上限
+composeDumpEvery|compose|3|composeDump|||Compose 字段展开的间隔|
+composeDumpLines|compose|3|composeDump|||Compose 字段展开一份最多多少行|
+capTextView|limits|3||||TextView 文字记录上限|
+capCanvas|limits|3||||自绘文字记录上限|
+capCompose|limits|3||||Compose 文字记录上限|
+capClear|limits|3||||文字清空记录上限|
+capIcon|limits|3||||图标记录上限|
+capState|limits|3||||状态变化记录上限|
+capTrace|limits|3||||方法追踪记录上限|
+depthSet|limits|3||||设置栈深度；0 = 用 stackDepth|
+depthDraw|limits|3||||绘制栈深度；0 = 用 stackDepth|
+depthColor|limits|3||||颜色设置栈深度；0 = 用 stackDepth|
+depthIcon|limits|3||||图标设置栈深度；0 = 用 stackDepth|
+depthState|limits|3||||状态变化栈深度；0 = 用 stackDepth|
+dumpPrefixes|compose|3|composeDump||额外放行的类|字段展开额外放行的包 / 类名前缀|字段展开默认只进 App 自己的类。这里的包名 / 类名前缀也会进，逗号或换行分隔
+epoch|internal|3||||变了就清空已有记录；一般不手写|
