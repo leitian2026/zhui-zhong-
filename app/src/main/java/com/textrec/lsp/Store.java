@@ -273,6 +273,18 @@ final class Store {
         }
     }
 
+    /** 本进程的状态文件（实际生效的配置 + 方法追踪安装结果），模块首页用 root 回读。只在配置重载 / 安装结果变化时写，不轮询。 */
+    void writeStatus(String content) {
+        File d = dir;
+        if (d == null) return;
+        d.mkdirs();
+        writeFile(d, "status-" + proc.replaceAll("[^A-Za-z0-9_.-]", "_") + ".txt", content);
+    }
+
+    String procName() {
+        return proc;
+    }
+
     private static void deletePartFiles(File d, String safe) {
         for (String k : KINDS) {
             new File(d, "snapshot-" + safe + "." + k + ".json").delete();
