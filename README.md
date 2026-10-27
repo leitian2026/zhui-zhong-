@@ -5,6 +5,21 @@
 记录目标 App 屏幕上**每段文字 / 每个图标**是“谁设置的”（`setText` / `setImage*` 调用栈）和“谁画的”（`drawText` 调用栈），
 并给出能直接拿去 hook 的方法签名（标明 **[稳定]** 还是 **[混淆]**，优先推荐稳定的）。**只观察，不修改任何内容**（改颜色/隐藏文字另做模块）。
 
+## 1.33.1：自查后的修复和整理
+
+**修复（自查时用测试程序实测出来的）**
+- 类名查表误报：调用栈里的帧是「类.方法(文件:行号)」，之前把方法名一起当成了类名，导致真实的类也被警告「没见过」。现在同时登记去掉方法名的类名。
+- 首页「应用」/ 粘贴时，没保存任务清单（浮窗会用默认清单）或粘贴里没带但之前已保存时，不再误报「没有任务清单」。
+- 「我想找什么」不再同时点亮 trace 和 statehook：statehook 现在多设了排除基础设施和压低高频，并且只亮最贴近的一个预设。
+- `com.example` / `com.test.` 等常见示例包名从「错误」降为「警告」（真实 App 偶尔也用）；`com.a.B`、`com.demo.*` 仍判错。
+
+**整理**
+- 首页读取状态只读几个很小的状态文件；学类名改成在记录页本来就要拉快照时顺手做。
+- 目标 App 的状态文件不再在钩点安装回调的线程上同步写盘，随节流落盘一起写（最多晚 flushSec 秒）。
+- 首页标题和说明只在 `tools/field_meta.txt` 里写一份（原来首页里还有一份手写的）。
+- `ConfigCheck` 拆成 `ConfigCheck`（入口）/ `CheckText` / `CheckFields` / `CheckTrace` / `CheckTasks` / `CheckCross`；检查的外部条件（已知类名、任务清单是否别处已有、测试放行示例类名）改成 `ConfigCheck.Options` 传入，不再有全局可变变量。
+- 首页「控件 ↔ 配置」的转换抽成不依赖 Android 的 `FormModel`，有单元测试（读写往返、没有控件的字段保持原值、钳制、已改项计数、子项变灰规则）。
+
 ## 1.33.0：首页按任务重排、块格式配置、检查更全、目标 App 回读、给 AI 的手册重写
 
 **首页重排**
@@ -30,7 +45,7 @@
 **给 AI 的文档**
 - 新增短手册 `ai_manual.md`（预设表、字段表、10 条规则、错→对对照、3 个完整示例）；`ai_guide.md` 作为完整参考，修正了第 7、9 条互相矛盾的转义说明；删除根目录重复的 `AI使用说明.md`。
 - 字段表由 `tools/gen_schema.py` 从 `RecConfig.java` + `tools/field_meta.txt` 生成；文档里每个 `textrec` 示例都被检查器验证过。`tools/run_config_tests.sh` 在 CI 里先跑。
-- 新增配置项的步骤：改 `RecConfig.java`（字段 + `fill()`）→ 在 `tools/field_meta.txt` 加一行 → `python3 tools/gen_schema.py` → `sh tools/run_config_tests.sh --fix`。
+- 新增配置项的步骤：改 `RecConfig.java`（字段 + `fill()`）→ 在 `tools/field_meta.txt` 加一行（分组 / 父开关 / 首页标题 / 一句话说明 / 首页详细说明，只在这里写一份）→ `python3 tools/gen_schema.py` → `sh tools/run_config_tests.sh --fix`。首页会自动多出这一项，不用改 `MainActivity`。
 
 ## 1.32.1：数据树可以展开控件的字段（treeViews）
 - **问题**：数据树遇到控件（View）只记一行类名，`this` 是控件时整棵树都不展开。`X.0tdv#run` 这类计时任务里存着指回 `LongPressLayout` 的字段，但 `LongPressLayout` 里记了什么（按下位置 / 标志位）看不到，没法对比「没触摸」和「单击后」差在哪个字段。
