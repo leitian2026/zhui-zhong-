@@ -108,8 +108,8 @@ final class FormModel {
         return n;
     }
 
-    /** 子项是否该变灰：父开关关着；或（父开关写成 xxx! 的）父开关开着。 */
-    static boolean dead(ConfigSchema.F f, boolean parentOn) {
-        return f.parentInverse ? parentOn : !parentOn;
+    /** 子项是否该变灰：它的前提（含祖先的前提）不满足。own 判断某个开关自己开着没有。 */
+    static boolean dead(ConfigSchema.F f, java.util.function.Predicate<String> own) {
+        return Relations.dead(f, own);
     }
 }
