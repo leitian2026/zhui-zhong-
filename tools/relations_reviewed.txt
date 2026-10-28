@@ -1,0 +1,11 @@
+# 已核对过代码、确认「不构成前提」的字段组合（tools/audit_relations.py 用）。
+# 格式：字段A 字段B  # 原因。A、B 顺序不限。确实是前提的，不要写在这里，写进 tools/field_meta.txt 的 parent 列。
+drawCanvas drawCompose      # 同一个判断里按「有没有 Compose 上下文」二选一，是并列的两种绘制，不是谁依赖谁
+iconDesc iconImage          # 按方法名二选一（setContentDescription / setImageXxx），并列
+stateAlpha stateVisible     # 按方法名三选一，并列
+stateAlpha stateSelected    # 同上
+stateVisible stateSelected  # 同上
+perKeyStacks sampleEvery    # 同一个「前几次抓栈、之后抽样」的两个参数，互相配合，不是开关关系
+traceDumpDepth traceDumpLines  # 同一次字段快照的两个参数，并列
+treeDepth treeNodes         # 同一棵数据树的两个上限，并列
+keywords regex              # regex 决定 keywords 怎么解析；keywords 为空时本来就不起作用，由「keywordMode 但没有 keywords」那条检查覆盖
