@@ -57,20 +57,7 @@ final class CheckCross {
         }
 
         boolean on(String k) {
-            ConfigSchema.F f = ConfigSchema.get(k);
-            String v = get(k);
-            if (f == null) return !v.isEmpty();
-            if (f.type.equals("bool")) return v.equalsIgnoreCase("true");
-            if (f.type.equals("string")) return !v.isEmpty();
-            try {
-                return Long.parseLong(v) != 0;
-            } catch (NumberFormatException ex) {
-                try {
-                    return Long.parseLong(f.def) != 0;
-                } catch (NumberFormatException ex2) {
-                    return false;
-                }
-            }
+            return Relations.isOn(ConfigSchema.get(k), get(k));
         }
 
         /** 显式写了 true，或预设把它设成了 true（默认值不算）。 */
@@ -121,6 +108,12 @@ final class CheckCross {
     }
 
     /** 这个值是不是「用户想要它生效」的值：开关写了 true；整数写了和默认不同的数；文字非空且和默认不同。 */
+    private static String names(ConfigSchema.F f) {
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < f.terms.length; i++) sb.append(i > 0 ? (f.any ? " / " : " + ") : "").append(CheckText.q(f.terms[i]));
+        return sb.toString();
+    }
+
     static boolean meaningful(ConfigSchema.F f, String v) {
         if (f.type.equals("bool")) return v.equalsIgnoreCase("true");
         if (f.type.equals("string")) return !traceItems(v).isEmpty() && !v.equals(f.def);
@@ -134,26 +127,30 @@ final class CheckCross {
     static void crossChecks(List<Issue> out, List<Entry> es, List<String> taskRaws) {
         Ctx cx = new Ctx(es, taskRaws);
 
-        // ---- 1. 父子开关：子项写了，父开关却关着 / 不满足，子项不会起作用
+        // ---- 1. 前提不满足：子项写了，但它依赖的开关没开（关系递归，见 Relations）
         for (Entry e : cx.explicit.values()) {
             ConfigSchema.F f = ConfigSchema.get(e.key);
-            if (f == null || f.parent.isEmpty()) continue;
-            ConfigSchema.F pf = ConfigSchema.get(f.parent);
-            if (pf == null) continue;
+            if (f == null || f.terms.length == 0) continue;
             String v = e.value == null ? "" : e.value.trim();
             if (!meaningful(f, v)) continue;
-            boolean pOn = cx.on(f.parent);
-            boolean dead = f.parentInverse ? pOn : !pOn;
-            if (!dead) continue;
+            if (!Relations.dead(f, cx::on)) continue;
+            int i = Relations.firstUnmet(f, cx::on);
+            String term = f.terms[i];
+            String cause = f.inverse[i] ? term : Relations.rootCause(term, cx::on);
             String child = CheckText.q(e.key + (v.length() > 24 || v.contains("\n") ? "" : "=" + v));
+            ConfigSchema.F cf = ConfigSchema.get(cause);
             if (e.key.equals("keywords")) {
                 out.add(new Issue(e.line, true, CheckText.q("keywords") + " 写了，但 " + CheckText.q("keywordMode") + " 不是 true（" + cx.where("keywordMode")
                         + "），关键字根本不会被用，目标 App 会记录全部文字（很卡）。要按关键字记，加一行 " + CheckText.q("keywordMode=true") + "；要记全部文字就删掉 keywords"));
-            } else if (f.parentInverse) {
-                out.add(new Issue(e.line, false, child + " 不起作用：它只在 " + CheckText.q(f.parent + "=false") + " 时才有效（" + cx.where(f.parent) + "，分文件存开着时各类记录用各自的上限）。要用它就先写 " + CheckText.q(f.parent + "=false") + "，否则删掉这一行"));
+            } else if (f.inverse[i]) {
+                out.add(new Issue(e.line, false, child + " 不起作用：它只在 " + CheckText.q(term + "=false") + " 时才有效（" + cx.where(term) + "，分文件存开着时各类记录用各自的上限）。要用它就先写 " + CheckText.q(term + "=false") + "，否则删掉这一行"));
             } else {
-                String fix = pf.type.equals("bool") ? "先加 " + CheckText.q(f.parent + "=true") : "先把 " + CheckText.q(f.parent) + " 设成大于 0 的数";
-                out.add(new Issue(e.line, false, child + " 不起作用：它是 " + CheckText.q(f.parent) + " 的子项，而 " + CheckText.q(f.parent) + " 现在是关着的（" + cx.where(f.parent) + "）。要用它，" + fix + "；不想用就删掉这一行"));
+                String need = f.terms.length > 1 ? (f.any ? "它需要 " + names(f) + " 里至少一个开着" : "它需要 " + names(f) + " 同时开着") : "它是 " + CheckText.q(term) + " 的子项";
+                String why = cause.equals(term)
+                        ? CheckText.q(term) + " 现在是关着的（" + cx.where(term) + "）"
+                        : CheckText.q(term) + " 自己也不起作用，因为它依赖的 " + CheckText.q(cause) + " 是关着的（" + cx.where(cause) + "）";
+                String fix = cf != null && cf.type.equals("bool") ? "先加 " + CheckText.q(cause + "=true") : "先把 " + CheckText.q(cause) + " 设成大于 0 的数";
+                out.add(new Issue(e.line, false, child + " 不起作用：" + need + "，而" + why + "。要用它，" + fix + "；不想用就删掉这一行"));
             }
         }
 
@@ -183,6 +180,31 @@ final class CheckCross {
             if (on.length() > 0) {
                 out.add(new Issue(ln, false, "写了 " + CheckText.q("traceMethods") + "，而 " + CheckText.q("traceExclusive") + " 默认是 true（方法追踪独占）：" + on + " 这些开关即使是 true，在目标 App 里也会被自动当成关闭，记录里只会有方法追踪。"
                         + "想让它们一起记，加一行 " + CheckText.q("traceExclusive=false") + "；只想追踪方法就把这些开关删掉或写 false"));
+            }
+        }
+
+        // ---- 3b. 当前模式下根本不会记文字 / 图标 / 状态：只对这些记录生效的过滤没有用
+        // （代码里：关键字过滤只在文字 / 图标 / 状态记录路径上判断，控件过滤也只管这几类；方法追踪不看它们）
+        {
+            String[] contentSwitches = {"traceSet", "traceDraw", "traceColor", "traceIcons", "autoParams", "traceSetOnly", "traceState"};
+            boolean exclusiveActive = cx.hasTrace && !"false".equalsIgnoreCase(cx.get("traceExclusive"));
+            boolean anyContent = false;
+            for (String o : contentSwitches) if (cx.on(o)) anyContent = true;
+            if (exclusiveActive || !anyContent) {
+                String why = exclusiveActive
+                        ? "写了 " + CheckText.q("traceMethods") + " 且 " + CheckText.q("traceExclusive") + " 没关（默认 true），目标 App 里文字 / 图标 / 状态记录都是关的，现在只会记方法追踪"
+                        : "文字 / 图标 / 颜色 / 状态这些记录开关都关了，现在只会记方法追踪";
+                String fix = "要按这个条件找文字或图标：" + (exclusiveActive ? "去掉 traceMethods，或写 " + CheckText.q("traceExclusive=false") + "，" : "") + "并打开 " + CheckText.q("traceSet") + " / " + CheckText.q("traceDraw") + " 等记录开关";
+                Entry kwE = cx.explicit.get("keywords");
+                boolean kwOn = cx.on("keywordMode") && (cx.explicitVal("keywordMode") != null || kwE != null);
+                if (kwOn) {
+                    int ln = cx.explicit.containsKey("keywordMode") ? cx.line("keywordMode") : kwE.line;
+                    out.add(new Issue(ln, false, CheckText.q("keywordMode") + " / " + CheckText.q("keywords") + " 只对文字 / 图标 / 状态记录生效，方法追踪不受它限制，所以现在写了也不起作用。" + why + "。" + fix));
+                }
+                Entry vf = cx.explicit.get("viewFilter");
+                if (vf != null && !traceItems(vf.value).isEmpty()) {
+                    out.add(new Issue(vf.line, false, CheckText.q("viewFilter") + " 只对文字 / 图标 / 状态 / 绘制记录生效，方法追踪不看它，所以现在写了也不起作用。" + why + "。" + fix));
+                }
             }
         }
 
