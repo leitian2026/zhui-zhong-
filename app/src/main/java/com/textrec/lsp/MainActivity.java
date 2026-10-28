@@ -241,7 +241,7 @@ public class MainActivity extends Activity {
         } else {
             return;
         }
-        for (ConfigSchema.F c : ConfigSchema.ALL) if (c.parent.equals(key)) addField(parent, c.key, depth + 1);
+        for (ConfigSchema.F c : ConfigSchema.ALL) if (ConfigSchema.treeParent(c).equals(key)) addField(parent, c.key, depth + 1);
     }
 
     private void addNumber(LinearLayout parent, String key, String title, String desc, int depth) {
@@ -508,8 +508,6 @@ public class MainActivity extends Activity {
         Group g = new Group(root, "content", "记录内容（文字 / 图标 / 状态）",
                 "每一项都是只读观察，不会修改目标 App。开得越多记录越全，目标 App 也越卡。缩进的是子项，上面的总开关关着时子项不起作用。", false);
         for (String k : new String[]{"traceSet", "traceDraw", "traceColor", "autoParams", "traceIcons", "traceSetOnly", "traceState"}) addField(g.body, k, 0);
-        sub(g.body, "Compose 文字", "只有 Compose 画的文字（如弹幕）才用得上");
-        addField(g.body, "traceCompose", 0);
     }
 
     private void buildRangeGroup(LinearLayout root) {
@@ -664,23 +662,27 @@ public class MainActivity extends Activity {
         refreshUi();
     }
 
-    private boolean parentOn(String key) {
+    /** 这个开关自己开着吗（只看它自己的值，不看它的前提）：有控件看控件，没有控件看当前基准配置。 */
+    private boolean ownOn(String key) {
         if (key.equals("keywordMode")) return segRange != null && segRange.sel == 1;
         Switch s = sw.get(key);
         if (s != null) return s.isChecked();
         EditText e = ed.get(key);
-        if (e != null) return parse(e, 0) != 0;
-        return true;
+        if (e != null) return Relations.isOn(ConfigSchema.get(key), e.getText().toString());
+        try {
+            return Relations.isOn(ConfigSchema.get(key), String.valueOf(RecConfig.class.getField(key).get(cur)));
+        } catch (Throwable ignored) {
+            return true;
+        }
     }
 
     private void refreshUi() {
         if (segRange == null) return;
         for (ConfigSchema.F f : ConfigSchema.ALL) {
-            if (f.parent.isEmpty()) continue;
+            if (f.terms.length == 0) continue;
             View row = rows.get(f.key);
             if (row == null) continue;
-            boolean on = parentOn(f.parent);
-            row.setAlpha(FormModel.dead(f, on) ? 0.45f : 1f);
+            row.setAlpha(FormModel.dead(f, this::ownOn) ? 0.45f : 1f); // 前提不满足（含祖先）就变灰
         }
         refreshScenes();
         refreshBadges();
