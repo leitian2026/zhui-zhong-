@@ -302,30 +302,30 @@ quietCount=50
 | `traceDraw` | true/false | `true` |  | 记录「文字是谁画的」（总开关） |
 | `traceColor` | true/false | `true` |  | 记录文字颜色：画笔颜色和 setTextColor 位置（总开关） |
 | `traceIcons` | true/false | `false` |  | 记录 ImageView 图片和 contentDescription（找图标用，记录量大） |
-| `autoParams` | true/false | `true` |  | 自动观察 Compose 文字绘制参数（颜色、描边 / 填充） |
-| `traceSetOnly` | true/false | `false` |  | 也记「只被 setText、从未绘制」的文字（拖动才出现的文字） |
+| `autoParams` | true/false | `true` |  | 自动观察 Compose 文字绘制参数（颜色、描边 / 填充）（前提：`traceDraw` 开着） |
+| `traceSetOnly` | true/false | `false` |  | 也记「只被 setText、从未绘制」的文字（拖动才出现的文字）（前提：`traceSet` 开着） |
 | `traceState` | true/false | `false` |  | 记录 alpha / visibility / selected 的变化（总开关） |
-| `maxSetOnly` | 整数 | `500` | 10～5000 | 「没显示出来的文字」记录上限（父开关 `traceSetOnly` 关着时无效） |
-| `setText` | true/false | `true` |  | 子项：setText / append / setHint（父开关 `traceSet` 关着时无效） |
-| `setClear` | true/false | `true` |  | 子项：文字被清空（父开关 `traceSet` 关着时无效） |
-| `drawTextView` | true/false | `true` |  | 子项：TextView 的绘制（父开关 `traceDraw` 关着时无效） |
-| `drawCanvas` | true/false | `true` |  | 子项：自绘（非 Compose）的绘制（父开关 `traceDraw` 关着时无效） |
-| `drawCompose` | true/false | `true` |  | 子项：Compose 的绘制（父开关 `traceDraw` 关着时无效） |
-| `colorPaint` | true/false | `true` |  | 子项：画笔颜色（父开关 `traceColor` 关着时无效） |
-| `colorSet` | true/false | `true` |  | 子项：setTextColor 设置位置（父开关 `traceColor` 关着时无效） |
-| `iconImage` | true/false | `true` |  | 子项：ImageView 设置图片（父开关 `traceIcons` 关着时无效） |
-| `iconDesc` | true/false | `true` |  | 子项：setContentDescription（父开关 `traceIcons` 关着时无效） |
-| `stateAlpha` | true/false | `true` |  | 子项：透明度（父开关 `traceState` 关着时无效） |
-| `stateVisible` | true/false | `true` |  | 子项：可见性（父开关 `traceState` 关着时无效） |
-| `stateSelected` | true/false | `true` |  | 子项：选中态（父开关 `traceState` 关着时无效） |
+| `maxSetOnly` | 整数 | `500` | 10～5000 | 「没显示出来的文字」记录上限（前提：`traceSetOnly` 开着） |
+| `setText` | true/false | `true` |  | 子项：setText / append / setHint（前提：`traceSet` 开着） |
+| `setClear` | true/false | `true` |  | 子项：文字被清空（前提：`traceSet` 开着） |
+| `drawTextView` | true/false | `true` |  | 子项：TextView 的绘制（前提：`traceDraw` 开着） |
+| `drawCanvas` | true/false | `true` |  | 子项：自绘（非 Compose）的绘制（前提：`traceDraw` 开着） |
+| `drawCompose` | true/false | `true` |  | 子项：Compose 的绘制（前提：`traceDraw` 开着） |
+| `colorPaint` | true/false | `true` |  | 子项：画笔颜色（前提：`traceColor` 开着） |
+| `colorSet` | true/false | `true` |  | 子项：setTextColor 设置位置（前提：`traceColor` 开着） |
+| `iconImage` | true/false | `true` |  | 子项：ImageView 设置图片（前提：`traceIcons` 开着） |
+| `iconDesc` | true/false | `true` |  | 子项：setContentDescription（前提：`traceIcons` 开着） |
+| `stateAlpha` | true/false | `true` |  | 子项：透明度（前提：`traceState` 开着） |
+| `stateVisible` | true/false | `true` |  | 子项：可见性（前提：`traceState` 开着） |
+| `stateSelected` | true/false | `true` |  | 子项：选中态（前提：`traceState` 开着） |
 
 **记录范围（关键字）**
 
 | 字段 | 类型 | 默认 | 范围 | 说明 |
 |---|---|---|---|---|
 | `keywordMode` | true/false | `false` |  | true = 只记文字命中 keywords 的位置；false = 记全部文字（会拖慢目标 App） |
-| `keywords` | 文字 | 空 |  | 关键字列表；普通模式逗号或换行分隔，正则模式只能换行分隔（父开关 `keywordMode` 关着时无效） |
-| `regex` | true/false | `false` |  | keywords 按正则匹配（只在 keywordMode=true 时有效）（父开关 `keywordMode` 关着时无效） |
+| `keywords` | 文字 | 空 |  | 关键字列表；普通模式逗号或换行分隔，正则模式只能换行分隔（前提：`keywordMode` 开着） |
+| `regex` | true/false | `false` |  | keywords 按正则匹配（只在 keywordMode=true 时有效）（前提：`keywordMode` 开着） |
 
 **方法追踪**
 
@@ -336,19 +336,19 @@ quietCount=50
 | `treeOn` | true/false | `true` |  | 方法追踪命中时把 this / 参数 / 返回值展开成数据树 |
 | `watch` | 文字 | 空 |  | 观察点清单；每行「类#方法:路径」，方法必须同时写在 traceMethods 里 |
 | `traceExclusive` | true/false | `true` |  | 填了方法追踪时，自动把文字 / 图标 / 颜色 / 状态记录当成关闭 |
-| `traceDumpEvery` | 整数 | `25` | 1～1000 | 字段快照：每隔几次调用记一份（父开关 `traceDump` 关着时无效） |
-| `traceDumpLines` | 整数 | `40` | 10～2000 | 字段快照：一份最多多少行（父开关 `traceDump` 关着时无效） |
-| `traceDumpDepth` | 整数 | `3` | 0～6 | 字段快照：往子对象里展开几层（父开关 `traceDump` 关着时无效） |
+| `traceDumpEvery` | 整数 | `25` | 1～1000 | 字段快照：每隔几次调用记一份（前提：`traceDump` 开着） |
+| `traceDumpLines` | 整数 | `40` | 10～2000 | 字段快照：一份最多多少行（前提：`traceDump` 开着） |
+| `traceDumpDepth` | 整数 | `3` | 0～6 | 字段快照：往子对象里展开几层（前提：`traceDump` 开着） |
 | `annotFrames` | true/false | `true` |  | 调用栈每一帧标分层 / 角色 / 稳定度 |
-| `treeDepth` | 整数 | `4` | 1～8 | 数据树往下展开几层（父开关 `treeOn` 关着时无效） |
-| `treeNodes` | 整数 | `200` | 20～600 | 数据树一次最多多少节点（父开关 `treeOn` 关着时无效） |
-| `treeEvery` | 整数 | `10` | 1～100000 | 数据树每隔几次命中展开一次（父开关 `treeOn` 关着时无效） |
-| `treeViews` | true/false | `false` |  | 数据树也展开控件（View）自己的业务字段（父开关 `treeOn` 关着时无效） |
-| `watchAuto` | true/false | `true` |  | 自动把值变过的叶子加成观察点（父开关 `treeOn` 关着时无效） |
+| `treeDepth` | 整数 | `4` | 1～8 | 数据树往下展开几层（前提：`treeOn` 开着） |
+| `treeNodes` | 整数 | `200` | 20～600 | 数据树一次最多多少节点（前提：`treeOn` 开着） |
+| `treeEvery` | 整数 | `10` | 1～100000 | 数据树每隔几次命中展开一次（前提：`treeOn` 开着） |
+| `treeViews` | true/false | `false` |  | 数据树也展开控件（View）自己的业务字段（前提：`treeOn` 开着） |
+| `watchAuto` | true/false | `true` |  | 自动把值变过的叶子加成观察点（前提：`treeOn` 开着） |
 | `annotOwners` | true/false | `true` |  | 方法追踪命中时反查「谁持有这个对象」 |
 | `annotSweep` | true/false | `true` |  | 任务开始 / 结束时扫「容器 → 数据实体」 |
-| `annotBudgetMs` | 整数 | `40` | 5～500 | 一次反查最多多少毫秒（父开关 `annotOwners` 关着时无效） |
-| `annotPerKey` | 整数 | `6` | 1～100 | 每个追踪方法前几次命中做反查（父开关 `annotOwners` 关着时无效） |
+| `annotBudgetMs` | 整数 | `40` | 5～500 | 一次反查最多多少毫秒（前提：`annotOwners`、`annotSweep` 任一个开着） |
+| `annotPerKey` | 整数 | `6` | 1～100 | 每个追踪方法前几次命中做反查（前提：`annotOwners` 开着） |
 | `traceStackDepth` | 整数 | `30` | 1～80 | 方法追踪保存的调用栈层数（需要写了 `traceMethods`） |
 
 **采集过滤**
@@ -362,11 +362,11 @@ quietCount=50
 | `threadMode` | 整数 | `0` | 0～2 | 线程：0 全部，1 只主线程，2 只后台线程 |
 | `valueClock` | true/false | `false` |  | 方法追踪只记参数或返回值里带 00:00 这类时间的调用（需要写了 `traceMethods`） |
 | `quietCount` | 整数 | `0` | 0～10000000 | 压低高频方法：同一位置超过这个次数且持续一段时间后只计数；0 = 关（需要写了 `traceMethods`） |
-| `windowAll` | true/false | `false` |  | 触发窗口也管文字 / 图标 / 状态 / 绘制记录（默认只管方法追踪）（父开关 `windowMs` 关着时无效） |
+| `windowAll` | true/false | `false` |  | 触发窗口也管文字 / 图标 / 状态 / 绘制记录（默认只管方法追踪）（前提：`windowMs` 开着） |
 | `threadFilter` | 文字 | 空 |  | 线程名白名单；线程名包含其中任意一个词才记 |
 | `pageFilter` | 文字 | 空 |  | 页面白名单；页面标签包含其中任意一个词才记 |
 | `viewFilter` | 文字 | 空 |  | 控件白名单；View 类名或 id 包含其中任意一个词才记 |
-| `quietSpanMs` | 整数 | `3000` | 100～3600000 | 压低高频方法的持续时间（毫秒）（父开关 `quietCount` 关着时无效） |
+| `quietSpanMs` | 整数 | `3000` | 100～3600000 | 压低高频方法的持续时间（毫秒）（前提：`quietCount` 开着） |
 
 **视图树与点哪查哪**
 
@@ -374,11 +374,11 @@ quietCount=50
 |---|---|---|---|---|
 | `viewDump` | true/false | `false` |  | 任务开始 / 结束 / 点标记时导出视图树 |
 | `viewTap` | true/false | `false` |  | 点哪查哪：点屏幕时列出这个点上所有控件 |
-| `viewDumpKey` | 文字 | `ScrollMentionTextView,MentionTextView` |  | 视图树以哪个控件为准（类名或 id 含的词，逗号分隔）（父开关 `viewDump` 关着时无效） |
-| `viewDumpUp` | 整数 | `5` | 0～12 | 从主角控件往上几层当容器（父开关 `viewDump` 关着时无效） |
-| `viewDumpDepth` | 整数 | `5` | 1～10 | 容器往下列几层（父开关 `viewDump` 关着时无效） |
-| `viewDumpLines` | 整数 | `400` | 50～3000 | 视图树一份最多多少行（父开关 `viewDump` 关着时无效） |
-| `viewDumpSet` | true/false | `true` |  | 视图树里的文字控件带「设置自」（父开关 `viewDump` 关着时无效） |
+| `viewDumpKey` | 文字 | `ScrollMentionTextView,MentionTextView` |  | 视图树以哪个控件为准（类名或 id 含的词，逗号分隔）（前提：`viewDump` 开着） |
+| `viewDumpUp` | 整数 | `5` | 0～12 | 从主角控件往上几层当容器（前提：`viewDump` 开着） |
+| `viewDumpDepth` | 整数 | `5` | 1～10 | 容器往下列几层（前提：`viewDump` 开着） |
+| `viewDumpLines` | 整数 | `400` | 50～3000 | 视图树一份最多多少行（前提：`viewDump`、`viewTap` 任一个开着） |
+| `viewDumpSet` | true/false | `true` |  | 视图树里的文字控件带「设置自」（前提：`viewDump`、`viewTap` 任一个开着） |
 
 **时间线与任务**
 
@@ -386,40 +386,40 @@ quietCount=50
 |---|---|---|---|---|
 | `tlOn` | true/false | `true` |  | 时间线总开关 |
 | `recOutside` | true/false | `false` |  | 任务外也记录（单独一桶）；不写 = 只记任务内 |
-| `tlOps` | true/false | `true` |  | 时间线：记用户操作（父开关 `tlOn` 关着时无效） |
-| `tlSamples` | true/false | `true` |  | 时间线：记各位置的样本（父开关 `tlOn` 关着时无效） |
-| `tlTouch` | true/false | `true` |  | 时间线：触摸（父开关 `tlOps` 关着时无效） |
-| `tlKey` | true/false | `true` |  | 时间线：按键（父开关 `tlOps` 关着时无效） |
-| `tlPage` | true/false | `true` |  | 时间线：页面切换（父开关 `tlOn` 关着时无效） |
-| `tlViewTree` | true/false | `true` |  | 时间线：控件增删（父开关 `tlSamples` 关着时无效） |
-| `smpText` | true/false | `true` |  | 样本：setText / 清空（父开关 `tlSamples` 关着时无效） |
-| `smpState` | true/false | `true` |  | 样本：状态变化（父开关 `tlSamples` 关着时无效） |
-| `smpIcon` | true/false | `true` |  | 样本：图标（父开关 `tlSamples` 关着时无效） |
-| `smpTrace` | true/false | `true` |  | 样本：方法追踪调用（父开关 `tlSamples` 关着时无效） |
-| `tlClass` | true/false | `true` |  | 时间线：钩点可用（父开关 `tlOn` 关着时无效） |
+| `tlOps` | true/false | `true` |  | 时间线：记用户操作（前提：`tlOn` 开着） |
+| `tlSamples` | true/false | `true` |  | 时间线：记各位置的样本（前提：`tlOn` 开着） |
+| `tlTouch` | true/false | `true` |  | 时间线：触摸（前提：`tlOps` 开着） |
+| `tlKey` | true/false | `true` |  | 时间线：按键（前提：`tlOps` 开着） |
+| `tlPage` | true/false | `true` |  | 时间线：页面切换（前提：`tlOn` 开着） |
+| `tlViewTree` | true/false | `true` |  | 时间线：控件增删（前提：`tlSamples` 开着） |
+| `smpText` | true/false | `true` |  | 样本：setText / 清空（前提：`tlSamples` 开着） |
+| `smpState` | true/false | `true` |  | 样本：状态变化（前提：`tlSamples` 开着） |
+| `smpIcon` | true/false | `true` |  | 样本：图标（前提：`tlSamples` 开着） |
+| `smpTrace` | true/false | `true` |  | 样本：方法追踪调用（前提：`tlSamples` 开着） |
+| `tlClass` | true/false | `true` |  | 时间线：钩点可用（前提：`tlOn` 开着） |
 
 **链路追踪**
 
 | 字段 | 类型 | 默认 | 范围 | 说明 |
 |---|---|---|---|---|
 | `chainOn` | true/false | `false` |  | 链路追踪总开关（会拖慢目标 App，用完关掉）（需要写了 `traceMethods`） |
-| `chainCoroutine` | true/false | `true` |  | 链路上游：协程调度（父开关 `chainOn` 关着时无效） |
-| `chainAsync` | true/false | `true` |  | 链路上游：异步来源（Handler / 线程池）（父开关 `chainOn` 关着时无效） |
-| `chainEffects` | true/false | `true` |  | 链路下游：界面效果（父开关 `chainOn` 关着时无效） |
-| `chainDown` | true/false | `true` |  | 链路下游：被调用的方法（父开关 `chainOn` 关着时无效） |
-| `chainEvery` | 整数 | `20` | 1～100000 | 链路采样间隔（父开关 `chainOn` 关着时无效） |
-| `chainMaxDown` | 整数 | `120` | 10～1000 | 链里最多列多少个被调用的方法（父开关 `chainOn` 关着时无效） |
+| `chainCoroutine` | true/false | `true` |  | 链路上游：协程调度（前提：`chainAsync`、`chainOn` 都开着） |
+| `chainAsync` | true/false | `true` |  | 链路上游：异步来源（Handler / 线程池）（前提：`chainOn` 开着） |
+| `chainEffects` | true/false | `true` |  | 链路下游：界面效果（前提：`chainOn` 开着） |
+| `chainDown` | true/false | `true` |  | 链路下游：被调用的方法（前提：`chainOn` 开着） |
+| `chainEvery` | 整数 | `20` | 1～100000 | 链路采样间隔（前提：`chainOn` 开着） |
+| `chainMaxDown` | 整数 | `120` | 10～1000 | 链里最多列多少个被调用的方法（前提：`chainOn` 开着） |
 
 **Compose**
 
 | 字段 | 类型 | 默认 | 范围 | 说明 |
 |---|---|---|---|---|
-| `traceCompose` | true/false | `true` |  | 观察 Compose 的 paint 参数 |
-| `composeObj` | true/false | `true` |  | Compose 记录带 MultiParagraph 对象身份（父开关 `traceCompose` 关着时无效） |
-| `composeDump` | true/false | `true` |  | Compose 记录展开对象字段（父开关 `traceCompose` 关着时无效） |
-| `composeDumpEvery` | 整数 | `50` | 1～100000 | Compose 字段展开的间隔（父开关 `composeDump` 关着时无效） |
-| `composeDumpLines` | 整数 | `60` | 5～300 | Compose 字段展开一份最多多少行（父开关 `composeDump` 关着时无效） |
-| `dumpPrefixes` | 文字 | `androidx.compose.ui.text.` |  | 字段展开额外放行的包 / 类名前缀（父开关 `composeDump` 关着时无效） |
+| `traceCompose` | true/false | `true` |  | 观察 Compose 的 paint 参数（前提：`autoParams`、`traceDraw` 都开着） |
+| `composeObj` | true/false | `true` |  | Compose 记录带 MultiParagraph 对象身份（前提：`traceCompose`、`autoParams`、`traceDraw` 都开着） |
+| `composeDump` | true/false | `true` |  | Compose 记录展开对象字段（前提：`traceCompose`、`autoParams`、`traceDraw` 都开着） |
+| `composeDumpEvery` | 整数 | `50` | 1～100000 | Compose 字段展开的间隔（前提：`composeDump` 开着） |
+| `composeDumpLines` | 整数 | `60` | 5～300 | Compose 字段展开一份最多多少行（前提：`composeDump` 开着） |
+| `dumpPrefixes` | 文字 | `androidx.compose.ui.text.` |  | 字段展开额外放行的包 / 类名前缀（前提：`traceDump`、`composeDump` 任一个开着） |
 
 **记录容量与抓栈**
 
@@ -442,7 +442,7 @@ quietCount=50
 | `perKeyStacks` | 整数 | `3` | 1～50 | 同一位置前几次抓栈 |
 | `sampleEvery` | 整数 | `200` | 10～100000 | 之后每隔多少次抽样抓一次 |
 | `stacksPerSec` | 整数 | `1000` | 1～5000 | 全局每秒最多抓栈次数 |
-| `maxRecords` | 整数 | `2000` | 10～20000 | 记录总上限（只在 splitFiles=false 时有效）（父开关 `splitFiles` 为 false 时才有效） |
+| `maxRecords` | 整数 | `2000` | 10～20000 | 记录总上限（只在 splitFiles=false 时有效）（前提：`splitFiles`（要关着）） |
 | `flushSec` | 整数 | `3` | 1～60 | 落盘节流（秒） |
 
 <!-- /GEN:fields-all -->
@@ -528,3 +528,23 @@ quietCount=50
 - `类#*` 只含类自己声明的方法；构造方法不继承。
 - 本模块只记录，不修改颜色或隐藏。
 - **多个新功能（方法追踪继承方法、方法追踪独占、浮窗「下一件」、顶部粘贴框）没有在真机上验证过，也没有用 Android SDK 完整编译，只做过语法和符号检查。** 回复用户时如实说明。
+
+---
+
+## 12. 版本变化（给 AI 看：这个版本里和写配置有关的变化）
+
+每次发版在这里加一小节，标题写版本号，内容只写「AI 写配置时需要知道什么变了」。没有变化也要写一句「无变化」。
+
+### 1.33.2
+- 配置项之间的前提关系改成按代码核对过的版本（字段表里的「前提」一列）。几处以前写错的前提已改：`dumpPrefixes`、`traceCompose` / `composeObj` / `composeDump`（要 `autoParams` 和 `traceDraw` 都开着）、`chainCoroutine`（要 `chainAsync` 和 `chainOn`）、`traceSetOnly`（要 `traceSet`）。
+- 新增检查：只追踪方法时（写了 `traceMethods` 且没关 `traceExclusive`，或文字类记录开关全关），`keywordMode` / `keywords` / `viewFilter` 不起作用，写了会被提醒。要按关键字找文字，不要同时写方法追踪。
+
+### 1.33.1
+- 类名核对：方法追踪里的类如果没在已有记录里出现过会提醒（用户在记录页打开过记录之后才有数据）。示例包名 `com.example` 只警告，`com.a.B`、`com.demo.*` 判错。
+- 粘贴里没带任务清单，但用户之前已保存过时，不再提醒「没有任务清单」。
+- 预设 `statehook` 多设了 `excludeInfra`、`quietCount`、`quietSpanMs`。
+
+### 1.33.0
+- 新增块格式（`[config]` / `[traceMethods]` / `[tasks]` 分段，值里不用转义）和 `preset=名字`；写配置请先读《写配置手册》（`ai_manual.md`）。
+- 校验报告可以复制给 AI：收到后只改被点到的行，整块重发。
+
