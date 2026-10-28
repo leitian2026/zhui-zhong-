@@ -1,0 +1,54 @@
+# 「字段 前提」在代码里没出现在同一行时，人对着代码核对过的证据（tools/audit_relations.py 用）。
+# 格式：字段 前提  文件:行号  # 证据；前提写在 tools/field_meta.txt 的 parent 列。
+# 以 TODO 开头的是早期凭文档写的存量，还没对着代码核对（--verbose 列出）；新加的前提不允许再写 TODO。
+keywords keywordMode              KeywordFilter.java:21    # if (keywordMode) { … split(c.keywords, c.regex) … }
+regex keywordMode                 KeywordFilter.java:21    # 同上，regex 只在 keywordMode 分支里用
+traceSetOnly traceSet             Recorder.java:1665       # setText 钩子开头 !c.traceSet 就 return，1690 的 traceSetOnly 在它后面
+maxSetOnly traceSetOnly           Recorder.java:1690       # 只有 traceSetOnly 时才产生 TEXTSET 记录，RecConfig.java:208 才用到这个上限
+traceDumpEvery traceDump          Recorder.java:1337       # if (c.traceDump) dumpState(…)，1516 在 dumpState 里
+traceDumpLines traceDump          Recorder.java:1337       # 同上（1518）
+traceDumpDepth traceDump          Recorder.java:1337       # 同上（1518）
+viewDumpKey viewDump              ViewDump.java:66         # request() 开头 !c.viewDump 就 return；build()（252）由它调用
+viewDumpUp viewDump               ViewDump.java:66         # 同上（281）
+viewDumpDepth viewDump            ViewDump.java:66         # 同上（297、300）
+viewDumpLines viewDump            ViewDump.java:66         # 同上（299）
+viewDumpLines viewTap             ViewDump.java:129        # 点哪查哪：ensureTouchHook 需要 c.viewTap；buildTap（185）也用 viewDumpLines
+viewDumpSet viewDump              ViewDump.java:66         # build → tree（340）→ setNote（230）
+viewDumpSet viewTap               ViewDump.java:129        # buildTap（191）→ setNote（230）
+treeDepth treeOn                  DataTree.java:528        # capture() 开头 !c.treeOn 就 return，559 在它后面
+treeNodes treeOn                  DataTree.java:528        # 同上（559）
+treeEvery treeOn                  DataTree.java:528        # 同上（547）
+treeViews treeOn                  DataTree.java:528        # 同上（560、561）
+watchAuto treeOn                  DataTree.java:528        # 同上（601 在 capture 里）
+annotBudgetMs annotOwners         Annot.java:586           # noteCall() 开头 !c.annotOwners 就 return，599 在它后面
+annotBudgetMs annotSweep          Annot.java:680           # sweep 开头 !c.annotSweep 就 return，684 在它后面
+annotPerKey annotOwners           Annot.java:586           # 同上（590）
+composeObj traceCompose           Recorder.java:853        # Compose paint 钩子只在 autoParams && traceDraw && traceCompose 时安装；2057 在 Compose 绘制记录函数里（间接，没逐行追调用）
+composeObj autoParams             Recorder.java:853        # 同上
+composeObj traceDraw              Recorder.java:853        # 同上
+composeDump traceCompose          Recorder.java:853        # 同上（2026）
+composeDump autoParams            Recorder.java:853        # 同上
+composeDump traceDraw             Recorder.java:853        # 同上
+composeDumpEvery composeDump      Recorder.java:2026       # if (… c.composeDump) noteComposeDump(…)，2033 在里面
+composeDumpLines composeDump      Recorder.java:2026       # 同上（2038）
+dumpPrefixes traceDump            Recorder.java:308        # FieldDump.setExtra 在配置加载时无条件设置；FieldDump.dump 被 traceDump（1518）和 composeDump（2038）共用
+dumpPrefixes composeDump          Recorder.java:308        # 同上
+tlTouch tlOps                     Timeline.java:547        # TOUCH 事件只在 if (ops) 里产生（547、599）
+tlKey tlOps                       Timeline.java:565        # KEY 事件只在 ops 下产生（565、577）
+tlPage tlOn                       Timeline.java:130        # addAt() 开头 if (!on) return；PAGE 由 Recorder.java:81 经 add 产生
+tlClass tlOn                      Timeline.java:130        # 同上；CLASS 由 Recorder.java:1266 经 add 产生
+tlViewTree tlSamples              Recorder.java:737        # VIEWTREE 钩子开头 !Timeline.samples 就 return
+smpText tlSamples                 Timeline.java:202        # want() 开头 !samples 就 return false
+smpState tlSamples                Timeline.java:202        # 同上
+smpIcon tlSamples                 Timeline.java:202        # 同上
+smpTrace tlSamples                Recorder.java:1336       # Timeline.samples && Timeline.want(…) 才记 TRACE 样本
+stateAlpha traceState             Recorder.java:784        # 钩子开头 !c.traceState 就 return，787 在它后面
+stateVisible traceState           Recorder.java:784        # 同上
+stateSelected traceState          Recorder.java:784        # 同上
+chainEvery chainOn                Chain.java:120           # enter() 开头 if (!on) return，132 的 every 在同一个函数里
+chainMaxDown chainOn              Chain.java:120           # 下游钩子（188）只处理 CUR 里有链路上下文的调用，上下文只在 enter()（已检查 on）里创建（间接）
+drawTextView traceDraw            Recorder.java:1947       # onDrawText() 开头 !c.traceDraw 就 return，1962 在同一个函数里
+drawCanvas traceDraw              Recorder.java:1947       # drawCanvas() 只被 onDrawText 调用（1966）
+drawCompose traceDraw             Recorder.java:1947       # drawCompose 在 drawCanvas()（2005）里判断，同上
+iconImage traceIcons              Recorder.java:1853       # 钩子开头 !c.traceIcons 就 return，1854 紧接在后面
+iconDesc traceIcons               Recorder.java:1853       # 同上
