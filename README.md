@@ -1,9 +1,21 @@
 # TextRec — 屏幕文字位置记录（LSPosed 模块，只读）
 
-> **AI 请先读 [AI使用说明.md](AI使用说明.md)**：里面有硬规则（多个操作必须用任务浮窗并写任务清单）、按需求选配置的对照表、全部功能清单和配置字段。下面的 README 是按版本写的变更记录。
+> 改代码前先读《开发须知.md》（改了什么 → 必须同步哪些文件，交付前要跑 `sh tools/run_config_tests.sh`）。
+
+> **AI 请先读 [写配置手册](app/src/main/assets/ai_manual.md)**（写配置只需要这一份：预设、字段表、规则、示例）；要了解全部功能和原理再读 [完整参考](app/src/main/assets/ai_guide.md)（硬规则：多个操作必须用任务浮窗并写任务清单）。下面的 README 是按版本写的变更记录。
 
 记录目标 App 屏幕上**每段文字 / 每个图标**是“谁设置的”（`setText` / `setImage*` 调用栈）和“谁画的”（`drawText` 调用栈），
 并给出能直接拿去 hook 的方法签名（标明 **[稳定]** 还是 **[混淆]**，优先推荐稳定的）。**只观察，不修改任何内容**（改颜色/隐藏文字另做模块）。
+
+## 1.33.2：配置关系和代码逐条核对
+
+- **关系表升级**（`tools/field_meta.txt` 的 parent 列）：支持「都要开着」`a&b`、「任一个开着即可」`a/b`、「必须关着」`x!`，并且递归（一个开关自己的前提不满足时，依赖它的子项也不起作用）。配置检查器、首页变灰、文档字段表用同一份 `Relations` 求值。
+- **对着代码核对后改正的错误关系**：`dumpPrefixes`（字段快照和 Compose 展开共用）、`traceCompose` / `composeObj` / `composeDump`（要 `autoParams` 和 `traceDraw` 都开着才安装钩子）、`chainCoroutine`（要 `chainAsync` 和 `chainOn`）、`traceSetOnly`（要 `traceSet`）、`annotBudgetMs`（对象归属扫描也用）、`viewDumpLines` / `viewDumpSet`（点哪查哪也用）、`autoParams`（要 `traceDraw`）。
+- **新增检查「当前模式下没用」**：只追踪方法（方法追踪独占，或文字类记录开关全关）时，`keywordMode` / `keywords` / `viewFilter` 只对文字 / 图标 / 状态记录生效，写了不起作用，会提醒。`threadFilter` / `pageFilter` 对方法追踪也生效，不提醒。
+- **开发须知**：新增《开发须知.md》，列出「改了什么 → 必须同步哪些文件」和交付前要做的事（跑测试、加测试、如实说明没验证的部分）。把项目发给 AI 改代码时，让它先读这份。
+- **文档同步检查** `tools/check_docs_sync.py`：改了 `versionName` 就必须在 README 顶部和 `ai_guide.md` 第 12 章各写一节；记录页粘贴命令认的每个 key 必须在 `ai_guide.md` 第 9 章写到。改了功能不写文档，测试会失败。
+- **测试每次推送都会跑**：新增 `.github/workflows/test.yml`（只跑测试，不构建 APK，几十秒）。
+- **关系核对脚本** `tools/audit_relations.py`（已加进 `tools/run_config_tests.sh`）：扫描运行时代码，同一个判断里一起出现的配置字段必须在关系表里声明，或在 `tools/relations_reviewed.txt` 里登记「不构成前提」及原因；表里声明的前提如果代码里两者不在同一行，必须在 `tools/relations_evidence.txt` 里登记文件:行号证据。以后新增配置项或改关系，没核对就过不了测试。
 
 ## 1.33.1：自查后的修复和整理
 
