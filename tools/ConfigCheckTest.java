@@ -54,6 +54,8 @@ public class ConfigCheckTest {
         roundTripTests();
         statusTests();
         regressionTests();
+        relationTests();
+        modeTests();
         formModelTests();
         boolean fix = false;
         for (String f : args) if (f.equals("--fix")) fix = true;
@@ -236,6 +238,29 @@ public class ConfigCheckTest {
         ok(!has(l3, false, "没有在已有记录"), "从栈帧学到的类不应被误报：\n" + ConfigCheck.format(l3));
     }
 
+    // 关系：多条件、任一个、递归
+    static void relationTests() {
+        ok(!has(run("traceMethods=com.q.A#foo\ntraceDump=true\ndumpPrefixes=com.q.\n"), false, "不起作用"), "dumpPrefixes 配 traceDump 不应报不起作用");
+        ok(!has(run("dumpPrefixes=com.q.\n"), false, "不起作用"), "composeDump 默认开着，dumpPrefixes 单独写是有效的");
+        expect("dumpPrefixes 两个都没开", "composeDump=false\ndumpPrefixes=com.q.\n", false, "至少一个");
+        expect("composeDump 缺 autoParams", "autoParams=false\ntraceCompose=true\n", false, "autoParams");
+        expect("chainCoroutine 缺 chainAsync", "chainOn=true\nchainAsync=false\nchainCoroutine=true\n", false, "chainAsync");
+        expect("递归：tlTouch 的祖先 tlOn 关了", "tlOn=false\ntlTouch=false\ntlOps=true\n", false, "tlOn");
+        expect("递归根因", "tlOn=false\ntlTouch=true\n", false, "自己也不起作用");
+        expect("traceSetOnly 缺 traceSet", "traceSet=false\ntraceSetOnly=true\n", false, "traceSet");
+    }
+
+    // 当前模式下没用：方法追踪独占时，关键字 / 控件过滤不起作用
+    static void modeTests() {
+        expect("trace 预设 + keywords", "preset=trace\nkeywordMode=true\nkeywords=福利\ntraceMethods=com.q.A#foo\n", false, "只会记方法追踪");
+        expect("traceMethods + keywords（默认独占）", "keywordMode=true\nkeywords=福利\ntraceMethods=com.q.A#foo\n", false, "traceExclusive");
+        expect("trace 预设 + viewFilter", "preset=trace\nviewFilter=DiggLayout\ntraceMethods=com.q.A#foo\n", false, "viewFilter");
+        ok(!has(run("keywordMode=true\nkeywords=福利\ntraceMethods=com.q.A#foo\ntraceExclusive=false\n"), false, "不起作用"), "traceExclusive=false 时关键字照常有效");
+        ok(!has(run("preset=text\nkeywordMode=true\nkeywords=福利\n"), false, "不起作用"), "没写方法追踪时关键字有效");
+        expect("内容全关 + keywords", "preset=icons\ntraceIcons=false\nkeywordMode=true\nkeywords=福利\n", false, "只会记方法追踪");
+        ok(!has(run("preset=trace\nthreadFilter=main\ntraceMethods=com.q.A#foo\n"), false, "不起作用"), "threadFilter 对方法追踪有效，不应警告");
+    }
+
     // 回归：任务清单在别处已有时，不该报「没有任务清单」；常见示例包名只警告不判错；预设只亮最贴近的一个
     static void regressionTests() {
         RecConfig c = new RecConfig();
@@ -315,8 +340,15 @@ public class ConfigCheckTest {
         ok(n.get("filter") != null && n.get("filter") == 1 && n.get("trace") != null && n.get("trace") == 1 && n.get("limits") != null && n.get("limits") == 1, "已改项计数：" + n);
         ok(FormModel.changedCounts(new RecConfig()).isEmpty(), "默认配置没有已改项");
         // 变灰规则
-        ok(FormModel.dead(ConfigSchema.get("setText"), false) && !FormModel.dead(ConfigSchema.get("setText"), true), "子项变灰：父开关关着时灰");
-        ok(FormModel.dead(ConfigSchema.get("maxRecords"), true) && !FormModel.dead(ConfigSchema.get("maxRecords"), false), "maxRecords：splitFiles 开着时灰");
+        java.util.Set<String> offSet = new java.util.HashSet<>(java.util.Arrays.asList("traceSet"));
+        java.util.function.Predicate<String> own = k -> !offSet.contains(k) && !(k.equals("splitFiles") && offSet.contains("!splitFiles"));
+        ok(FormModel.dead(ConfigSchema.get("setText"), own), "子项变灰：父开关 traceSet 关着时灰");
+        offSet.clear();
+        ok(!FormModel.dead(ConfigSchema.get("setText"), own), "父开关开着时不灰");
+        offSet.add("splitFiles");
+        ok(!FormModel.dead(ConfigSchema.get("maxRecords"), own), "maxRecords：splitFiles 关着时有效");
+        offSet.clear();
+        ok(FormModel.dead(ConfigSchema.get("maxRecords"), own), "maxRecords：splitFiles 开着时灰");
     }
 
     // ------------------------------------------------------------ 文档里的示例
