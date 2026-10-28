@@ -3,6 +3,10 @@
 set -e
 cd "$(dirname "$0")/.."
 if [ "$1" = "--fix" ]; then python3 tools/gen_schema.py; else python3 tools/gen_schema.py --check; fi
+# 关系表和代码对得上吗（同一个判断里一起出现的字段是否声明了前提；声明的前提是否有核对证据）
+python3 tools/audit_relations.py
+# 文档有没有跟上代码（版本说明、粘贴命令的 key）
+python3 tools/check_docs_sync.py
 OUT=$(mktemp -d)
 SRC=app/src/main/java/com/textrec/lsp
 STUB=$OUT/stub
@@ -15,7 +19,7 @@ final class Rec {
 }
 JAVA
 javac -encoding UTF-8 -d "$OUT/classes" \
-  $SRC/ConfigCheck.java $SRC/CheckText.java $SRC/CheckFields.java $SRC/CheckTrace.java $SRC/CheckTasks.java $SRC/CheckCross.java $SRC/ConfigSchema.java $SRC/Presets.java $SRC/PasteBlocks.java $SRC/RecConfig.java $SRC/TargetStatus.java $SRC/KnownNames.java $SRC/FormModel.java \
+  $SRC/ConfigCheck.java $SRC/CheckText.java $SRC/CheckFields.java $SRC/CheckTrace.java $SRC/CheckTasks.java $SRC/CheckCross.java $SRC/ConfigSchema.java $SRC/Presets.java $SRC/PasteBlocks.java $SRC/RecConfig.java $SRC/TargetStatus.java $SRC/KnownNames.java $SRC/FormModel.java $SRC/Relations.java \
   "$STUB/com/textrec/lsp/Rec.java" tools/ConfigCheckTest.java
 # --fix：把文档里的预设表按 Presets.java 重写（字段表用 python3 tools/gen_schema.py 重写）
 java -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -cp "$OUT/classes" com.textrec.lsp.ConfigCheckTest "$@" app/src/main/assets/ai_manual.md app/src/main/assets/ai_guide.md
