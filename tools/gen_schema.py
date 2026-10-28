@@ -99,9 +99,15 @@ def build():
         if k not in fields:
             problems.append("tools/field_meta.txt 有 %s，但 RecConfig 里没有这个字段" % k)
     for k, m in meta.items():
-        p = m["parent"].rstrip("!")
-        if p and p not in fields:
-            problems.append("%s 的 parent %s 不是 RecConfig 字段" % (k, p))
+        ex = m["parent"]
+        if "&" in ex and "/" in ex:
+            problems.append("%s 的 parent %s 不能同时用 & 和 /" % (k, ex))
+        for term in re.split(r"[&/]", ex) if ex else []:
+            p = term.strip().rstrip("!")
+            if p not in fields:
+                problems.append("%s 的 parent 里的 %s 不是 RecConfig 字段" % (k, p))
+            if p == k:
+                problems.append("%s 的 parent 不能是它自己" % k)
         if m["requires"] and m["requires"] not in ("traceMethods",):
             problems.append("%s 的 requires 只支持 traceMethods" % k)
     for k in order:
@@ -125,7 +131,9 @@ def build():
     lines.append("")
     lines.append("    static final class F {")
     lines.append("        final String key, type, def, group, parent, requires, title, desc, help;")
-    lines.append("        final boolean hasRange, parentInverse;")
+    lines.append("        final boolean hasRange, any;")
+    lines.append("        final String[] terms;")
+    lines.append("        final boolean[] inverse;")
     lines.append("        final long min, max;")
     lines.append("        final int level;")
     lines.append("")
@@ -138,8 +146,16 @@ def build():
     lines.append("            this.max = max;")
     lines.append("            this.group = group;")
     lines.append("            this.level = level;")
-    lines.append("            this.parentInverse = parent.endsWith(\"!\");")
-    lines.append("            this.parent = parent.endsWith(\"!\") ? parent.substring(0, parent.length() - 1) : parent;")
+    lines.append("            this.parent = parent;")
+    lines.append("            this.any = parent.indexOf('/') >= 0;")
+    lines.append("            String[] ts = parent.isEmpty() ? new String[0] : parent.split(\"[&/]\");")
+    lines.append("            this.terms = new String[ts.length];")
+    lines.append("            this.inverse = new boolean[ts.length];")
+    lines.append("            for (int i = 0; i < ts.length; i++) {")
+    lines.append("                String s = ts[i].trim();")
+    lines.append("                inverse[i] = s.endsWith(\"!\");")
+    lines.append("                terms[i] = inverse[i] ? s.substring(0, s.length() - 1) : s;")
+    lines.append("            }")
     lines.append("            this.requires = requires;")
     lines.append("            this.title = title;")
     lines.append("            this.desc = desc;")
@@ -157,6 +173,11 @@ def build():
             jstr(k), jstr(t), jstr(norm_def(f)), "true" if has else "false", f.get("min", 0), f.get("max", 0),
             jstr(m["group"]), m["level"], jstr(m["parent"]), jstr(m["requires"]), jstr(m["title"]), jstr(m["desc"]), jstr(m["help"])))
     lines.append("    };")
+    lines.append("")
+    lines.append("    /** 首页里缩进在谁下面：条件表达式的第一项（没有则空）。 */")
+    lines.append("    static String treeParent(F f) {")
+    lines.append("        return f.terms.length == 0 ? \"\" : f.terms[0];")
+    lines.append("    }")
     lines.append("")
     lines.append("    static F get(String key) {")
     lines.append("        for (F f : ALL) if (f.key.equals(key)) return f;")
@@ -186,7 +207,15 @@ def build():
                 rng = "%d～%d" % (f["min"], f["max"]) if "min" in f else ""
                 desc = m["desc"]
                 if m["parent"]:
-                    desc += "（父开关 `%s`%s）" % (m["parent"].rstrip("!"), " 为 false 时才有效" if m["parent"].endswith("!") else " 关着时无效")
+                    ex = m["parent"]
+                    ts = [x.strip() for x in re.split(r"[&/]", ex)]
+                    names = ["`%s`%s" % (x.rstrip("!"), "（要关着）" if x.endswith("!") else "") for x in ts]
+                    if len(ts) == 1:
+                        desc += "（前提：%s%s）" % (names[0], "" if ts[0].endswith("!") else " 开着")
+                    elif "/" in ex:
+                        desc += "（前提：%s 任一个开着）" % "、".join(names)
+                    else:
+                        desc += "（前提：%s 都开着）" % "、".join(names)
                 if m["requires"]:
                     desc += "（需要写了 `traceMethods`）"
                 out.append("| `%s` | %s | %s | %s | %s |" % (k, t, d, rng, desc.replace("|", "/")))
