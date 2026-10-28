@@ -1,0 +1,22 @@
+name: test
+
+# 只跑配置检查器 / 关系核对 / 文档同步 / 文档示例的测试：不构建 APK，不需要 Android SDK，几十秒。
+# 每次推送和拉取请求都会跑，改了功能没同步文档、没加测试，这里会失败。
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Config checker, relations audit, docs sync, doc examples
+        run: sh tools/run_config_tests.sh
