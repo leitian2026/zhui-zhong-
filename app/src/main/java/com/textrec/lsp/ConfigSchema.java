@@ -10,7 +10,9 @@ final class ConfigSchema {
 
     static final class F {
         final String key, type, def, group, parent, requires, title, desc, help;
-        final boolean hasRange, parentInverse;
+        final boolean hasRange, any;
+        final String[] terms;
+        final boolean[] inverse;
         final long min, max;
         final int level;
 
@@ -23,8 +25,16 @@ final class ConfigSchema {
             this.max = max;
             this.group = group;
             this.level = level;
-            this.parentInverse = parent.endsWith("!");
-            this.parent = parent.endsWith("!") ? parent.substring(0, parent.length() - 1) : parent;
+            this.parent = parent;
+            this.any = parent.indexOf('/') >= 0;
+            String[] ts = parent.isEmpty() ? new String[0] : parent.split("[&/]");
+            this.terms = new String[ts.length];
+            this.inverse = new boolean[ts.length];
+            for (int i = 0; i < ts.length; i++) {
+                String s = ts[i].trim();
+                inverse[i] = s.endsWith("!");
+                terms[i] = inverse[i] ? s.substring(0, s.length() - 1) : s;
+            }
             this.requires = requires;
             this.title = title;
             this.desc = desc;
@@ -39,8 +49,8 @@ final class ConfigSchema {
             new F("traceDraw", "bool", "true", false, 0L, 0L, "content", 1, "", "", "文字是谁画的", "记录「文字是谁画的」（总开关）", "记下每段文字由哪行代码画到屏幕上；自绘和 Compose 的文字只能靠它"),
             new F("traceColor", "bool", "true", false, 0L, 0L, "content", 1, "", "", "文字颜色", "记录文字颜色：画笔颜色和 setTextColor 位置（总开关）", "记下画笔颜色，以及谁调用了 setTextColor"),
             new F("traceIcons", "bool", "false", false, 0L, 0L, "content", 1, "", "", "图标和按钮图片", "记录 ImageView 图片和 contentDescription（找图标用，记录量大）", "记下 ImageView 设置的图片和内容描述，用来找图标按钮；记录量会明显增加"),
-            new F("autoParams", "bool", "true", false, 0L, 0L, "content", 2, "", "", "Compose 文字参数", "自动观察 Compose 文字绘制参数（颜色、描边 / 填充）", "自动抓取 Compose 文字的颜色、描边 / 填充（如弹幕的黑边 + 白字）"),
-            new F("traceSetOnly", "bool", "false", false, 0L, 0L, "content", 2, "", "", "没显示出来的文字", "也记「只被 setText、从未绘制」的文字（拖动才出现的文字）", "也记下只被设置、从未画出的文字，如拖动进度条才出现的时长"),
+            new F("autoParams", "bool", "true", false, 0L, 0L, "content", 2, "traceDraw", "", "Compose 文字参数", "自动观察 Compose 文字绘制参数（颜色、描边 / 填充）", "自动抓取 Compose 文字的颜色、描边 / 填充（如弹幕的黑边 + 白字）"),
+            new F("traceSetOnly", "bool", "false", false, 0L, 0L, "content", 2, "traceSet", "", "没显示出来的文字", "也记「只被 setText、从未绘制」的文字（拖动才出现的文字）", "也记下只被设置、从未画出的文字，如拖动进度条才出现的时长"),
             new F("traceState", "bool", "false", false, 0L, 0L, "content", 2, "", "", "状态变化", "记录 alpha / visibility / selected 的变化（总开关）", "记下透明度 / 可见性 / 选中态的变化，研究“选中”效果怎么实现的。默认只记已经记过文字或图标的控件；在「采集过滤」里填了「控件包含」，匹配的任何控件都记"),
             new F("maxSetOnly", "int", "500", true, 10L, 5000L, "content", 3, "traceSetOnly", "", "“没显示出来的文字”上限", "「没显示出来的文字」记录上限", "这类记录单独计数。默认 500"),
             new F("setText", "bool", "true", false, 0L, 0L, "content", 3, "traceSet", "", "", "子项：setText / append / setHint", ""),
@@ -74,7 +84,7 @@ final class ConfigSchema {
             new F("watchAuto", "bool", "true", false, 0L, 0L, "trace", 3, "treeOn", "", "自动给「值变过的叶子」加观察点", "自动把值变过的叶子加成观察点", "默认开，最多 24 个；导出「观察点变化」里写出变化发生在哪个方法执行期间"),
             new F("annotOwners", "bool", "true", false, 0L, 0L, "trace", 3, "", "", "方法追踪命中时反查「谁持有这个对象」", "方法追踪命中时反查「谁持有这个对象」", "默认开。从当前页面的 Activity / Fragment / ViewModel / 视图树里反向找出持有它的容器，在后台线程做，有时间上限"),
             new F("annotSweep", "bool", "true", false, 0L, 0L, "trace", 3, "", "", "任务开始 / 结束 / 点标记时扫「容器 → 数据实体」", "任务开始 / 结束时扫「容器 → 数据实体」", "默认开。导出里有「对象归属」一节，不需要追踪任何方法就能知道 Aweme 住在哪个容器里"),
-            new F("annotBudgetMs", "int", "40", true, 5L, 500L, "trace", 3, "annotOwners", "", "", "一次反查最多多少毫秒", ""),
+            new F("annotBudgetMs", "int", "40", true, 5L, 500L, "trace", 3, "annotOwners/annotSweep", "", "", "一次反查最多多少毫秒", ""),
             new F("annotPerKey", "int", "6", true, 1L, 100L, "trace", 3, "annotOwners", "", "", "每个追踪方法前几次命中做反查", ""),
             new F("traceStackDepth", "int", "30", true, 1L, 80L, "trace", 3, "", "traceMethods", "方法追踪栈层数", "方法追踪保存的调用栈层数", "方法追踪的调用栈保存多少层。默认 30"),
             new F("windowMs", "int", "0", true, 0L, 600000L, "filter", 2, "", "traceMethods", "触发窗口（毫秒）", "触发窗口：最近一次触摸后多少毫秒内才记；0 = 不限制", "只记最近一次触摸之后这段时间内发生的调用；0 = 不限。常用 1500 / 3000 / 5000。适合“做一次操作看一组记录”，后台刷新基本都被挡掉。方法追踪默认受它管"),
@@ -94,8 +104,8 @@ final class ConfigSchema {
             new F("viewDumpKey", "string", "ScrollMentionTextView,MentionTextView", false, 0L, 0L, "view", 3, "viewDump", "", "以哪个控件为准", "视图树以哪个控件为准（类名或 id 含的词，逗号分隔）", "屏幕上类名或 id 含这些词（逗号分隔）的控件当作「主角」，取可见面积最大的一个。默认是抖音视频文案的两个类"),
             new F("viewDumpUp", "int", "5", true, 0L, 12L, "view", 3, "viewDump", "", "", "从主角控件往上几层当容器", ""),
             new F("viewDumpDepth", "int", "5", true, 1L, 10L, "view", 3, "viewDump", "", "", "容器往下列几层", ""),
-            new F("viewDumpLines", "int", "400", true, 50L, 3000L, "view", 3, "viewDump", "", "", "视图树一份最多多少行", ""),
-            new F("viewDumpSet", "bool", "true", false, 0L, 0L, "view", 3, "viewDump", "", "", "视图树里的文字控件带「设置自」", ""),
+            new F("viewDumpLines", "int", "400", true, 50L, 3000L, "view", 3, "viewDump/viewTap", "", "", "视图树一份最多多少行", ""),
+            new F("viewDumpSet", "bool", "true", false, 0L, 0L, "view", 3, "viewDump/viewTap", "", "", "视图树里的文字控件带「设置自」", ""),
             new F("tlOn", "bool", "true", false, 0L, 0L, "timeline", 2, "", "", "时间线（总开关）", "时间线总开关", "把用户操作、页面切换、各位置的记录样本按毫秒排成一条时间线；开销很小，默认开"),
             new F("recOutside", "bool", "false", false, 0L, 0L, "timeline", 2, "", "", "任务外也记录", "任务外也记录（单独一桶）；不写 = 只记任务内", "默认关：用任务浮窗录的时候，只有「任务开始 → 任务结束」之间才建记录。打开后任务外也记，但单独一桶存"),
             new F("tlOps", "bool", "true", false, 0L, 0L, "timeline", 3, "tlOn", "", "记用户操作", "时间线：记用户操作", "点击、滑动、返回键，带坐标和点中的控件"),
@@ -110,18 +120,18 @@ final class ConfigSchema {
             new F("smpTrace", "bool", "true", false, 0L, 0L, "timeline", 3, "tlSamples", "", "", "样本：方法追踪调用", ""),
             new F("tlClass", "bool", "true", false, 0L, 0L, "timeline", 3, "tlOn", "", "", "时间线：钩点可用", ""),
             new F("chainOn", "bool", "false", false, 0L, 0L, "chain", 2, "", "traceMethods", "链路追踪", "链路追踪总开关（会拖慢目标 App，用完关掉）", "以方法追踪里的方法为落脚点，记下它的上游（谁调用它、谁异步投递）和下游（它执行期间调用了哪些方法、改了哪些界面）。会拖慢目标 App，用完关掉"),
-            new F("chainCoroutine", "bool", "true", false, 0L, 0L, "chain", 3, "chainOn", "", "", "链路上游：协程调度", ""),
+            new F("chainCoroutine", "bool", "true", false, 0L, 0L, "chain", 3, "chainAsync&chainOn", "", "", "链路上游：协程调度", ""),
             new F("chainAsync", "bool", "true", false, 0L, 0L, "chain", 3, "chainOn", "", "上游：异步来源", "链路上游：异步来源（Handler / 线程池）", "钩 Handler 消息队列和线程池，记下异步任务是谁投递的"),
             new F("chainEffects", "bool", "true", false, 0L, 0L, "chain", 3, "chainOn", "", "下游：界面效果", "链路下游：界面效果", "锚点执行期间发生的 setText / 清空 / 图标 / 状态变化"),
             new F("chainDown", "bool", "true", false, 0L, 0L, "chain", 3, "chainOn", "", "下游：被调用的方法", "链路下游：被调用的方法", "锚点所在的类（最多 8 个类、300 个方法）会被临时钩住，记下锚点执行期间它们被调用的先后和嵌套"),
             new F("chainEvery", "int", "20", true, 1L, 100000L, "chain", 3, "chainOn", "", "", "链路采样间隔", ""),
             new F("chainMaxDown", "int", "120", true, 10L, 1000L, "chain", 3, "chainOn", "", "", "链里最多列多少个被调用的方法", ""),
-            new F("traceCompose", "bool", "true", false, 0L, 0L, "compose", 3, "", "", "Compose 文字绘制", "观察 Compose 的 paint 参数", "钩 MultiParagraph.paint*（颜色 / 描边 / 填充），Compose 才有"),
-            new F("composeObj", "bool", "true", false, 0L, 0L, "compose", 3, "traceCompose", "", "Compose：记对象身份", "Compose 记录带 MultiParagraph 对象身份", "每条 Compose 记录记下 MultiParagraph 对象的身份哈希（看是同一个对象反复画还是每次新建）"),
-            new F("composeDump", "bool", "true", false, 0L, 0L, "compose", 3, "traceCompose", "", "Compose：展开对象字段", "Compose 记录展开对象字段", "每条 Compose 记录展开一次 MultiParagraph 的字段（含文字）"),
+            new F("traceCompose", "bool", "true", false, 0L, 0L, "compose", 3, "autoParams&traceDraw", "", "Compose 文字绘制", "观察 Compose 的 paint 参数", "钩 MultiParagraph.paint*（颜色 / 描边 / 填充），Compose 才有"),
+            new F("composeObj", "bool", "true", false, 0L, 0L, "compose", 3, "traceCompose&autoParams&traceDraw", "", "Compose：记对象身份", "Compose 记录带 MultiParagraph 对象身份", "每条 Compose 记录记下 MultiParagraph 对象的身份哈希（看是同一个对象反复画还是每次新建）"),
+            new F("composeDump", "bool", "true", false, 0L, 0L, "compose", 3, "traceCompose&autoParams&traceDraw", "", "Compose：展开对象字段", "Compose 记录展开对象字段", "每条 Compose 记录展开一次 MultiParagraph 的字段（含文字）"),
             new F("composeDumpEvery", "int", "50", true, 1L, 100000L, "compose", 3, "composeDump", "", "", "Compose 字段展开的间隔", ""),
             new F("composeDumpLines", "int", "60", true, 5L, 300L, "compose", 3, "composeDump", "", "", "Compose 字段展开一份最多多少行", ""),
-            new F("dumpPrefixes", "string", "androidx.compose.ui.text.", false, 0L, 0L, "compose", 3, "composeDump", "", "额外放行的类", "字段展开额外放行的包 / 类名前缀", "字段展开默认只进 App 自己的类。这里的包名 / 类名前缀也会进，逗号或换行分隔"),
+            new F("dumpPrefixes", "string", "androidx.compose.ui.text.", false, 0L, 0L, "compose", 3, "traceDump/composeDump", "", "额外放行的类", "字段展开额外放行的包 / 类名前缀", "字段展开默认只进 App 自己的类。这里的包名 / 类名前缀也会进，逗号或换行分隔"),
             new F("capTextView", "int", "800", true, 10L, 20000L, "limits", 3, "", "", "", "TextView 文字记录上限", ""),
             new F("capCanvas", "int", "300", true, 10L, 20000L, "limits", 3, "", "", "", "自绘文字记录上限", ""),
             new F("capCompose", "int", "400", true, 10L, 20000L, "limits", 3, "", "", "", "Compose 文字记录上限", ""),
@@ -145,6 +155,11 @@ final class ConfigSchema {
             new F("maxPerKind", "int", "500", true, 20L, 20000L, "internal", 3, "", "", "", "已废弃的每类上限，只给没有单独上限的种类用", ""),
             new F("epoch", "long", "0", false, 0L, 0L, "internal", 3, "", "", "", "变了就清空已有记录；一般不手写", ""),
     };
+
+    /** 首页里缩进在谁下面：条件表达式的第一项（没有则空）。 */
+    static String treeParent(F f) {
+        return f.terms.length == 0 ? "" : f.terms[0];
+    }
 
     static F get(String key) {
         for (F f : ALL) if (f.key.equals(key)) return f;
