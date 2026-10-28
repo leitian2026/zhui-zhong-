@@ -83,8 +83,8 @@ keywordMode = true
 | `traceDraw` | true/false | `true` |  | 记录「文字是谁画的」（总开关） |
 | `traceColor` | true/false | `true` |  | 记录文字颜色：画笔颜色和 setTextColor 位置（总开关） |
 | `traceIcons` | true/false | `false` |  | 记录 ImageView 图片和 contentDescription（找图标用，记录量大） |
-| `autoParams` | true/false | `true` |  | 自动观察 Compose 文字绘制参数（颜色、描边 / 填充） |
-| `traceSetOnly` | true/false | `false` |  | 也记「只被 setText、从未绘制」的文字（拖动才出现的文字） |
+| `autoParams` | true/false | `true` |  | 自动观察 Compose 文字绘制参数（颜色、描边 / 填充）（前提：`traceDraw` 开着） |
+| `traceSetOnly` | true/false | `false` |  | 也记「只被 setText、从未绘制」的文字（拖动才出现的文字）（前提：`traceSet` 开着） |
 | `traceState` | true/false | `false` |  | 记录 alpha / visibility / selected 的变化（总开关） |
 
 **记录范围（关键字）**
@@ -92,8 +92,8 @@ keywordMode = true
 | 字段 | 类型 | 默认 | 范围 | 说明 |
 |---|---|---|---|---|
 | `keywordMode` | true/false | `false` |  | true = 只记文字命中 keywords 的位置；false = 记全部文字（会拖慢目标 App） |
-| `keywords` | 文字 | 空 |  | 关键字列表；普通模式逗号或换行分隔，正则模式只能换行分隔（父开关 `keywordMode` 关着时无效） |
-| `regex` | true/false | `false` |  | keywords 按正则匹配（只在 keywordMode=true 时有效）（父开关 `keywordMode` 关着时无效） |
+| `keywords` | 文字 | 空 |  | 关键字列表；普通模式逗号或换行分隔，正则模式只能换行分隔（前提：`keywordMode` 开着） |
+| `regex` | true/false | `false` |  | keywords 按正则匹配（只在 keywordMode=true 时有效）（前提：`keywordMode` 开着） |
 
 **方法追踪**
 
@@ -282,6 +282,21 @@ flushSec = 3
 # expect: 占位类名
 [traceMethods]
 com.a.B#foo
+```
+
+只追踪方法时又写了关键字（方法追踪不看关键字，写了没用；要找文字就去掉 `traceMethods`）：
+
+```textrec-bad
+# expect-warn: 只会记方法追踪
+[config]
+preset = trace
+keywordMode = true
+
+[keywords]
+福利
+
+[traceMethods]
+com.demo.player.PlayerView#seekTo
 ```
 
 追踪的方法同时被排除了（永远记不到）：
