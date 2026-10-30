@@ -461,6 +461,7 @@ public class GuideService extends Service {
 
     private void showReady() {
         ready = true;
+        marker("浮窗就绪"); // 目标进程靠它知道：从现在到点「开始」之前也算任务外，不记录（配置 flowGate，默认开）
         setCur("准备", 0xFFFFC857, 0x33FFC857);
         showNext(-1, false);
         rowRun.setVisibility(View.GONE);
@@ -718,6 +719,8 @@ public class GuideService extends Service {
         String full = "";
         int entries;
         String okText = "";
+        /** 失败但可能只是快照还没写出来（读到的快照里还没有这件事的结束标记）：next() 会隔一会儿再读，不急着报错。 */
+        boolean retry;
     }
 
     private static final java.util.Set<String> NOT_EVENT = new java.util.HashSet<>(java.util.Arrays.asList(
@@ -733,14 +736,30 @@ public class GuideService extends Service {
         checking = true;
         tvTimer.setText("");
         tvWarn.setVisibility(View.VISIBLE);
-        tvWarn.setText("检查有没有记录到…（约 5 秒，别动）");
+        tvWarn.setText("检查有没有记录到…（通常 2 秒内，最多 15 秒，别动）");
         sender.execute(() -> {
+            final long t0 = System.currentTimeMillis();
             try {
-                Thread.sleep(5000); // 目标进程 3 秒落一次盘，再留点余量
+                Thread.sleep(1200); // 目标进程收到结束标记后约 0.15 秒内落盘；再留点余量给标记送达
             } catch (InterruptedException ignored) {
             }
-            final Check c = evaluate(n, t);
-            ui.post(() -> afterCheck(c));
+            Check c;
+            while (true) {
+                c = evaluate(n, t);
+                // 失败但快照里还没有这件事的结束标记 = 快照可能还没写出来：隔一会儿再读，最多等到 15 秒
+                if (c.ok || !c.retry || System.currentTimeMillis() - t0 > 15000) break;
+                final int waited = (int) ((System.currentTimeMillis() - t0) / 1000);
+                ui.post(() -> {
+                    if (checking && root != null) tvWarn.setText("检查有没有记录到…（已等 " + waited + " 秒，别动）");
+                });
+                try {
+                    Thread.sleep(1500);
+                } catch (InterruptedException ignored) {
+                    break;
+                }
+            }
+            final Check cc = c;
+            ui.post(() -> afterCheck(cc));
         });
     }
 
@@ -788,6 +807,8 @@ public class GuideService extends Service {
         String bestKinds = "";
         String cfgInfo = "", warn = "";
         long bestRecs = -1;
+        java.util.List<TaskStats.RecInfo> infos = new java.util.ArrayList<>(); // 全部记录的按任务统计信息（噪声 / 独有 / 共有）
+        String capNote = "";
         for (String pkg : pkgs) {
             RootShell.Result r;
             try {
@@ -814,6 +835,8 @@ public class GuideService extends Service {
                     // 数这件事期间出现过的记录：每条记录带「按任务阶段的调用次数」segCounts，key 是任务序号。
                     // 只数 key 在 0..199 之内的任务（Rec 里按任务阶段计数的数组有 200 格）
                     JSONArray ra = root.optJSONArray("records");
+                    TaskStatsJson.addAll(ra, infos);
+                    if (capNote.isEmpty()) capNote = TaskStatsJson.capNote(st);
                     if (ra != null && n < 200) {
                         for (int i = 0; i < ra.length(); i++) {
                             JSONObject ro = ra.optJSONObject(i);
@@ -879,29 +902,55 @@ public class GuideService extends Service {
                 }
             }
         }
+        // 按任务统计这件事记得干不干净（噪声 / 独有 / 共有），和导出开头的「洁净度概况」同一套算法
+        java.util.TreeMap<Integer, String> names = new java.util.TreeMap<>();
+        for (int i = 0; i < tasks.size(); i++) names.put(i + 1, (tasks.get(i).baseline ? "@基线 " : "") + tasks.get(i).name);
+        TaskStats.Summary ss = TaskStats.computeAll(infos, names);
+        TaskStats.Line me = null;
+        for (TaskStats.Line l : ss.lines) if (l.task == n) me = l;
+        if (me == null) me = TaskStats.compute(n, t.name, t.baseline, infos);
+
+        // 判断顺序：先看有没有记录（有记录就是有，不再因为时间线事件为 0 误判），再看原因
         String why = null;
+        boolean retry = false;
         if (!anySnap) {
             why = "读不到任何快照：目标 App 没运行过 / 模块没在 LSPosed 里勾选它 / 没 root / 数据目录里还没有 textrec 目录";
-        } else if (!gotStart) {
+            retry = true;
+        } else if (taskRecs == 0 && !gotStart) {
             why = "目标进程没收到「任务开始 " + n + "」标记：目标 App 当时没在运行，或进程是在标记发出之后才启动的";
-        } else if (!t.baseline && bestEvents == 0) {
+        } else if (!t.baseline && taskRecs == 0 && bestEvents == 0) {
             why = "这件事期间目标进程一个事件都没记到：操作没触发已设的钩子 / 采集开关或过滤（页面、线程、触发窗口）挡掉了 / 做的不是这件事";
+            retry = !gotEnd;
         } else if (!t.baseline && !t.allowEmpty && n < 200 && taskRecs == 0) {
             // 以前只数时间线事件（点击、页面切换也算），所以一条记录都没有也会显示「已记录完成」；现在必须真有记录
-            why = "这件事期间有 " + bestEvents + " 个操作事件，但一条记录都没记到：多半是关键字 / 过滤挡掉了"
-                    + "（多个关键字要写在同一行，用 \\n 隔开）、采集开关没开、或应用设置后没有强杀目标 App 重开";
+            why = "这件事期间有 " + bestEvents + " 个操作事件，但一条记录都没记到：" + (capNote.isEmpty()
+                    ? "多半是关键字 / 过滤挡掉了（多个关键字一行一个，写在 [keywords] 段里）、采集开关没开、或应用设置后没有强杀目标 App 重开"
+                    : capNote + "；也可能是关键字 / 过滤挡掉了、采集开关没开");
+            retry = !gotEnd;
         }
         if (why == null) {
             res.ok = true;
             res.entries = bestEntries;
-            res.okText = t.baseline ? "基线已记录" : (t.allowEmpty && taskRecs == 0) ? "对照任务：这件事期间 0 条记录（符合预期），" + bestEvents + " 个操作事件" : "这件事期间记到 " + taskRecs + " 条记录、" + bestEvents + " 个事件 " + bestKinds;
+            String ev = bestEvents < 0 ? "" : "，" + bestEvents + " 个事件 " + bestKinds;
+            if (t.baseline) {
+                res.okText = "基线已记录，" + TaskStats.describe(me);
+            } else if (t.allowEmpty && taskRecs == 0) {
+                res.okText = "对照任务：这件事期间 0 条记录（符合预期）" + (bestEvents < 0 ? "" : "，" + bestEvents + " 个操作事件");
+            } else {
+                res.okText = "这件事期间" + TaskStats.describe(me) + ev;
+                String w = TaskStats.warn(me, ss.anyBaseline);
+                if (!w.isEmpty()) res.okText += "\n⚠ " + w;
+                if (!capNote.isEmpty()) res.okText += "\n⚠ " + capNote;
+            }
             return res;
         }
+        d.append(TaskStats.report(ss, capNote));
         d.append("原因：").append(why).append('\n');
         if (!gotEnd && gotStart) d.append("（结束标记也没收到，可能快照还没写出来）\n");
         if (!cfgInfo.isEmpty()) d.append("目标进程采集配置与统计：").append(cfgInfo).append('\n');
         if (!warn.isEmpty()) d.append("目标进程警告：").append(warn).append('\n');
         res.ok = false;
+        res.retry = retry;
         res.entries = bestEntries;
         res.full = d.toString();
         res.summary = "任务 " + n + "「" + t.name + "」没记录到\n" + why + "\n点「复制原因」发给 Claude，不用做下一件。";
@@ -930,6 +979,7 @@ public class GuideService extends Service {
         if (mark && !ready && !finished && idx >= 0) marker("任务中止（在第 " + (idx + 1) + " 件）");
         // 流程开始过（不管有没有暂停）都发一条，目标进程靠它退出「任务流程」状态，之后照常全记
         if (wasPaused || !ready && idx >= 0) marker("记录继续（浮窗关闭）");
+        marker("浮窗关闭"); // 没点过开始就关：恢复成没用浮窗时的样子；点过开始再关：目标进程停止记录（flowGate），直到「应用并重新记录」
         if (root != null) {
             try {
                 wm.removeView(root);
@@ -946,6 +996,12 @@ public class GuideService extends Service {
     public void onDestroy() {
         running = false;
         if (root != null) {
+            // 浮窗还开着就被系统杀掉 / 停掉（不是走 closeAll）：补发关闭标记，不然目标 App 会一直停在「浮窗就绪」，什么都不记
+            try {
+                if (paused || (!ready && idx >= 0)) marker("记录继续（浮窗关闭）");
+                marker("浮窗关闭");
+            } catch (Throwable ignored) {
+            }
             try {
                 wm.removeView(root);
             } catch (Throwable ignored) {
