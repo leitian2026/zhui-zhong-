@@ -57,6 +57,7 @@ tlOn|timeline|2|||时间线（总开关）|时间线总开关|把用户操作、
 tlOps|timeline|3|tlOn||记用户操作|时间线：记用户操作|点击、滑动、返回键，带坐标和点中的控件
 tlSamples|timeline|3|tlOn||记各位置的样本|时间线：记各位置的样本|每个位置前 5 次、之后每 100 次进一次时间线
 recOutside|timeline|2|||任务外也记录|任务外也记录（单独一桶）；不写 = 只记任务内|默认关：用任务浮窗录的时候，只有「任务开始 → 任务结束」之间才建记录。打开后任务外也记，但单独一桶存
+flowGate|timeline|2|recOutside!||只在任务内记录（浮窗就绪后、关浮窗后不记）|任务浮窗开了、还没点开始，和关浮窗之后，都按任务外处理，不记录；没开浮窗时不受影响|默认开。点开始之前的操作、关浮窗之后的刷新不再混进记录的总数（它们会把频率分类算偏，还会提前占满每种记录的上限）。关浮窗后一直不记，要继续记请点「应用并重新记录」。想连开始前和关浮窗后也记，关掉它；打开「任务外也记录」时这个开关不起作用
 traceExclusive|trace|2|||方法追踪时只记方法追踪|填了方法追踪时，自动把文字 / 图标 / 颜色 / 状态记录当成关闭|默认开：填了要追踪的方法时，文字 / 图标 / 颜色 / 状态 / 绘制这些记录开关在目标 App 里自动当成关闭（界面上的开关不会被改，方法清单清空后恢复），记录里只剩方法追踪，更干净。想一起记就关掉它
 traceCompose|compose|3|autoParams&traceDraw||Compose 文字绘制|观察 Compose 的 paint 参数|钩 MultiParagraph.paint*（颜色 / 描边 / 填充），Compose 才有
 composeObj|compose|3|traceCompose&autoParams&traceDraw||Compose：记对象身份|Compose 记录带 MultiParagraph 对象身份|每条 Compose 记录记下 MultiParagraph 对象的身份哈希（看是同一个对象反复画还是每次新建）
@@ -119,5 +120,6 @@ depthDraw|limits|3||||绘制栈深度；0 = 用 stackDepth|
 depthColor|limits|3||||颜色设置栈深度；0 = 用 stackDepth|
 depthIcon|limits|3||||图标设置栈深度；0 = 用 stackDepth|
 depthState|limits|3||||状态变化栈深度；0 = 用 stackDepth|
+noiseQuota|limits|3|||基线 / 任务外新建记录的上限比例（%）|基线期间和任务外新建的记录，最多占每种记录上限的这个百分比；100 = 不限制|默认 50。基线里周期性噪声很多，不限制会把每种记录的上限占满，任务里新出现的位置就被丢掉。只限制「新建」，已有记录照常计数。没用任务浮窗时不受影响
 dumpPrefixes|compose|3|traceDump/composeDump||额外放行的类|字段展开额外放行的包 / 类名前缀|字段展开默认只进 App 自己的类。这里的包名 / 类名前缀也会进，逗号或换行分隔
 epoch|internal|3||||变了就清空已有记录；一般不手写|
