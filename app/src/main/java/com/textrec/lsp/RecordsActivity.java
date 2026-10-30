@@ -1539,8 +1539,8 @@ public class RecordsActivity extends Activity {
         sb.append("TextRec 任务清单记录  ").append(new SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(new Date()))
                 .append("  共 ").append(items.size()).append(" 条（全部记录 ").append(all.size()).append(" 条）\n");
         if (items.isEmpty()) sb.append("⚠ 没有任务内的文字记录（任务期间没有文字被设置 / 绘制，或被筛选开关挡掉了）；下面只有时间线 / 视图树 / 点击这几节。\n");
-        sb.append("只含任务内：任务清单上每一件事期间被调用过的记录；任务外的记录不在这个文件里。不套当前的类型 / 页面 / 屏幕上 / 公共控件筛选。\n");
-        sb.append("每条记录里的「按任务阶段的调用次数」写明它在哪几件事里出现了几次，没出现的任务 = 0 次。\n");
+        sb.append("范围：任务清单上某件事期间至少命中过一次的记录（不套当前的类型 / 页面 / 屏幕上 / 公共控件筛选）；只在任务外出现的记录不在这个文件里。\n");
+        sb.append("注意：每条记录的总次数、首末时间、频率分类是全程的，含它在任务外的命中；「按任务阶段的调用次数」才是各件事里各几次（任务之外 = 任务外的次数）。任务外的命中占多少见下面「洁净度概况」。\n");
         List<GuideService.Task> ts = GuideService.parse(getSharedPreferences(Actions.PREFS, MODE_PRIVATE).getString(GuideService.PREF_TASKS, GuideService.DEFAULT_TASKS));
         sb.append("任务清单（共 ").append(ts.size()).append(" 件）：\n");
         for (int i = 0; i < ts.size(); i++) {
@@ -1566,6 +1566,17 @@ public class RecordsActivity extends Activity {
         StringBuilder none = new StringBuilder();
         for (int i = 1; i <= ts.size(); i++) if (!seen.contains(i)) none.append(" 任务").append(i);
         if (none.length() > 0) sb.append("⚠ 这几件事期间一条记录都没有：").append(none).append("（没做 / 目标进程没收到标记 / 被筛选开关挡掉了，看下面的概况）\n");
+        // 洁净度概况（按任务）：噪声 / 独有 / 共有、做多遍时每遍都出现的条数、含任务外命中的记录数（和浮窗每件做完后的提示同一套算法）
+        try {
+            org.json.JSONArray arr = new org.json.JSONArray();
+            for (Snap.Item it : all) if (it.o.optInt("bucket") == 0) arr.put(it.o);
+            ArrayList<TaskStats.RecInfo> infos = new ArrayList<>();
+            TaskStatsJson.addAll(arr, infos);
+            java.util.TreeMap<Integer, String> nm = new java.util.TreeMap<>();
+            for (int i = 0; i < ts.size(); i++) nm.put(i + 1, (ts.get(i).baseline ? "@基线 " : "") + ts.get(i).name);
+            sb.append(TaskStats.report(TaskStats.computeAll(infos, nm), ""));
+        } catch (Throwable ignored) {
+        }
         if (!infoBase.isEmpty()) sb.append(infoBase);
         if (!Snap.timelineText.isEmpty()) sb.append("\n══ 时间线 ══\n").append(Snap.timelineText).append("══ 时间线结束 ══\n");
         if (!Snap.viewDumpText.isEmpty()) sb.append("\n══ 视图树 ══\n").append(Snap.viewDumpText).append("══ 视图树结束 ══\n");
