@@ -68,6 +68,19 @@ final class Store {
         return a;
     }
 
+    /** 每种记录里「基线期间 / 任务外出生」的条数（和 noiseQuota 比）。 */
+    private final java.util.concurrent.ConcurrentHashMap<String, AtomicInteger> kindNoiseN = new java.util.concurrent.ConcurrentHashMap<>();
+
+    AtomicInteger kindNoise(String k) {
+        AtomicInteger a = kindNoiseN.get(k);
+        if (a == null) {
+            a = new AtomicInteger();
+            AtomicInteger o = kindNoiseN.putIfAbsent(k, a);
+            if (o != null) a = o;
+        }
+        return a;
+    }
+
     AtomicLong kindDropped(String k) {
         AtomicLong a = kindDrop.get(k);
         if (a == null) {
@@ -137,6 +150,7 @@ final class Store {
         setOnlyCount.set(0);
         droppedSetOnly.set(0);
         kindN.clear();
+        kindNoiseN.clear();
         kindDrop.clear();
         blkWindow.set(0);
         blkThread.set(0);
@@ -203,6 +217,16 @@ final class Store {
             } catch (Throwable t) {
                 scheduled.set(false);
             }
+        }
+    }
+
+    /** 马上（约 150ms 后）落一次盘，不等节流：浮窗要读快照做检查时用。 */
+    void flushSoon() {
+        dirty.set(true);
+        if (dir == null) return;
+        try {
+            ex.schedule(this::flush, 150, TimeUnit.MILLISECONDS);
+        } catch (Throwable ignored) {
         }
     }
 
