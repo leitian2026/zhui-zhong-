@@ -31,7 +31,7 @@ import java.util.regex.Pattern;
  * 暂停|点一下视频暂停|
  * </pre>
  * 段名：config / traceMethods / keywords / watch / excludeList / threadFilter / pageFilter / viewFilter / valueFilter /
- * viewDumpKey / dumpPrefixes / tasks（= 任务清单）。列表段里一行一项，{@code //} 开头是注释；config 段里一行一个 {@code key = value}，{@code #} 开头是注释。
+ * viewDumpKey / dumpPrefixes / viewProbe / tasks（= 任务清单）。列表段里一行一项，{@code //} 开头是注释；config 段里一行一个 {@code key = value}，{@code #} 开头是注释。
  * 第一个段名之前的行算 config 段。
  *
  * <p><b>旧格式</b>（Properties：key=value，行尾反斜杠续行）仍然支持，规则见 {@link #splitOld(String)}。
@@ -42,7 +42,7 @@ final class PasteBlocks {
     private PasteBlocks() {}
 
     static final String[] LIST_SECTIONS = {"keywords", "traceMethods", "watch", "excludeList", "threadFilter", "pageFilter",
-            "viewFilter", "valueFilter", "viewDumpKey", "dumpPrefixes"};
+            "viewFilter", "valueFilter", "viewDumpKey", "dumpPrefixes", "viewProbe"};
 
     static boolean isListKey(String k) {
         for (String s : LIST_SECTIONS) if (s.equals(k)) return true;
