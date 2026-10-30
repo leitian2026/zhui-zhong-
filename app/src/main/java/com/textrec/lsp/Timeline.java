@@ -56,18 +56,35 @@ final class Timeline {
     static volatile boolean flowActive;
     /** 配置：任务外也记录（默认关） */
     static volatile boolean recOutside;
+    /** 配置：只在任务内记录（默认开）：浮窗「就绪」（还没点开始）和「关闭之后」也按任务外处理。 */
+    static volatile boolean gate = true;
+    /** 任务浮窗开着、但还没点「开始」：收到「浮窗就绪」到收到「浮窗关闭」。没用浮窗时一直是 false。 */
+    static volatile boolean armed;
+    /** 任务流程做过、浮窗已经关了：不再记录，直到「应用并重新记录」（清空时解冻）或浮窗再次就绪。 */
+    static volatile boolean frozen;
+
+    /** 现在算不算「任务外」：流程进行中（或浮窗就绪、gate 开着）、而且不在任务里。 */
+    private static boolean outsideTask() {
+        return curTask == 0 && (flowActive || (gate && armed));
+    }
 
     /**
-     * 这次调用要不要跳过“建记录 / 记样本”（轻模式）：暂停记录期间，或任务流程进行中、现在不在任务里、而且没开「任务外也记录」。
+     * 这次调用要不要跳过“建记录 / 记样本”（轻模式）：暂停记录期间；或现在是任务外（流程进行中 / 浮窗就绪后、不在任务里）；
+     * 或浮窗关闭后（frozen）；后两种在开了「任务外也记录」时不跳过。
      * 轻模式下 setText 仍然维护“控件 ← 设置栈”的对应（不然任务里画出来的文字查不到是谁设置的），其余一律不记。
      */
     static boolean skip() {
-        return paused || (flowActive && curTask == 0 && !recOutside);
+        return paused || (!recOutside && (outsideTask() || (gate && frozen)));
     }
 
-    /** 记录归哪一桶：0 = 任务内（含没用任务浮窗时的全部记录），1 = 任务外（任务流程进行中、现在不在任务里，只有开了「任务外也记录」才会走到这里）。 */
+    /** 记录归哪一桶：0 = 任务内（含没用任务浮窗时的全部记录），1 = 任务外（只有开了「任务外也记录」才会走到这里）。 */
     static int bucket() {
-        return flowActive && curTask == 0 ? 1 : 0;
+        return outsideTask() ? 1 : 0;
+    }
+
+    /** 现在新建的记录算不算「噪声出生」：任务浮窗用着（含就绪），而且在基线里或任务外。 */
+    static boolean noiseBorn() {
+        return (flowActive || (gate && armed)) && (inBaseline() || curTask == 0);
     }
     private static final ArrayDeque<Ev> SAMP = new ArrayDeque<>();
     private static final java.util.concurrent.ConcurrentHashMap<String, int[]> KIND_N = new java.util.concurrent.ConcurrentHashMap<>();
@@ -108,6 +125,7 @@ final class Timeline {
     static void configure(RecConfig c) {
         on = c.tlOn;
         recOutside = c.recOutside;
+        gate = c.flowGate;
         ops = c.tlOn && c.tlOps;
         samples = c.tlOn && c.tlSamples;
         fClass = c.tlClass;
@@ -370,7 +388,10 @@ final class Timeline {
             long now = System.currentTimeMillis();
             for (int i = 0; i < lines.length; i++) {
                 String[] p = lines[i].split("\\|", 3);
-                if (p.length < 3 || !p[2].trim().startsWith("任务流程开始")) continue;
+                if (p.length < 3) continue;
+                String lb = p[2].trim();
+                boolean start = lb.startsWith("任务流程开始");
+                if (!start && !(from < 0 && lb.startsWith("浮窗就绪"))) continue; // 只有「就绪」没有「开始」时，从就绪补读（目标 App 在这期间重启也保持任务外不记）
                 try {
                     if (now - Long.parseLong(p[1].trim()) <= 5 * 60 * 1000L) from = i;
                 } catch (Throwable ignored) {
@@ -433,6 +454,18 @@ final class Timeline {
         if (delay < 0 || delay > (replaying ? 300000 : 15000)) delay = 0; // 两边时钟对不上就按收到的时刻；补读的标记允许更早（时间会是负数 = 进程启动前）
         long t = SystemClock.uptimeMillis() - delay;
         String suffix = replaying ? "（进程启动前发出，启动后补读，时间按发出时刻推算）" : delay > 200 ? "（TextRec 发出 " + delay + "ms 后才收到，时间已按发出时刻推算）" : "";
+        if (label.startsWith("浮窗就绪")) {
+            armed = true;
+            frozen = false; // 重新打开浮窗 = 新一轮
+            addAt("MARK", label + suffix, t, sendWall);
+            return;
+        }
+        if (label.startsWith("浮窗关闭")) {
+            armed = false;
+            addAt("MARK", label + suffix, t, sendWall);
+            if (!replaying) Recorder.flushSoon();
+            return;
+        }
         if (label.startsWith("记录暂停")) {
             addAt("MARK", label + suffix, t, sendWall);
             paused = true;
@@ -441,8 +474,9 @@ final class Timeline {
         if (label.startsWith("记录继续")) {
             paused = false;
             if (label.startsWith("记录继续（浮窗关闭）")) {
-                flowActive = false; // 浮窗关了：回到没用浮窗时的样子，照常全记
+                flowActive = false; // 浮窗关了：不再是任务流程
                 curTask = 0;
+                frozen = true; // 做过任务流程再关浮窗：一直不记（gate 开着时），关浮窗之后的刷新不混进记录；「应用并重新记录」解冻
             }
             addAt("MARK", label + suffix, t, sendWall);
             return;
@@ -459,6 +493,7 @@ final class Timeline {
             addAt("BASE", "基线开始（请什么都不要操作" + (secs > 0 ? "，" + secs + " 秒后自动结束" : "") + "）" + suffix, t, sendWall);
         } else if (label.startsWith("基线结束")) {
             endBaseline(t, "基线结束" + suffix, sendWall);
+            if (!replaying) Recorder.flushSoon(); // 浮窗马上要读快照做检查：别等节流落盘
         } else if (label.startsWith("任务流程开始")) {
             flowActive = true;
             curTask = 0;
@@ -489,6 +524,7 @@ final class Timeline {
                     Annot.sweep(label, curTask);
                 }
                 curTask = 0;
+                if (!replaying) Recorder.flushSoon(); // 同上：任务结束就落盘
                 gen++; // flowActive 保持：做完以后到关浮窗之前，任务外仍按「任务外也记录」开关处理，不会把收尾操作记进任务内
             }
             addAt("TASK", label + suffix, t, sendWall);
@@ -698,6 +734,8 @@ final class Timeline {
     }
 
     static void clear() {
+        frozen = false; // 「应用并重新记录」：新一轮，解冻
+        armed = false;  // 同上：万一浮窗被杀、没来得及发关闭标记，也能靠重新记录恢复
         synchronized (EVS) {
             EVS.clear();
             SAMP.clear();
