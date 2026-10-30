@@ -58,6 +58,8 @@ public class ConfigCheckTest {
         modeTests();
         taskStatsTests();
         flowGateTests();
+        probeTextTests();
+        probeCheckTests();
         formModelTests();
         boolean fix = false;
         for (String f : args) if (f.equals("--fix")) fix = true;
@@ -315,6 +317,56 @@ public class ConfigCheckTest {
         expect("noiseQuota 超范围", "noiseQuota=500\n", false, "超出允许范围");
         expect("noiseQuota 太小", "noiseQuota=0\n", false, "超出允许范围");
         clean("noiseQuota 正常", "noiseQuota=70\n");
+    }
+
+    // 视图快照：配置检查
+    static void probeCheckTests() {
+        clean("viewProbe 块格式", "[config]\nprobeAfterMs = 0,200,1000,2500\n\n[viewProbe]\ncom.q.feed.DiggView\ncom.q.feed.DiggLayout\n");
+        clean("viewProbe 旧格式", "viewProbe=com.q.feed.DiggView\\ncom.q.feed.DiggLayout\nprobeAfterMs=0,500\n");
+        expect("probeAfterMs 没有 viewProbe", "probeAfterMs=0,500\n", false, "viewProbe");
+        ok(!has(run("probeAfterMs=0,200,1000,2500\n"), false, "不起作用"), "写默认值不警告");
+        expect("probeAfterMs 全角逗号", "viewProbe=com.q.A\nprobeAfterMs=0，200\n", true, "全角");
+        expect("probeAfterMs 带单位", "viewProbe=com.q.A\nprobeAfterMs=0,200ms\n", true, "不带单位");
+        expect("probeAfterMs 空格分隔", "viewProbe=com.q.A\nprobeAfterMs=0 200 1000\n", true, "逗号分隔");
+        expect("probeAfterMs 超范围", "viewProbe=com.q.A\nprobeAfterMs=0,20000\n", true, "0～10000");
+        expect("probeAfterMs 空项", "viewProbe=com.q.A\nprobeAfterMs=0,,200\n", true, "空项");
+        expect("probeAfterMs 重复", "viewProbe=com.q.A\nprobeAfterMs=0,200,200\n", false, "写了两次");
+        expect("probeAfterMs 太多", "viewProbe=com.q.A\nprobeAfterMs=1,2,3,4,5,6,7,8,9\n", false, "最多取");
+        expect("viewProbe 示例类名", "viewProbe=com.a.B\n", true, "占位类名");
+        expect("viewProbe 缺 #", "viewProbe=com.q.A#foo\n", true, "viewProbe");
+        expect("viewProbe 没有包名", "viewProbe=DiggView\n", false, "没有包名");
+        expect("viewProbe 段名拼错", "[viewProb]\ncom.q.A\n", true, "viewProbe");
+        List<ConfigCheck.Issue> kn = ConfigCheck.checkPaste("viewProbe=com.q.Made\n", new ConfigCheck.Options().known(new java.util.HashSet<>(java.util.Arrays.asList("com.q.Real"))));
+        ok(has(kn, false, "没有在已有记录里出现过"), "没见过的类应警告");
+        RecConfig d = new RecConfig();
+        ok(d.viewProbe.isEmpty() && d.probeAfterMs.equals("0,200,1000,2500"), "默认值：不启用");
+        RecConfig p = RecConfig.fromText(PasteBlocks.split("[config]\nprobeAfterMs = 0,300\n\n[viewProbe]\ncom.q.A\ncom.q.B\n")[0]);
+        ok(p.viewProbe.equals("com.q.A\ncom.q.B") && p.probeAfterMs.equals("0,300"), "块格式读进配置：" + p.viewProbe);
+        String ex = PasteBlocks.export(p, "");
+        ok(ex.contains("[viewProbe]\ncom.q.A\ncom.q.B") && ex.contains("probeAfterMs = 0,300"), "导出块格式：\n" + ex);
+    }
+
+    // 视图快照：配置解析、对比
+    static void probeTextTests() {
+        ok(java.util.Arrays.equals(ProbeText.parseTimes("0,200,1000,2500"), new int[]{0, 200, 1000, 2500}), "默认时间点解析");
+        ok(java.util.Arrays.equals(ProbeText.parseTimes("2500, 0 ,200,200"), new int[]{0, 200, 2500}), "乱序去重后升序");
+        ok(java.util.Arrays.equals(ProbeText.parseTimes(""), new int[]{0, 200, 1000, 2500}), "空值回退默认");
+        ok(java.util.Arrays.equals(ProbeText.parseTimes("abc,-5,99999"), new int[]{0, 200, 1000, 2500}), "全是坏值回退默认");
+        ok(ProbeText.parseTimes("1,2,3,4,5,6,7,8,9,10").length == 8, "最多 8 个");
+        java.util.List<String> cls = ProbeText.splitClasses("// 注释\ncom.demo.A\n\ncom.demo.B, com.demo.A\n");
+        ok(cls.size() == 2 && cls.get(0).equals("com.demo.A") && cls.get(1).equals("com.demo.B"), "类名拆分去重：" + cls);
+        java.util.Set<String> names = new java.util.HashSet<>(java.util.Arrays.asList("com.demo.Base"));
+        ok("com.demo.Base".equals(ProbeText.matchChain(java.util.Arrays.asList("com.demo.Sub", "com.demo.Base", "android.view.View"), names)), "父类也能匹配");
+        ok(ProbeText.matchChain(java.util.Arrays.asList("android.widget.TextView", "android.view.View"), names) == null, "不相关的类不匹配");
+        java.util.LinkedHashMap<String, String> a = ProbeText.map(), b = ProbeText.map();
+        a.put("cls", "com.demo.A"); a.put("alpha", "1.00"); a.put("imageAlpha", "255"); a.put("p1", "FrameLayout vis=V");
+        b.put("cls", "com.demo.A"); b.put("alpha", "0.00"); b.put("imageAlpha", "0"); b.put("p1", "FrameLayout vis=V"); b.put("selected", "true");
+        String d = ProbeText.diff(a, b);
+        ok(d.equals("alpha 1.00→0.00，imageAlpha 255→0，selected —→true"), "变化对比：" + d);
+        ok(ProbeText.diff(a, a).isEmpty(), "没变化返回空串");
+        ok(ProbeText.line(b).startsWith("com.demo.A alpha=0.00") && !ProbeText.line(b).contains("p1"), "主要字段一行：" + ProbeText.line(b));
+        ok(ProbeText.parents(b).equals("↑ 父级：d1 FrameLayout vis=V"), "父级链：" + ProbeText.parents(b));
+        ok(ProbeText.parents(ProbeText.map()).isEmpty(), "没有父级");
     }
 
     // 回归：任务清单在别处已有时，不该报「没有任务清单」；常见示例包名只警告不判错；预设只亮最贴近的一个
