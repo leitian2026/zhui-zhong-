@@ -736,6 +736,7 @@ final class Timeline {
     static void clear() {
         frozen = false; // 「应用并重新记录」：新一轮，解冻
         armed = false;  // 同上：万一浮窗被杀、没来得及发关闭标记，也能靠重新记录恢复
+        ViewProbe.clear();
         synchronized (EVS) {
             EVS.clear();
             SAMP.clear();
