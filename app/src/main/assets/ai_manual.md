@@ -52,7 +52,7 @@ keywordMode = true
 
 规则（一共 10 条，每条都要照做）：
 
-1. **只能用这些段名**：`[config]` `[traceMethods]` `[keywords]` `[watch]` `[excludeList]` `[threadFilter]` `[pageFilter]` `[viewFilter]` `[valueFilter]` `[viewDumpKey]` `[dumpPrefixes]` `[tasks]`。段名单独占一行，后面不要写别的。第一个段名之前的行算 `[config]`。
+1. **只能用这些段名**：`[config]` `[traceMethods]` `[keywords]` `[watch]` `[excludeList]` `[threadFilter]` `[pageFilter]` `[viewFilter]` `[valueFilter]` `[viewDumpKey]` `[dumpPrefixes]` `[viewProbe]` `[tasks]`。段名单独占一行，后面不要写别的。第一个段名之前的行算 `[config]`。
 2. `[config]` 里**一行一个** `key = 值`。只认英文等号，不认冒号。`#` 开头的整行是注释，**不能在值后面写行内注释**。
 3. 开关只能写 `true` 或 `false`（小写英文）；数字只写纯数字，不带单位、不带小数、不带逗号。
 4. **列表型的项各开一个段，一行一项**：`traceMethods`、`keywords`、`watch`、`excludeList`、`threadFilter`、`pageFilter`、`viewFilter`、`valueFilter`、`viewDumpKey`、`dumpPrefixes`。一个段只出现一次；不要用逗号把多项写在一行里。
@@ -123,6 +123,7 @@ keywordMode = true
 |---|---|---|---|---|
 | `viewDump` | true/false | `false` |  | 任务开始 / 结束 / 点标记时导出视图树 |
 | `viewTap` | true/false | `false` |  | 点哪查哪：点屏幕时列出这个点上所有控件 |
+| `viewProbe` | 文字 | 空 |  | 每次点击之后，对这些类的实例各拍几张快照（位置 / 大小 / alpha / 选中 / 前景 / 图片透明度 / 父级链），标出前后变了什么 |
 
 **时间线与任务**
 
@@ -300,6 +301,14 @@ keywordMode = true
 com.demo.player.PlayerView#seekTo
 ```
 
+`[viewProbe]` 里写成了「类#方法」（`[viewProbe]` 只要类名；要追踪方法写在 `[traceMethods]`）：
+
+```textrec-bad
+# expect: viewProbe
+[viewProbe]
+com.demo.feed.LikeAnimationView#draw
+```
+
 追踪的方法同时被排除了（永远记不到）：
 
 ```textrec-bad
@@ -311,7 +320,7 @@ com.demo.player.PlayerView#seekTo
 com.demo.player.PlayerView#*
 ```
 
-## 8. 三个完整示例
+## 8. 四个完整示例
 
 **例 1：找某段文字是谁设置 / 画的（最常用）**
 
@@ -359,6 +368,24 @@ com.demo.feed.LikeHelper#updateLike
 对照（单击）|单击一次视频，别点赞||空
 点赞|双击视频点赞||
 取消赞|再双击一次取消赞||
+```
+
+**例 4：看某个控件在点击前后的真实状态（视图快照）**
+
+不是问「谁调用了某个方法」，而是问「这个控件在点击之后的每一刻是什么状态」。`[viewProbe]` 每行一个类全名（从导出的记录或视图树里逐字复制）；写了它，每次点击会自动在点击前和点击后每个 `probeAfterMs` 毫秒各拍一份快照，并标出前后变了什么；不写就完全没有开销。
+
+```textrec
+[config]
+preset = icons
+probeAfterMs = 0,200,1000,2500
+
+[viewProbe]
+com.demo.feed.LikeAnimationView
+com.demo.feed.LikeAnimationLayout
+
+[tasks]
+@基线|刚进视频，什么都不要操作，让视频正常播放|8
+点赞|单击一次右侧的心形图标，等 3 秒，再单击一次取消，取消后等 3 秒||
 ```
 
 ## 9. 回复格式和收到错误报告时怎么办
