@@ -5,6 +5,7 @@
   1. 当前 versionName 在 README.md 里必须有「## 版本号」一节，且不是空话；
   2. 当前 versionName 在 ai_guide.md「版本变化」里必须有「### 版本号」一节，且不是空话（写「无变化」也行，但要写）；
   3. 记录页「粘贴命令」代码里认的每个 key，ai_guide.md 第 9 章里都要写到；
+  3b. 块格式的每个列表段名（PasteBlocks.LIST_SECTIONS），ai_manual.md 和 ai_guide.md 里都要写到；
   4. 预设、字段表由别的脚本 / 测试生成和校验（gen_schema.py / ConfigCheckTest），这里不重复。
 写得好不好机器判断不了，由《开发须知.md》要求人 / AI 自己负责；这里只保证「没写」一定会被发现。
 """
@@ -62,6 +63,19 @@ def main():
     for k in keys:
         if ("`%s`" % k) not in s9 and ("`%s=" % k) not in s9 and (" %s=" % k) not in s9:
             problems.append("记录页粘贴命令认 %s=，但 ai_guide.md 第 9 章没写到它" % k)
+
+    # 块格式的每个列表段名都必须写在手册和完整参考里（新增段名没改文档，AI 就不知道有它）
+    pb = read("app/src/main/java/com/textrec/lsp/PasteBlocks.java")
+    mm = re.search(r"LIST_SECTIONS\s*=\s*\{(.*?)\};", pb, re.S)
+    sections = re.findall(r'"(\w+)"', mm.group(1)) if mm else []
+    if not sections:
+        problems.append("读不到 PasteBlocks.LIST_SECTIONS")
+    manual = read("app/src/main/assets/ai_manual.md")
+    for sct in sections:
+        if ("`[%s]`" % sct) not in manual:
+            problems.append("块格式的段 [%s] 没有写进 ai_manual.md（规则 1 的段名列表）" % sct)
+        if ("`%s`" % sct) not in guide:
+            problems.append("块格式的段 [%s] 没有写进 ai_guide.md" % sct)
 
     if problems:
         print("文档没有跟上代码：\n")
