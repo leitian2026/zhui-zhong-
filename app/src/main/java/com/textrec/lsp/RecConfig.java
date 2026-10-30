@@ -83,6 +83,13 @@ public final class RecConfig {
     /** 点哪查哪：每次点屏幕（按下抬起位置差不多、不是滑动），把这个点上所有控件（从外层到最上层）列出来，不需要知道控件叫什么。 */
     public boolean viewTap = false;
     /**
+     * 视图快照（1.35.0）：每行一个类全名。每次点击之后，对这些类的实例各拍几张「此刻真实状态」快照（见 ViewProbe）。
+     * 空 = 完全不启用（没有任何额外开销）。
+     */
+    public String viewProbe = "";
+    /** 视图快照：点击之后隔多少毫秒各拍一张，逗号分隔（0～10000，最多 8 个）；点击事件处理之前另外自动拍一张「点击前」。只在 viewProbe 非空时有用。 */
+    public String probeAfterMs = "0,200,1000,2500";
+    /**
      * 标注（1.29.0）：给记录加「语义标签」，让找钩子更快更准。
      * annotFrames：调用栈每一帧标分层 / 角色 / 稳定度，标出入口帧、推荐钩点、异步边界；钩点评级、类角色。
      * annotOwners：方法追踪命中时，反查 this / 参数（如 Aweme）被哪个容器（ViewHolder / Fragment / ViewModel / View 标签）持有。
@@ -464,6 +471,8 @@ public final class RecConfig {
             p.setProperty("viewDumpLines", String.valueOf(viewDumpLines));
             p.setProperty("viewDumpSet", String.valueOf(viewDumpSet));
             p.setProperty("viewTap", String.valueOf(viewTap));
+            p.setProperty("viewProbe", viewProbe);
+            p.setProperty("probeAfterMs", probeAfterMs);
             p.setProperty("annotFrames", String.valueOf(annotFrames));
             p.setProperty("treeOn", String.valueOf(treeOn));
             p.setProperty("treeDepth", String.valueOf(treeDepth));
@@ -609,6 +618,8 @@ public final class RecConfig {
         c.viewDumpLines = clamp(num(p, "viewDumpLines", c.viewDumpLines), 50, 3000);
         c.viewDumpSet = bool(p, "viewDumpSet", c.viewDumpSet);
         c.viewTap = bool(p, "viewTap", c.viewTap);
+        c.viewProbe = p.getProperty("viewProbe", c.viewProbe);
+        c.probeAfterMs = p.getProperty("probeAfterMs", c.probeAfterMs);
         c.annotFrames = bool(p, "annotFrames", c.annotFrames);
         c.treeOn = bool(p, "treeOn", c.treeOn);
         c.treeDepth = clamp(num(p, "treeDepth", c.treeDepth), 1, 8);
