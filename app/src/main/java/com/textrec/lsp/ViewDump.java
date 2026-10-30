@@ -87,20 +87,14 @@ final class ViewDump {
         }
     }
 
-    /** 快照里的 viewDumps 数组。 */
+    /** 快照里的 viewDumps 数组：视图树、点击、视图快照（viewProbe）按时间排在一起。 */
     static JSONArray toJson() {
-        JSONArray arr = new JSONArray();
         ArrayList<Dump> all = new ArrayList<>();
         synchronized (KEEP) {
             all.addAll(KEEP);
             all.addAll(TAPS);
         }
-        java.util.Collections.sort(all, new java.util.Comparator<Dump>() {
-            @Override
-            public int compare(Dump a, Dump b) {
-                return a.t < b.t ? -1 : a.t > b.t ? 1 : 0;
-            }
-        });
+        ArrayList<JSONObject> objs = new ArrayList<>();
         for (Dump d : all) {
             try {
                 JSONObject o = new JSONObject();
@@ -109,10 +103,20 @@ final class ViewDump {
                 o.put("page", d.page);
                 o.put("text", d.text);
                 o.put("kind", d.kind);
-                arr.put(o);
+                objs.add(o);
             } catch (Throwable ignored) {
             }
         }
+        ViewProbe.addTo(objs);
+        java.util.Collections.sort(objs, new java.util.Comparator<JSONObject>() {
+            @Override
+            public int compare(JSONObject a, JSONObject b) {
+                long x = a.optLong("t"), y = b.optLong("t");
+                return x < y ? -1 : x > y ? 1 : 0;
+            }
+        });
+        JSONArray arr = new JSONArray();
+        for (JSONObject o : objs) arr.put(o);
         return arr;
     }
 
@@ -126,7 +130,7 @@ final class ViewDump {
     static void ensureTouchHook() {
         try {
             RecConfig c = Recorder.cfg;
-            if (c == null || !c.enabled || !c.viewTap || TOUCH.get()) return;
+            if (c == null || !c.enabled || (!c.viewTap && !ViewProbe.active(c)) || TOUCH.get()) return; // viewTap 或 viewProbe 任一要用才装；都没开不装
             Method m = Activity.class.getDeclaredMethod("dispatchTouchEvent", MotionEvent.class);
             if (!TOUCH.compareAndSet(false, true)) return;
             XposedBridge.hookMethod(m, new XC_MethodHook() {
@@ -146,7 +150,7 @@ final class ViewDump {
 
     private static void onTouch(Activity a, MotionEvent e) {
         RecConfig c = Recorder.cfg;
-        if (c == null || !c.enabled || !c.viewTap) return;
+        if (c == null || !c.enabled || (!c.viewTap && !ViewProbe.active(c))) return;
         int act = e.getActionMasked();
         if (act == MotionEvent.ACTION_DOWN) {
             downX = e.getRawX();
@@ -154,7 +158,10 @@ final class ViewDump {
             downT = SystemClock.uptimeMillis();
         } else if (act == MotionEvent.ACTION_UP) {
             float dx = e.getRawX() - downX, dy = e.getRawY() - downY;
-            if (dx * dx + dy * dy <= 40f * 40f && SystemClock.uptimeMillis() - downT < 800) tap(a, e.getRawX(), e.getRawY(), c);
+            if (dx * dx + dy * dy <= 40f * 40f && SystemClock.uptimeMillis() - downT < 800) {
+                if (c.viewTap) tap(a, e.getRawX(), e.getRawY(), c);
+                if (ViewProbe.active(c)) ViewProbe.onTap(a, e.getRawX(), e.getRawY(), c); // 视图快照：此刻点击事件还没处理，先拍「点击前」
+            }
         }
     }
 
@@ -354,7 +361,7 @@ final class ViewDump {
 
     // ------------------------------------------------------------ 描述一个控件
 
-    private static String idName(View v) {
+    static String idName(View v) {
         int id = v.getId();
         if (id == View.NO_ID) return "";
         try {
@@ -380,7 +387,7 @@ final class ViewDump {
                 + (v instanceof ViewGroup ? " " + layoutKind((ViewGroup) v) : "");
     }
 
-    private static String vis(View v) {
+    static String vis(View v) {
         int s = v.getVisibility();
         return s == View.VISIBLE ? "V" : s == View.INVISIBLE ? "I(占位隐藏)" : "G(不占位)";
     }
