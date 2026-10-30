@@ -52,7 +52,7 @@ public class MainActivity extends Activity {
     private static final String[] SCENE = {"text", "icons", "state", "all", "trace", "statehook", "viewtree", "tap"};
     private static final String[] SCENE_LABEL = {"文字", "图标", "状态", "全部", "方法追踪", "状态钩子", "视图树", "点哪查哪"};
     private static final String[] SCENE_GROUP = {"content", "content", "content", "content", "trace", "trace", "view", "view"};
-    private static final HashSet<String> MULTI = new HashSet<>(java.util.Arrays.asList("traceMethods", "watch", "excludeList", "keywords", "dumpPrefixes", "valueFilter"));
+    private static final HashSet<String> MULTI = new HashSet<>(java.util.Arrays.asList("traceMethods", "watch", "excludeList", "keywords", "dumpPrefixes", "valueFilter", "viewProbe"));
 
     private static final String[][] HINT = {
             {"traceMethods", "androidx.compose.ui.text.MultiParagraph#paint-LG529CI"},
@@ -65,6 +65,7 @@ public class MainActivity extends Activity {
             {"keywords", "关键字，逗号或换行分隔；正则模式每行一个，如 \\d\\d:\\d\\d"},
             {"dumpPrefixes", "androidx.compose.ui.text."},
             {"viewDumpKey", "ScrollMentionTextView,MentionTextView"},
+            {"viewProbe", "每行一个类全名，如 com.ss.android.ugc.aweme.feed.widget.DiggAnimationView"},
     };
 
     private static String hint(String key) {
@@ -581,6 +582,7 @@ public class MainActivity extends Activity {
         sub(g.body, "视图树", null);
         addField(g.body, "viewDump", 0);
         addField(g.body, "viewTap", 0);
+        addField(g.body, "viewProbe", 0);
         sub(g.body, "时间线与任务", null);
         addField(g.body, "tlOn", 0);
         addField(g.body, "recOutside", 0);
