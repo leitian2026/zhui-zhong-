@@ -52,3 +52,4 @@ drawCanvas traceDraw              Recorder.java:1947       # drawCanvas() 只被
 drawCompose traceDraw             Recorder.java:1947       # drawCompose 在 drawCanvas()（2005）里判断，同上
 iconImage traceIcons              Recorder.java:1853       # 钩子开头 !c.traceIcons 就 return，1854 紧接在后面
 iconDesc traceIcons               Recorder.java:1853       # 同上
+flowGate recOutside              Timeline.java:77      # skip() 里 gate 只在 !recOutside 分支里起作用；配置 flowGate 在 configure（128）里赋给 gate
