@@ -56,6 +56,8 @@ public class ConfigCheckTest {
         regressionTests();
         relationTests();
         modeTests();
+        taskStatsTests();
+        flowGateTests();
         formModelTests();
         boolean fix = false;
         for (String f : args) if (f.equals("--fix")) fix = true;
@@ -259,6 +261,60 @@ public class ConfigCheckTest {
         ok(!has(run("preset=text\nkeywordMode=true\nkeywords=福利\n"), false, "不起作用"), "没写方法追踪时关键字有效");
         expect("内容全关 + keywords", "preset=icons\ntraceIcons=false\nkeywordMode=true\nkeywords=福利\n", false, "只会记方法追踪");
         ok(!has(run("preset=trace\nthreadFilter=main\ntraceMethods=com.q.A#foo\n"), false, "不起作用"), "threadFilter 对方法追踪有效，不应警告");
+    }
+
+    // 按任务统计：噪声 / 独有 / 共有 / 多遍一致
+    static TaskStats.RecInfo ri(String bl, int[][] seg, int[][] passes) {
+        java.util.TreeMap<Integer, Integer> s = new java.util.TreeMap<>();
+        for (int[] x : seg) s.put(x[0], x[1]);
+        java.util.TreeMap<Integer, Integer> p = new java.util.TreeMap<>();
+        if (passes != null) for (int[] x : passes) p.put(x[0], x[1]);
+        return new TaskStats.RecInfo(s, bl, p);
+    }
+
+    static void taskStatsTests() {
+        java.util.List<TaskStats.RecInfo> recs = new java.util.ArrayList<>();
+        // 任务 1 = 基线；任务 2 = 划视频（做 3 遍）；任务 3 = 点赞
+        for (int i = 0; i < 5; i++) recs.add(ri("noise", new int[][]{{1, 4}, {2, 9}, {3, 6}}, null));     // 周期性噪声：基线里也有
+        recs.add(ri("live", new int[][]{{2, 3}}, new int[][]{{2, 7}}));                                  // 只在任务 2，三遍都出现
+        recs.add(ri("live", new int[][]{{2, 2}}, new int[][]{{2, 3}}));                                  // 只在任务 2，只出现 2 遍
+        recs.add(ri("live", new int[][]{{2, 1}, {3, 1}}, new int[][]{{2, 7}}));                           // 任务 2 和 3 共有
+        recs.add(ri("live", new int[][]{{3, 5}}, null));                                                  // 只在任务 3
+        recs.add(ri("live", new int[][]{{3, 2}, {0, 8}}, null));                                          // 任务 3 + 任务外命中
+        java.util.Map<Integer, String> names = new java.util.TreeMap<>();
+        names.put(1, "@基线 什么都不要操作");
+        names.put(2, "划到下一个视频");
+        names.put(3, "点赞");
+        TaskStats.Summary s = TaskStats.computeAll(recs, names);
+        TaskStats.Line l2 = s.lines.get(1), l3 = s.lines.get(2);
+        ok(s.lines.get(0).baselineTask && s.lines.get(0).hit == 5, "任务 1 是基线，命中 5 条");
+        ok(l2.hit == 8 && l2.noise == 5 && l2.unique == 2 && l2.shared == 1, "任务 2：噪声 5 + 独有 2 + 共有 1：" + TaskStats.describe(l2));
+        ok(l2.passes == 3 && l2.consistent == 2, "任务 2 做了 3 遍，每遍都出现 2 条（独有 1 + 共有 1）：" + l2.passes + "/" + l2.consistent);
+        ok(l3.hit == 8 && l3.noise == 5 && l3.unique == 2 && l3.shared == 1, "任务 3：" + TaskStats.describe(l3));
+        ok(s.totalRecs == 10 && s.withOutside == 1, "含任务外命中的记录 1 / 10：" + s.withOutside + "/" + s.totalRecs);
+        String rep = TaskStats.report(s, "");
+        ok(rep.contains("任务 2「划到下一个视频」") && rep.contains("含任务外命中的记录 1 / 10"), "报告内容：\n" + rep);
+        // 提醒
+        java.util.List<TaskStats.RecInfo> allNoise = new java.util.ArrayList<>();
+        allNoise.add(ri("noise", new int[][]{{1, 1}, {2, 3}}, null));
+        TaskStats.Line ln = TaskStats.compute(2, "点赞", false, allNoise);
+        ok(TaskStats.warn(ln, true).contains("全是基线噪声"), "命中全是噪声应提醒");
+        ok(TaskStats.warn(TaskStats.compute(5, "x", false, allNoise), true).contains("没有记录"), "没有命中应提醒");
+        java.util.List<TaskStats.RecInfo> noBase = new java.util.ArrayList<>();
+        noBase.add(ri("", new int[][]{{2, 3}}, null));
+        ok(TaskStats.warn(TaskStats.compute(2, "点赞", false, noBase), false).contains("没录基线"), "没录基线应提醒");
+        ok(TaskStats.describe(TaskStats.compute(2, "点赞", false, noBase)).contains("没录基线"), "描述里注明没录基线");
+        ok(TaskStats.report(TaskStats.computeAll(new java.util.ArrayList<TaskStats.RecInfo>(), new java.util.TreeMap<Integer, String>()), "").contains("没有按任务阶段计数"), "没有任务的报告");
+    }
+
+    // flowGate / noiseQuota
+    static void flowGateTests() {
+        ok(!has(run("flowGate=true\n"), false, "不起作用"), "flowGate 默认开着，写 true 不应警告");
+        ok(!has(run("flowGate=false\n"), false, "不起作用"), "flowGate=false 不应警告");
+        expect("flowGate 配 recOutside", "recOutside=true\nflowGate=true\n", false, "只在 `recOutside=false` 时才有效");
+        expect("noiseQuota 超范围", "noiseQuota=500\n", false, "超出允许范围");
+        expect("noiseQuota 太小", "noiseQuota=0\n", false, "超出允许范围");
+        clean("noiseQuota 正常", "noiseQuota=70\n");
     }
 
     // 回归：任务清单在别处已有时，不该报「没有任务清单」；常见示例包名只警告不判错；预设只亮最贴近的一个
