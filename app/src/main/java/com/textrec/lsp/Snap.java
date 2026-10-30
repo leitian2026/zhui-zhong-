@@ -80,13 +80,14 @@ final class Snap {
         JSONArray vd = root.optJSONArray("viewDumps");
         if (vd == null || vd.length() == 0) return "";
         StringBuilder sb = new StringBuilder();
-        sb.append("进程 ").append(proc).append("：").append(vd.length()).append(" 份（树最多留最近 16 份，点击最多 12 份）\n");
+        sb.append("进程 ").append(proc).append("：").append(vd.length()).append(" 份（树最多留最近 16 份，点击最多 12 份，视图快照最多 8 组）\n");
         ArrayList<String> titles = new ArrayList<>(), texts = new ArrayList<>();
         for (int i = 0; i < vd.length(); i++) {
             JSONObject d = vd.optJSONObject(i);
             if (d == null) continue;
-            boolean tap = "tap".equals(d.optString("kind"));
-            String title = (tap ? "点击 #" : "视图树 #") + (i + 1);
+            boolean probe = "probe".equals(d.optString("kind"));
+            boolean tap = probe || "tap".equals(d.optString("kind")); // 视图快照和点击一样，不参与「视图树前后对比」
+            String title = (probe ? "视图快照 #" : tap ? "点击 #" : "视图树 #") + (i + 1);
             sb.append("\n── ").append(title).append("  +").append(d.optLong("t")).append("ms  触发：").append(d.optString("reason"))
                     .append("  [").append(d.optString("page")).append("] ──\n").append(d.optString("text"));
             if (!tap) {
