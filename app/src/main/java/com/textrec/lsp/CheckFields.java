@@ -231,6 +231,8 @@ final class CheckFields {
         if (key.equals("watch") && !e.glued) CheckTrace.checkWatch(out, v, ln, false, e.itemLines);
         if (key.equals("excludeList")) checkExcludeItems(out, ln, v);
         if (key.equals("dumpPrefixes")) checkPrefixItems(out, ln, v);
+        if (key.equals("viewProbe")) checkClassItems(out, ln, key, v);
+        if (key.equals("probeAfterMs")) checkProbeTimes(out, ln, v);
         if (key.equals("threadFilter") || key.equals("pageFilter") || key.equals("viewFilter")) checkWordItems(out, ln, key, v);
     }
 
@@ -278,6 +280,66 @@ final class CheckFields {
                 out.add(new Issue(ln, true, pre + "不是合法的类名 / 包名前缀（要排除某个方法写 " + CheckText.q("类#方法") + "，任何类里的某方法写 " + CheckText.q("#方法") + "）"));
             }
         }
+    }
+
+    /** 每行一个类全名的列表（viewProbe）：类名写法、示例类名、没见过的类名。 */
+    static void checkClassItems(List<Issue> out, int ln, String key, String value) {
+        for (String raw : value.split("[\\r\\n,]+")) {
+            String cls = raw.trim();
+            if (cls.isEmpty() || cls.startsWith("//")) continue;
+            String pre = CheckText.q(key) + " 的 " + CheckText.q(CheckText.clip(cls, 50)) + "：";
+            String bad = CheckTrace.badClass(cls);
+            if (bad != null) {
+                out.add(new Issue(ln, true, pre + bad));
+            } else if (!ConfigCheck.opt().allowExampleClasses && CheckTrace.isExampleClass(cls)) {
+                out.add(new Issue(ln, true, pre + "是文档 / 示例里的占位类名，目标 App 里不存在。类名只能从导出的记录或视图树里逐字复制，不能自己编"));
+            } else if (!ConfigCheck.opt().allowExampleClasses && CheckTrace.isWeakExampleClass(cls)) {
+                out.add(new Issue(ln, false, pre + "包名像是示例包名（com.example 之类）。如果目标 App 真的是这个包，可以忽略；否则类名要从导出里逐字复制"));
+            } else if (cls.indexOf('.') < 0) {
+                out.add(new Issue(ln, false, pre + "没有包名；除非目标类真的在默认包，否则要写全名（包名.类名）"));
+            } else {
+                java.util.Set<String> kn = ConfigCheck.opt().knownClasses;
+                if (kn != null && !kn.isEmpty() && !kn.contains(cls) && !CheckTrace.isSystemClass(cls))
+                    out.add(new Issue(ln, false, pre + "这个类没有在已有记录里出现过。类名要逐字从导出里复制，不能凭印象写；如果是刚找到的新类，可以忽略这条，拍快照时视图树里没有它会写「未找到实例」"));
+            }
+        }
+    }
+
+    /** probeAfterMs：逗号分隔的毫秒数，0～10000，最多 8 个。 */
+    static void checkProbeTimes(List<Issue> out, int ln, String value) {
+        String vt = value.trim();
+        String k = CheckText.q("probeAfterMs");
+        if (vt.isEmpty()) {
+            out.add(new Issue(ln, false, k + " 是空的，会用默认 0,200,1000,2500。要么填毫秒数，要么整行删掉"));
+            return;
+        }
+        String fw = CheckText.fullwidthIn(vt);
+        if (fw != null) out.add(new Issue(ln, true, k + " 的值 " + CheckText.q(CheckText.clip(vt, 30)) + " 里有全角符号：" + fw));
+        java.util.HashSet<Integer> seen = new java.util.HashSet<>();
+        int n = 0;
+        for (String tok : vt.split(",", -1)) {
+            String t = tok.trim();
+            if (t.isEmpty()) {
+                out.add(new Issue(ln, true, k + " 里有空项（连续两个逗号，或末尾多了逗号）"));
+                continue;
+            }
+            int v;
+            try {
+                v = Integer.parseInt(t);
+            } catch (NumberFormatException e) {
+                String why = t.matches("\\d+(\\s+\\d+)+") ? "多个时间点要用逗号分隔，不是空格"
+                        : t.matches("\\d+\\s*[A-Za-z]+") ? "只写毫秒数，不带单位" : "不是整数";
+                out.add(new Issue(ln, true, k + " 的 " + CheckText.q(CheckText.clip(t, 20)) + " " + why));
+                continue;
+            }
+            if (v < 0 || v > 10000) {
+                out.add(new Issue(ln, true, k + " 的 " + v + " 超出允许范围 0～10000（毫秒）"));
+                continue;
+            }
+            if (!seen.add(v)) out.add(new Issue(ln, false, k + " 里 " + v + " 写了两次，只会拍一张"));
+            n++;
+        }
+        if (n > 8) out.add(new Issue(ln, false, k + " 写了 " + n + " 个时间点，最多取最小的 8 个，多出的会被忽略（每个时间点都是一次视图树遍历）"));
     }
 
     static void checkPrefixItems(List<Issue> out, int ln, String value) {
