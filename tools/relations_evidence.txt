@@ -53,3 +53,4 @@ drawCompose traceDraw             Recorder.java:1947       # drawCompose 在 dra
 iconImage traceIcons              Recorder.java:1853       # 钩子开头 !c.traceIcons 就 return，1854 紧接在后面
 iconDesc traceIcons               Recorder.java:1853       # 同上
 flowGate recOutside              Timeline.java:77      # skip() 里 gate 只在 !recOutside 分支里起作用；配置 flowGate 在 configure（128）里赋给 gate
+probeAfterMs viewProbe            ViewProbe.java:96      # onTap() 开头 !active(c)（viewProbe 为空）就 return，98 的 probeAfterMs 在它后面；viewProbe 为空时触摸钩子也不装（ViewDump.java 的 ensureTouchHook）
