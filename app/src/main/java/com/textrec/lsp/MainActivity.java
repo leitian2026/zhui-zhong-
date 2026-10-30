@@ -588,7 +588,7 @@ public class MainActivity extends Activity {
 
     private void buildLimitsGroup(LinearLayout root) {
         Group g = new Group(root, "limits", "记录容量与抓栈力度", "一般不用改。这些参数控制抓取调用栈的力度和记录容量；每种记录各自一个文件、各自有上限，一种灌满不会挤掉别的。", false);
-        for (String k : new String[]{"stackDepth", "perKeyStacks", "sampleEvery", "stacksPerSec", "flushSec", "splitFiles"}) addField(g.body, k, 0);
+        for (String k : new String[]{"stackDepth", "perKeyStacks", "sampleEvery", "stacksPerSec", "flushSec", "noiseQuota", "splitFiles"}) addField(g.body, k, 0);
         TextView reset = Ui.button(this, "恢复默认参数", Ui.TEXT, v -> {
             RecConfig c = readUi(cur.epoch);
             RecConfig d = new RecConfig();
