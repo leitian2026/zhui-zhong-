@@ -330,6 +330,14 @@ final class Recorder {
         }
     }
 
+    /** 浮窗的任务结束 / 基线结束 / 关闭标记到了：马上落盘（浮窗等着读快照做检查，不用等节流落盘的几秒）。 */
+    static void flushSoon() {
+        try {
+            store.flushSoon();
+        } catch (Throwable ignored) {
+        }
+    }
+
     private static final Object STATUS_LOCK = new Object();
 
     /**
@@ -2188,6 +2196,12 @@ final class Recorder {
             store.droppedCap.incrementAndGet();
             return null;
         }
+        // 基线期间 / 任务外新建的记录最多占这一种上限的 noiseQuota%：基线里周期性噪声很多，不限制会把上限占满，任务里新出现的位置就被丢掉
+        final boolean noiseBorn = c.noiseQuota < 100 && bucket == 0 && Timeline.noiseBorn(); // 任务外桶（任务外也记录）不受限制
+        if (noiseBorn && store.kindNoise(kk).get() >= Math.max(1, c.capFor(kind) * c.noiseQuota / 100)) {
+            store.kindDropped(kk + ".基线配额").incrementAndGet();
+            return null;
+        }
         Rec nr = new Rec(store.nextId.getAndIncrement(), key, kind, viewCls, viewId, activityName, pageName,
                 v == null ? new String[0] : parentsOf(v), ss, d, Thread.currentThread().getName(), text, shape);
         nr.bucket = bucket;
@@ -2198,6 +2212,7 @@ final class Recorder {
         }
         if (setOnly) store.setOnlyCount.incrementAndGet();
         store.kindCount(kk).incrementAndGet();
+        if (noiseBorn) store.kindNoise(kk).incrementAndGet();
         SigResolver.resolveRec(nr, v == null ? null : v.getClass().getClassLoader());
         return nr;
     }
