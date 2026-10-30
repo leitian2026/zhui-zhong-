@@ -157,8 +157,12 @@ final class ConfigCheck {
                 forceTasks = true;
                 continue;
             }
-            if (t.startsWith("[") && t.endsWith("]") && t.length() <= 12 && !t.contains("|")) {
-                out.add(new Issue(no, true, "方括号标记 " + CheckText.q(t) + " 不认识。分隔任务清单只认 " + CheckText.q("[tasks]") + " 或 " + CheckText.q("[任务清单]") + "（写错了，这一行会被当成任务名）"));
+            if (t.startsWith("[") && t.endsWith("]") && t.length() <= 30 && !t.contains("|")) {
+                String inner = t.substring(1, t.length() - 1).trim();
+                String near = CheckText.nearest(inner, PasteBlocks.sectionNames());
+                out.add(new Issue(no, true, "方括号标记 " + CheckText.q(t) + " 不认识，这一行会被当成任务名。"
+                        + (near != null ? "你是不是想写 " + CheckText.q("[" + near + "]") + "？" : "")
+                        + "块格式可用的段名：" + joinSections() + "；分隔任务清单只认 " + CheckText.q("[tasks]") + " 或 " + CheckText.q("[任务清单]")));
                 continue;
             }
             if (t.startsWith("```")) {
@@ -206,6 +210,12 @@ final class ConfigCheck {
         CheckCross.crossChecks(out, entries, tr);
         sortIssues(out);
         return out;
+    }
+
+    private static String joinSections() {
+        StringBuilder sb = new StringBuilder();
+        for (String s : PasteBlocks.sectionNames()) sb.append(sb.length() > 0 ? " " : "").append('[').append(s).append(']');
+        return sb.toString();
     }
 
     static void sortIssues(List<Issue> out) {
