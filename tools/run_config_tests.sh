@@ -19,7 +19,7 @@ final class Rec {
 }
 JAVA
 javac -encoding UTF-8 -d "$OUT/classes" \
-  $SRC/ConfigCheck.java $SRC/CheckText.java $SRC/CheckFields.java $SRC/CheckTrace.java $SRC/CheckTasks.java $SRC/CheckCross.java $SRC/ConfigSchema.java $SRC/Presets.java $SRC/PasteBlocks.java $SRC/RecConfig.java $SRC/TargetStatus.java $SRC/KnownNames.java $SRC/FormModel.java $SRC/Relations.java \
+  $SRC/ConfigCheck.java $SRC/CheckText.java $SRC/CheckFields.java $SRC/CheckTrace.java $SRC/CheckTasks.java $SRC/CheckCross.java $SRC/ConfigSchema.java $SRC/Presets.java $SRC/PasteBlocks.java $SRC/RecConfig.java $SRC/TargetStatus.java $SRC/KnownNames.java $SRC/FormModel.java $SRC/Relations.java $SRC/TaskStats.java \
   "$STUB/com/textrec/lsp/Rec.java" tools/ConfigCheckTest.java
 # --fix：把文档里的预设表按 Presets.java 重写（字段表用 python3 tools/gen_schema.py 重写）
 java -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -cp "$OUT/classes" com.textrec.lsp.ConfigCheckTest "$@" app/src/main/assets/ai_manual.md app/src/main/assets/ai_guide.md
