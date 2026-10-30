@@ -117,6 +117,17 @@ public final class RecConfig {
     /** 任务外也记录（默认关）：任务浮窗的流程进行中，只有「任务开始 → 任务结束」之间才建记录；打开后任务外也记，但单独一桶存（各自上限、各自文件）。没用任务浮窗时不受影响，照常全记。 */
     public boolean recOutside = false;
     /**
+     * 只在任务内记录（默认开）：任务浮窗「就绪」（窗口开了、还没点开始）和「关闭之后」也按任务外处理，不记录，
+     * 免得点开始之前的操作、关浮窗之后的刷新混进同一条记录的总数（它们会把频率分类算偏、把每种记录的上限提前占满）。
+     * 关闭浮窗后一直不记，直到「应用并重新记录」。没用任务浮窗时不受影响。打开 recOutside 后这个开关不起作用。
+     */
+    public boolean flowGate = true;
+    /**
+     * 基线期间 / 任务外新建的记录，最多占每种记录上限的这个百分比（默认 50）：基线里周期性噪声很多，不限制会把上限占满，
+     * 任务里新出现的位置就被丢掉。已有记录照常计数，只限制「新建」。100 = 不限制。没用任务浮窗时不受影响。
+     */
+    public int noiseQuota = 50;
+    /**
      * 方法追踪独占（默认开）：「方法追踪」里填了方法时，运行时自动把文字 / 图标 / 颜色 / 状态 / 绘制 / Compose 观察这些记录开关全部当成关闭，
      * 记录里只剩方法追踪（更干净，也更省性能）。只改目标 App 里读到的配置副本，不改界面上的开关和配置文件；方法清单清空后立刻恢复。
      * 关掉它 = 方法追踪和其他记录可以同时开。见 {@link #applyTraceExclusive()}。
@@ -469,6 +480,8 @@ public final class RecConfig {
             p.setProperty("tlOps", String.valueOf(tlOps));
             p.setProperty("tlSamples", String.valueOf(tlSamples));
             p.setProperty("recOutside", String.valueOf(recOutside));
+            p.setProperty("flowGate", String.valueOf(flowGate));
+            p.setProperty("noiseQuota", String.valueOf(noiseQuota));
             p.setProperty("traceExclusive", String.valueOf(traceExclusive));
             p.setProperty("traceCompose", String.valueOf(traceCompose));
             p.setProperty("composeObj", String.valueOf(composeObj));
@@ -612,6 +625,8 @@ public final class RecConfig {
         c.tlOps = bool(p, "tlOps", c.tlOps);
         c.tlSamples = bool(p, "tlSamples", c.tlSamples);
         c.recOutside = bool(p, "recOutside", c.recOutside);
+        c.flowGate = bool(p, "flowGate", c.flowGate);
+        c.noiseQuota = clamp(num(p, "noiseQuota", c.noiseQuota), 10, 100);
         c.traceExclusive = bool(p, "traceExclusive", c.traceExclusive);
         c.traceCompose = bool(p, "traceCompose", c.traceCompose);
         c.composeObj = bool(p, "composeObj", c.composeObj);
